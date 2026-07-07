@@ -15,3 +15,13 @@
 .token-card h4 {
     margin: 0 0 8px;
 }
+
+.mini-button {
+    display: inline-block;
+    padding: 8px 10px;
+    border-radius: 8px;
+    text-decoration: none;
+    background: var(--primary);
+    color: white;
+    font-size: 13px;
+}

@@ -7,6 +7,7 @@ from app.services.dashboard_service import DashboardService
 from app.services.product_service import ProductService
 from app.services.supplier_service import SupplierService
 from app.services.token_service import TokenService
+from app.services.ad_service import AdService
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -16,6 +17,7 @@ product_service = ProductService()
 supplier_service = SupplierService()
 ml_client = MercadoLivreClient()
 token_service = TokenService()
+ad_service = AdService()
 
 
 @router.get("/")
@@ -105,11 +107,19 @@ async def mercado_livre_callback(request: Request, code: str | None = None, erro
 @router.get("/anuncios")
 def anuncios(request: Request):
     products = product_service.list_products_with_sale_price()
+
+    enriched_products = []
+    for product in products:
+        enriched_products.append({
+            **product,
+            "suggested_search": ad_service.suggest_search_term(product)
+        })
+
     return templates.TemplateResponse(
         "ads.html",
         {
             "request": request,
             "page_title": "Produtos e Anúncios",
-            "products": products
+            "products": enriched_products
         }
     )

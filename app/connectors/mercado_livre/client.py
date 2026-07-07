@@ -307,6 +307,23 @@ class MercadoLivreClient:
                 "data": {"error": str(exc)}
             }
 
+    def get_required_attributes_from_response(self, attributes_response: dict):
+        data = attributes_response.get("data", []) if isinstance(attributes_response, dict) else []
+        required = []
+
+        for attr in data:
+            tags = attr.get("tags", {}) if isinstance(attr, dict) else {}
+            if tags.get("required"):
+                required.append({
+                    "id": attr.get("id"),
+                    "name": attr.get("name"),
+                    "value_type": attr.get("value_type"),
+                    "allowed_units": attr.get("allowed_units", []),
+                    "values": attr.get("values", [])[:10] if attr.get("values") else []
+                })
+
+        return required
+
     def build_test_listing_payload(self, product: dict, category_id: str):
         payload = self.build_listing_payload(product)
         payload["category_id"] = category_id

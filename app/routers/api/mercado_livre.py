@@ -85,3 +85,37 @@ async def mercado_livre_publish_test_listing(sku: str, category_id: str):
         }
 
     return await client.publish_test_listing(product, category_id)
+
+
+@router.get("/listing-ready/{sku}")
+async def mercado_livre_listing_ready(sku: str, category_id: str):
+    product = product_service.get_product_for_marketplace_by_sku(sku)
+
+    if not product:
+        return {
+            "success": False,
+            "message": "Produto não encontrado."
+        }
+
+    attributes_response = await client.get_category_attributes(category_id)
+    required_attributes = client.get_required_attributes_from_response(attributes_response)
+
+    payload = client.build_test_listing_payload(product, category_id)
+
+    missing_attributes = []
+    existing_attr_ids = [attr.get("id") for attr in payload.get("attributes", [])]
+
+    for attr in required_attributes:
+        if attr.get("id") not in existing_attr_ids:
+            missing_attributes.append(attr)
+
+    return {
+        "success": len(missing_attributes) == 0,
+        "message": "Anúncio pronto para teste." if len(missing_attributes) == 0 else "Existem atributos obrigatórios pendentes.",
+        "sku": sku,
+        "category_id": category_id,
+        "payload_preview": payload,
+        "required_attributes_count": len(required_attributes),
+        "missing_attributes_count": len(missing_attributes),
+        "missing_attributes": missing_attributes
+    }

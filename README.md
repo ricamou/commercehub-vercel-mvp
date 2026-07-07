@@ -145,3 +145,20 @@ POST /api/mercadolivre/listing-test/{sku}?category_id=MLB0000
 ### Observação
 
 A publicação real deve ser testada somente depois de validar a categoria correta e os atributos obrigatórios.
+
+
+## Produtos/Anúncios v2
+
+Novas funções:
+
+- sugestão de busca de categoria por produto;
+- botão para consultar categorias do Mercado Livre;
+- endpoint para validar se o anúncio está pronto;
+- identificação de atributos obrigatórios faltantes;
+- preparação para publicação teste controlada.
+
+### Nova rota
+
+```text
+/api/mercadolivre/listing-ready/{sku}?category_id=MLBXXXX
+```
