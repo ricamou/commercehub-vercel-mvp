@@ -1,14 +1,12 @@
-# CommerceHub Modular Pro v1
+# CommerceHub v2 Enterprise Base
 
-Versão reorganizada por módulos, mantendo poucos arquivos e deploy simples na Vercel.
+Base modular com Users/Auth e Database/Supabase-ready.
 
 ## Testes
 
 - /api/health
 - /dashboard
-- /mercado-livre
-- /produtos
-- /anuncios
-- /relatorios
-- /ai
-- /arquitetura
+- /usuarios
+- /database
+- /api/auth/users
+- /api/database/status

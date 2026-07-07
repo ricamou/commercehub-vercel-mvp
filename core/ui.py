@@ -19,7 +19,7 @@ pre{{background:#0b1220;color:white;padding:14px;border-radius:10px;overflow:aut
 </head>
 <body>
 <aside>
-<div class="logo"><b>CH</b><div><strong>CommerceHub</strong><span>Modular Pro</span></div></div>
+<div class="logo"><b>CH</b><div><strong>CommerceHub</strong><span>v2 Enterprise</span></div></div>
 <nav>
 <a href="/dashboard">Dashboard</a>
 <a href="/mercado-livre">Mercado Livre</a>
@@ -29,6 +29,8 @@ pre{{background:#0b1220;color:white;padding:14px;border-radius:10px;overflow:aut
 <a href="/pedidos">Pedidos</a>
 <a href="/relatorios">Relatórios</a>
 <a href="/ai">AI Engine</a>
+<a href="/usuarios">Usuários</a>
+<a href="/database">Database</a>
 <a href="/arquitetura">Arquitetura</a>
 <a href="/api/health" target="_blank">API Health</a>
 </nav>

@@ -10,8 +10,10 @@ from modules.suppliers.service import supplier_products
 from modules.listings.service import listing_payload
 from modules.ai.service import enrich
 from modules.mercadolivre import service as ml
+from modules.auth import service as auth
+from modules.database import service as database
 
-app = FastAPI(title="CommerceHub Modular Pro", version="modular-pro-v1")
+app = FastAPI(title="CommerceHub v2 Enterprise Base", version="v2-enterprise-base")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -31,7 +33,7 @@ def dashboard():
 <section class="panel"><h2>Status</h2>
 <p><b>Mercado Livre configurado:</b> {bool(config.ML_CLIENT_ID and config.ML_CLIENT_SECRET)}</p>
 <p><b>Mercado Livre conectado:</b> {bool(config.ML_ACCESS_TOKEN)}</p>
-<p><b>Versão:</b> CommerceHub Modular Pro v1</p></section>
+<p><b>Banco:</b> {database.status()["mode"]}</p><p><b>Versão:</b> CommerceHub v2 Enterprise Base</p></section>
 """
     return layout("Dashboard", body)
 
@@ -116,9 +118,32 @@ vercel.json
     return layout("Arquitetura", body)
 
 
+
+
+@app.get("/usuarios", response_class=HTMLResponse)
+def page_users():
+    rows = "".join([f"<tr><td>{u['id']}</td><td>{u['name']}</td><td>{u['email']}</td><td>{u['role']}</td><td>{u['status']}</td></tr>" for u in auth.users()])
+    return layout("Usuários", f"<section class='panel'><h2>Users/Auth</h2><table><tr><th>ID</th><th>Nome</th><th>Email</th><th>Perfil</th><th>Status</th></tr>{rows}</table></section>")
+
+
+@app.get("/database", response_class=HTMLResponse)
+def page_database():
+    return layout("Database", f"<section class='panel'><h2>Database</h2><pre>{database.status()}</pre></section>")
+
+
+@app.get("/api/auth/users")
+def api_users():
+    return {"success": True, "users": auth.users(), "roles": auth.roles()}
+
+
+@app.get("/api/database/status")
+def api_database_status():
+    return {"success": True, "database": database.status()}
+
+
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "commercehub", "version": "modular-pro-v1"}
+    return {"status": "ok", "service": "commercehub", "version": "v2-enterprise-base"}
 
 
 @app.get("/api/produtos")
