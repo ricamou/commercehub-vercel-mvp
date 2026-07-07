@@ -1,29 +1,61 @@
-import os
+from modules.database import service as database
 
-def clean_env(value: str) -> str:
-    if value is None:
-        return ""
-    value = str(value).strip()
-    if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
-        value = value[1:-1].strip()
-    return value
 
-class Settings:
-    APP_NAME = clean_env(os.getenv("APP_NAME", "CommerceHub"))
-    APP_ENV = clean_env(os.getenv("APP_ENV", "production"))
-    APP_VERSION = clean_env(os.getenv("APP_VERSION", "simple-working-v1"))
-    APP_URL = clean_env(os.getenv("APP_URL", "https://commercehub-vercel-mvp.vercel.app"))
+async def save_import_event(payload: dict):
+    event = {
+        "event_type": "supplier_import",
+        "message": "Importação de fornecedor executada",
+        "payload": payload
+    }
 
-    ML_CLIENT_ID = clean_env(os.getenv("ML_CLIENT_ID", ""))
-    ML_CLIENT_SECRET = clean_env(os.getenv("ML_CLIENT_SECRET", ""))
-    ML_REDIRECT_URI = clean_env(os.getenv("ML_REDIRECT_URI", f"{APP_URL}/mercadolivre/callback"))
-    ML_ACCESS_TOKEN = clean_env(os.getenv("ML_ACCESS_TOKEN", ""))
-    ML_REFRESH_TOKEN = clean_env(os.getenv("ML_REFRESH_TOKEN", ""))
-    ML_TOKEN_EXPIRES_IN = clean_env(os.getenv("ML_TOKEN_EXPIRES_IN", ""))
-    ML_USER_ID = clean_env(os.getenv("ML_USER_ID", ""))
+    if database.status()["supabase_configured"]:
+        return await database.insert("events", event)
 
-    DEFAULT_MARGIN_PERCENT = float(clean_env(os.getenv("DEFAULT_MARGIN_PERCENT", "35")) or 35)
-    ML_COMMISSION_PERCENT = float(clean_env(os.getenv("ML_COMMISSION_PERCENT", "16")) or 16)
-    FIXED_OPERATIONAL_COST = float(clean_env(os.getenv("FIXED_OPERATIONAL_COST", "6")) or 6)
+    return {
+        "success": True,
+        "source": "memory_demo",
+        "message": "Evento de importação recebido. Configure Supabase para persistir.",
+        "event": event
+    }
 
-settings = Settings()
+
+async def persist_imported_products(products: list[dict]):
+    results = []
+
+    if database.status()["supabase_configured"]:
+        for product in products:
+            result = await database.insert("products", product)
+            results.append(result)
+
+        return {
+            "success": True,
+            "source": "supabase",
+            "imported_count": len(results),
+            "results": results
+        }
+
+    return {
+        "success": True,
+        "source": "memory_demo",
+        "message": "Produtos normalizados, mas não persistidos. Configure Supabase para salvar.",
+        "imported_count": len(products),
+        "products": products
+    }
+
+
+async def save_sync_event(payload: dict):
+    event = {
+        "event_type": "supplier_sync",
+        "message": "Sincronização automática de fornecedor executada",
+        "payload": payload
+    }
+
+    if database.status()["supabase_configured"]:
+        return await database.insert("events", event)
+
+    return {
+        "success": True,
+        "source": "memory_demo",
+        "message": "Evento de sincronização recebido. Configure Supabase para persistir.",
+        "event": event
+    }
