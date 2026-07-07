@@ -88,3 +88,15 @@ https://commercehub-vercel-mvp.vercel.app/api/webhooks/mercadolivre
 ## Hotfix
 
 Correção para evitar Internal Server Error na tela `/mercado-livre` quando o token estiver inválido, incompleto ou quando a API do Mercado Livre retornar erro.
+
+
+## Hotfix 2
+
+Correção definitiva para erro de codificação ASCII ao consultar `/api/mercadolivre/me`.
+Agora o sistema valida o formato do token antes de chamar a API do Mercado Livre e mostra uma mensagem amigável quando o token foi copiado com texto extra, acentos, aspas ou vírgulas.
+
+
+## Hotfix 3
+
+Correção para o caso em que o JSON completo retornado pelo Mercado Livre foi colado por engano nas variáveis da Vercel.
+Agora o sistema tenta extrair automaticamente `access_token`, `refresh_token` e `user_id` mesmo quando o valor foi colado como dicionário completo.

@@ -1,4 +1,6 @@
 from urllib.parse import urlencode
+import ast
+import re
 import httpx
 
 from app.core.config import settings
@@ -9,30 +11,122 @@ class MercadoLivreClient:
     TOKEN_URL = "https://api.mercadolibre.com/oauth/token"
     API_BASE_URL = "https://api.mercadolibre.com"
 
+    def _clean_text(self, value) -> str:
+        if value is None:
+            return ""
+        value = str(value).strip()
+        if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+            value = value[1:-1].strip()
+        return value.rstrip(",").strip()
+
+    def _parse_dict_if_needed(self, value):
+        value = self._clean_text(value)
+        if not value:
+            return None
+
+        if value.startswith("{") and value.endswith("}"):
+            try:
+                return ast.literal_eval(value)
+            except Exception:
+                return None
+
+        return None
+
+    def _extract_field(self, value, field_name: str) -> str:
+        value = self._clean_text(value)
+        if not value:
+            return ""
+
+        parsed = self._parse_dict_if_needed(value)
+        if isinstance(parsed, dict) and field_name in parsed:
+            return self._clean_text(parsed.get(field_name))
+
+        # Aceita formatos copiados como:
+        # 'access_token': 'APP_USR-...'
+        # "access_token": "APP_USR-..."
+        # access_token=APP_USR-...
+        patterns = [
+            rf"['\"]{re.escape(field_name)}['\"]\s*:\s*['\"]([^'\"]+)['\"]",
+            rf"{re.escape(field_name)}\s*=\s*([^,\s}}]+)",
+            rf"{re.escape(field_name)}\s*:\s*([^,\s}}]+)",
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, value)
+            if match:
+                return self._clean_text(match.group(1))
+
+        return value
+
+    def _access_token(self) -> str:
+        return self._extract_field(settings.ML_ACCESS_TOKEN, "access_token")
+
+    def _refresh_token(self) -> str:
+        return self._extract_field(settings.ML_REFRESH_TOKEN, "refresh_token")
+
+    def _user_id(self) -> str:
+        user_id = self._extract_field(settings.ML_USER_ID, "user_id")
+
+        # Se o usuário colou o JSON completo em ML_USER_ID, extrai o user_id.
+        parsed = self._parse_dict_if_needed(settings.ML_USER_ID)
+        if isinstance(parsed, dict) and "user_id" in parsed:
+            return self._clean_text(parsed.get("user_id"))
+
+        return user_id
+
+    def _is_ascii(self, value: str) -> bool:
+        try:
+            value.encode("ascii")
+            return True
+        except UnicodeEncodeError:
+            return False
+
+    def _is_token_format_valid(self, token: str) -> bool:
+        token = self._clean_text(token)
+        if not token:
+            return False
+
+        if not self._is_ascii(token):
+            return False
+
+        invalid_fragments = [
+            "{", "}", "access_token", "refresh_token",
+            "Token recebido", "Mensagem", "Sucesso", "Dados retornados"
+        ]
+        return not any(fragment in token for fragment in invalid_fragments)
+
     def status(self):
+        access_token = self._access_token()
+        refresh_token = self._refresh_token()
+        user_id = self._user_id()
+
         has_credentials = bool(settings.ML_CLIENT_ID and settings.ML_CLIENT_SECRET and settings.ML_REDIRECT_URI)
-        has_access_token = bool(settings.ML_ACCESS_TOKEN)
-        has_refresh_token = bool(settings.ML_REFRESH_TOKEN)
+        has_access_token = bool(access_token)
+        has_refresh_token = bool(refresh_token)
 
         return {
-            "connected": has_access_token,
+            "connected": has_access_token and self._is_token_format_valid(access_token),
             "credentials_configured": has_credentials,
             "client_id_configured": bool(settings.ML_CLIENT_ID),
             "client_secret_configured": bool(settings.ML_CLIENT_SECRET),
             "redirect_uri_configured": bool(settings.ML_REDIRECT_URI),
             "access_token_configured": has_access_token,
             "refresh_token_configured": has_refresh_token,
+            "access_token_format_valid": self._is_token_format_valid(access_token) if has_access_token else False,
+            "refresh_token_format_valid": self._is_token_format_valid(refresh_token) if has_refresh_token else False,
             "oauth_ready": has_credentials,
             "redirect_uri": settings.ML_REDIRECT_URI,
-            "user_id": settings.ML_USER_ID or None,
-            "message": self._status_message(has_credentials, has_access_token)
+            "user_id": user_id or None,
+            "message": self._status_message(has_credentials, access_token)
         }
 
-    def _status_message(self, has_credentials: bool, has_access_token: bool):
+    def _status_message(self, has_credentials: bool, access_token: str):
         if not has_credentials:
             return "Configure ML_CLIENT_ID, ML_CLIENT_SECRET e ML_REDIRECT_URI na Vercel."
-        if not has_access_token:
+        if not access_token:
             return "Credenciais configuradas. Clique em Conectar ao Mercado Livre."
+        if not self._is_token_format_valid(access_token):
+            return "Access Token configurado, mas com formato inválido. Copie somente o valor do access_token."
         return "Mercado Livre conectado por token de ambiente."
 
     def get_authorization_url(self):
@@ -77,14 +171,22 @@ class MercadoLivreClient:
             }
 
     async def refresh_access_token(self):
-        if not settings.ML_REFRESH_TOKEN:
+        refresh_token = self._refresh_token()
+
+        if not refresh_token:
             return {"success": False, "message": "ML_REFRESH_TOKEN não configurado."}
+
+        if not self._is_token_format_valid(refresh_token):
+            return {
+                "success": False,
+                "message": "ML_REFRESH_TOKEN com formato inválido. Copie somente o valor do refresh_token."
+            }
 
         payload = {
             "grant_type": "refresh_token",
             "client_id": settings.ML_CLIENT_ID,
             "client_secret": settings.ML_CLIENT_SECRET,
-            "refresh_token": settings.ML_REFRESH_TOKEN
+            "refresh_token": refresh_token
         }
 
         headers = {
@@ -104,10 +206,22 @@ class MercadoLivreClient:
             return {"success": False, "message": str(exc)}
 
     async def get_me(self):
-        if not settings.ML_ACCESS_TOKEN:
+        access_token = self._access_token()
+
+        if not access_token:
             return {"success": False, "message": "ML_ACCESS_TOKEN não configurado.", "data": {}}
 
-        headers = {"Authorization": f"Bearer {settings.ML_ACCESS_TOKEN}"}
+        if not self._is_token_format_valid(access_token):
+            return {
+                "status_code": 400,
+                "success": False,
+                "message": "ML_ACCESS_TOKEN com formato inválido. Copie somente o valor do access_token.",
+                "data": {
+                    "hint": "O token deve ser apenas o valor, normalmente começando com APP_USR-, sem JSON inteiro."
+                }
+            }
+
+        headers = {"Authorization": f"Bearer {access_token}"}
 
         try:
             async with httpx.AsyncClient(timeout=30) as client:
