@@ -3,7 +3,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
 from app.core.logging import configure_logging
-from app.routers.api import health, products, supplier, mercado_livre, webhooks, catalog_products
+from app.routers.api import health, products, supplier, mercado_livre, webhooks, catalog_products, suppliers_admin
 from app.routers.web import pages
 
 configure_logging()
@@ -22,5 +22,6 @@ app.include_router(health.router, prefix="/api", tags=["API - Sistema"])
 app.include_router(supplier.router, prefix="/api/supplier", tags=["API - Fornecedor Simulado"])
 app.include_router(products.router, prefix="/api/products", tags=["API - Produtos"])
 app.include_router(catalog_products.router, prefix="/api/catalog/products", tags=["API - Catálogo de Produtos"])
+app.include_router(suppliers_admin.router, prefix="/api/admin/suppliers", tags=["API - Fornecedores"])
 app.include_router(mercado_livre.router, prefix="/api/mercadolivre", tags=["API - Mercado Livre"])
 app.include_router(webhooks.router, prefix="/api/webhooks", tags=["API - Webhooks"])

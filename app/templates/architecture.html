@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel">
+    <h2>Arquitetura CommerceHub v1</h2>
+    <p>Base reorganizada para escalar fornecedores, marketplaces, produtos, pedidos, estoque e IA.</p>
+
+    <div class="status-box">
+        <p><strong>Status:</strong> arquitetura modular criada.</p>
+        <p><strong>Objetivo:</strong> facilitar novas integrações sem reescrever o núcleo do sistema.</p>
+    </div>
+
+    <h3>Módulos principais</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Módulo</th>
+                <th>Função</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr><td>Core</td><td>Configuração, logs, segurança e serviços base</td><td>Ativo</td></tr>
+            <tr><td>Marketplaces</td><td>Mercado Livre, Shopee, Amazon e Magalu</td><td>Mercado Livre ativo</td></tr>
+            <tr><td>Suppliers</td><td>Fornecedores via API, XML, CSV e FTP</td><td>Base criada</td></tr>
+            <tr><td>Products</td><td>Catálogo, anúncios e atributos</td><td>Base criada</td></tr>
+            <tr><td>Orders</td><td>Pedidos e webhooks</td><td>Preparado</td></tr>
+            <tr><td>Inventory</td><td>Estoque e sincronização</td><td>Preparado</td></tr>
+            <tr><td>Pricing</td><td>Margem, taxas e precificação</td><td>Base criada</td></tr>
+            <tr><td>AI</td><td>Títulos, descrições e categorização</td><td>Preparado</td></tr>
+        </tbody>
+    </table>
+</section>
+
+<section class="panel">
+    <h2>Próximas etapas</h2>
+    <ol>
+        <li>Banco de dados persistente externo.</li>
+        <li>Cadastro real de produtos com salvamento pela interface.</li>
+        <li>Importador universal de fornecedores.</li>
+        <li>Publicação controlada no Mercado Livre.</li>
+        <li>Webhook de pedidos e sincronização de estoque.</li>
+    </ol>
+</section>
+{% endblock %}

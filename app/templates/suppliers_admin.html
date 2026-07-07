@@ -1,0 +1,81 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel">
+    <div class="page-actions">
+        <div>
+            <h2>Fornecedores</h2>
+            <p>Primeira base para cadastro e integração de fornecedores.</p>
+        </div>
+        <a class="button" href="/fornecedores/novo">Novo fornecedor</a>
+    </div>
+
+    <div class="status-box">
+        <p><strong>Objetivo:</strong> conectar fornecedores por API, XML, CSV, FTP ou planilha.</p>
+        <p><strong>Etapa atual:</strong> importador universal com fornecedor simulado.</p>
+    </div>
+
+    {% if suppliers %}
+        <table>
+            <thead>
+                <tr>
+                    <th>Nome</th>
+                    <th>Documento</th>
+                    <th>Tipo</th>
+                    <th>Status</th>
+                    <th>Última sincronização</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for supplier in suppliers %}
+                <tr>
+                    <td>{{ supplier.name }}</td>
+                    <td>{{ supplier.document }}</td>
+                    <td>{{ supplier.type }}</td>
+                    <td>{{ supplier.status }}</td>
+                    <td>{{ supplier.last_sync_at }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p>Nenhum fornecedor cadastrado ainda.</p>
+    {% endif %}
+</section>
+
+<section class="panel">
+    <h2>Importador universal</h2>
+    <p>Pré-visualização da importação do fornecedor simulado:</p>
+
+    <div class="status-box">
+        <p><strong>Origem:</strong> {{ preview.source }}</p>
+        <p><strong>Produtos encontrados:</strong> {{ preview.products_count }}</p>
+    </div>
+
+    <table>
+        <thead>
+            <tr>
+                <th>SKU</th>
+                <th>Produto</th>
+                <th>Estoque</th>
+                <th>Custo</th>
+                <th>Já existe?</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for product in preview.products %}
+            <tr>
+                <td>{{ product.sku }}</td>
+                <td>{{ product.name }}</td>
+                <td>{{ product.stock }}</td>
+                <td>R$ {{ "%.2f"|format(product.cost_price) }}</td>
+                <td>{{ product.already_exists }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+
+    <h3>Executar importação via API</h3>
+    <pre>POST /api/admin/suppliers/mock/import</pre>
+</section>
+{% endblock %}

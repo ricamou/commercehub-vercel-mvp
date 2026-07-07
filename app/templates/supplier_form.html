@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel">
+    <h2>Novo Fornecedor</h2>
+    <p>Use esta tela como guia para cadastro de fornecedor. Nesta etapa, o envio é feito pela API.</p>
+
+    <div class="form-grid">
+        <div><label>Nome</label><input placeholder="Fornecedor Exemplo"></div>
+        <div><label>Documento</label><input placeholder="CNPJ"></div>
+        <div><label>Tipo de integração</label><input placeholder="api, xml, csv, ftp"></div>
+        <div><label>URL base</label><input placeholder="https://api.fornecedor.com.br"></div>
+        <div><label>Tipo de autenticação</label><input placeholder="none, token, basic, oauth"></div>
+        <div><label>Status</label><input placeholder="draft, active, paused"></div>
+    </div>
+
+    <h3>Exemplo de criação via API</h3>
+    <pre>{
+  "name": "Fornecedor Exemplo",
+  "document": "00.000.000/0001-00",
+  "type": "api",
+  "base_url": "https://api.fornecedor.com.br",
+  "auth_type": "token",
+  "status": "draft",
+  "notes": "Fornecedor em fase de teste."
+}</pre>
+</section>
+{% endblock %}

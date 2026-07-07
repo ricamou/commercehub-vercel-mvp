@@ -9,6 +9,8 @@ from app.services.supplier_service import SupplierService
 from app.services.token_service import TokenService
 from app.services.ad_service import AdService
 from app.services.product_store_service import ProductStoreService
+from app.services.supplier_store_service import SupplierStoreService
+from app.services.importer_service import ImporterService
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -20,6 +22,8 @@ ml_client = MercadoLivreClient()
 token_service = TokenService()
 ad_service = AdService()
 product_store_service = ProductStoreService()
+supplier_store_service = SupplierStoreService()
+importer_service = ImporterService()
 
 
 @router.get("/")
@@ -148,5 +152,43 @@ def catalogo_produto_novo(request: Request):
         {
             "request": request,
             "page_title": "Novo Produto"
+        }
+    )
+
+
+@router.get("/fornecedores")
+def fornecedores_admin(request: Request):
+    suppliers = supplier_store_service.list_suppliers()
+    preview = importer_service.preview_mock_supplier_import()
+
+    return templates.TemplateResponse(
+        "suppliers_admin.html",
+        {
+            "request": request,
+            "page_title": "Fornecedores",
+            "suppliers": suppliers,
+            "preview": preview
+        }
+    )
+
+
+@router.get("/fornecedores/novo")
+def fornecedor_novo(request: Request):
+    return templates.TemplateResponse(
+        "supplier_form.html",
+        {
+            "request": request,
+            "page_title": "Novo Fornecedor"
+        }
+    )
+
+
+@router.get("/arquitetura")
+def arquitetura(request: Request):
+    return templates.TemplateResponse(
+        "architecture.html",
+        {
+            "request": request,
+            "page_title": "Arquitetura"
         }
     )
