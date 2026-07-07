@@ -100,3 +100,15 @@ Agora o sistema valida o formato do token antes de chamar a API do Mercado Livre
 
 Correção para o caso em que o JSON completo retornado pelo Mercado Livre foi colado por engano nas variáveis da Vercel.
 Agora o sistema tenta extrair automaticamente `access_token`, `refresh_token` e `user_id` mesmo quando o valor foi colado como dicionário completo.
+
+
+## Hotfix 4
+
+Melhoria da tela de callback do Mercado Livre.
+Agora o CommerceHub mostra separadamente:
+- ML_ACCESS_TOKEN
+- ML_REFRESH_TOKEN
+- ML_TOKEN_EXPIRES_IN
+- ML_USER_ID
+
+Isso evita copiar o JSON inteiro por engano para a Vercel.

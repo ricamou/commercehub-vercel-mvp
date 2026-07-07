@@ -84,13 +84,19 @@ async def mercado_livre_callback(request: Request, code: str | None = None, erro
 
     result = await ml_client.exchange_code_for_token(code)
 
+    token_data = result.get("data", {}) if isinstance(result, dict) else {}
+
     return templates.TemplateResponse(
         "mercado_livre_callback.html",
         {
             "request": request,
             "page_title": "Callback Mercado Livre",
             "success": result["success"],
-            "message": "Token recebido. Copie os tokens para as variáveis da Vercel." if result["success"] else "Falha ao trocar code por token.",
-            "token_data": result["data"]
+            "message": "Token recebido. Copie cada campo abaixo para a variável correta na Vercel." if result["success"] else "Falha ao trocar code por token.",
+            "token_data": token_data,
+            "access_token": token_data.get("access_token", ""),
+            "refresh_token": token_data.get("refresh_token", ""),
+            "expires_in": token_data.get("expires_in", ""),
+            "user_id": token_data.get("user_id", "")
         }
     )

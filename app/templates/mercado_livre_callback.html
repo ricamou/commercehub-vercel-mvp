@@ -10,8 +10,39 @@
     </div>
 
     {% if token_data %}
-        <h3>Dados retornados pelo Mercado Livre</h3>
-        <p class="warning">Copie os tokens abaixo para as variáveis de ambiente da Vercel. Não compartilhe esses dados.</p>
+        <h3>Copie para a Vercel</h3>
+        <p class="warning">
+            Copie somente o valor de cada campo. Não copie aspas, vírgulas, chaves ou o bloco inteiro.
+        </p>
+
+        <div class="token-grid">
+            <div class="token-card">
+                <h4>ML_ACCESS_TOKEN</h4>
+                <p>Copie o valor abaixo para a variável <strong>ML_ACCESS_TOKEN</strong>:</p>
+                <pre>{{ access_token }}</pre>
+            </div>
+
+            <div class="token-card">
+                <h4>ML_REFRESH_TOKEN</h4>
+                <p>Copie o valor abaixo para a variável <strong>ML_REFRESH_TOKEN</strong>:</p>
+                <pre>{{ refresh_token }}</pre>
+            </div>
+
+            <div class="token-card">
+                <h4>ML_TOKEN_EXPIRES_IN</h4>
+                <p>Copie o valor abaixo para a variável <strong>ML_TOKEN_EXPIRES_IN</strong>:</p>
+                <pre>{{ expires_in }}</pre>
+            </div>
+
+            <div class="token-card">
+                <h4>ML_USER_ID</h4>
+                <p>Copie o valor abaixo para a variável <strong>ML_USER_ID</strong>:</p>
+                <pre>{{ user_id }}</pre>
+            </div>
+        </div>
+
+        <h3>Dados técnicos completos</h3>
+        <p class="help">Use apenas para conferência. Não copie este bloco inteiro para a Vercel.</p>
         <pre>{{ token_data }}</pre>
     {% endif %}
 
