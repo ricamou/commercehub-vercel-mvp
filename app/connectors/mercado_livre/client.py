@@ -244,6 +244,113 @@ class MercadoLivreClient:
                 "data": {"error": str(exc)}
             }
 
+
+    async def search_categories(self, query: str):
+        access_token = self._access_token()
+        if not access_token or not self._is_token_format_valid(access_token):
+            return {
+                "success": False,
+                "message": "Access Token inválido ou não configurado.",
+                "data": []
+            }
+
+        headers = {"Authorization": f"Bearer {access_token}"}
+        params = {"q": query}
+
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.get(
+                    f"{self.API_BASE_URL}/sites/MLB/domain_discovery/search",
+                    headers=headers,
+                    params=params
+                )
+                return {
+                    "status_code": response.status_code,
+                    "success": response.status_code < 400,
+                    "data": response.json() if response.content else []
+                }
+        except Exception as exc:
+            return {
+                "status_code": 500,
+                "success": False,
+                "message": "Erro ao buscar categorias.",
+                "data": {"error": str(exc)}
+            }
+
+    async def get_category_attributes(self, category_id: str):
+        access_token = self._access_token()
+        if not access_token or not self._is_token_format_valid(access_token):
+            return {
+                "success": False,
+                "message": "Access Token inválido ou não configurado.",
+                "data": []
+            }
+
+        headers = {"Authorization": f"Bearer {access_token}"}
+
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.get(
+                    f"{self.API_BASE_URL}/categories/{category_id}/attributes",
+                    headers=headers
+                )
+                return {
+                    "status_code": response.status_code,
+                    "success": response.status_code < 400,
+                    "data": response.json() if response.content else []
+                }
+        except Exception as exc:
+            return {
+                "status_code": 500,
+                "success": False,
+                "message": "Erro ao buscar atributos da categoria.",
+                "data": {"error": str(exc)}
+            }
+
+    def build_test_listing_payload(self, product: dict, category_id: str):
+        payload = self.build_listing_payload(product)
+        payload["category_id"] = category_id
+        payload["title"] = f"TESTE - {payload['title']}"[:60]
+        return payload
+
+    async def publish_test_listing(self, product: dict, category_id: str):
+        access_token = self._access_token()
+
+        if not access_token or not self._is_token_format_valid(access_token):
+            return {
+                "success": False,
+                "message": "Access Token inválido ou não configurado.",
+                "data": {}
+            }
+
+        payload = self.build_test_listing_payload(product, category_id)
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Content-Type": "application/json"
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(
+                    f"{self.API_BASE_URL}/items",
+                    headers=headers,
+                    json=payload
+                )
+                return {
+                    "status_code": response.status_code,
+                    "success": response.status_code < 400,
+                    "payload_sent": payload,
+                    "data": response.json() if response.content else {}
+                }
+        except Exception as exc:
+            return {
+                "status_code": 500,
+                "success": False,
+                "message": "Erro ao publicar anúncio teste.",
+                "payload_sent": payload,
+                "data": {"error": str(exc)}
+            }
+
     def build_listing_payload(self, product: dict):
         return {
             "title": product["name"][:60],

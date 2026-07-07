@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel">
+    <h2>Módulo de Produtos e Anúncios</h2>
+    <p>Esta tela prepara os produtos do fornecedor para publicação no Mercado Livre.</p>
+
+    <div class="status-box">
+        <p><strong>Etapa atual:</strong> preparação de anúncio teste.</p>
+        <p><strong>Próxima etapa:</strong> selecionar categoria e publicar um produto de teste.</p>
+    </div>
+
+    <h3>Produtos disponíveis</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>SKU</th>
+                <th>Produto</th>
+                <th>Categoria interna</th>
+                <th>Preço venda</th>
+                <th>Estoque</th>
+                <th>Preview API</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for product in products %}
+            <tr>
+                <td>{{ product.sku }}</td>
+                <td>{{ product.name }}</td>
+                <td>{{ product.category }}</td>
+                <td>R$ {{ "%.2f"|format(product.sale_price) }}</td>
+                <td>{{ product.stock }}</td>
+                <td>
+                    <code>/api/mercadolivre/listing-preview/{{ product.sku }}?category_id=MLB0000</code>
+                </td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+
+<section class="panel">
+    <h2>Como testar categorias</h2>
+    <p>Use este endpoint trocando o texto da busca:</p>
+    <pre>/api/mercadolivre/categories/search?q=suporte celular</pre>
+
+    <h2>Como testar preview do anúncio</h2>
+    <p>Depois que encontrar uma categoria, use:</p>
+    <pre>/api/mercadolivre/listing-preview/SUP-001?category_id=COLE_A_CATEGORIA_AQUI</pre>
+
+    <h2>Publicação teste</h2>
+    <p>A publicação real deve ser feita com cuidado. Primeiro validaremos categoria e atributos obrigatórios.</p>
+</section>
+{% endblock %}

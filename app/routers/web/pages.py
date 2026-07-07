@@ -100,3 +100,16 @@ async def mercado_livre_callback(request: Request, code: str | None = None, erro
             "user_id": token_data.get("user_id", "")
         }
     )
+
+
+@router.get("/anuncios")
+def anuncios(request: Request):
+    products = product_service.list_products_with_sale_price()
+    return templates.TemplateResponse(
+        "ads.html",
+        {
+            "request": request,
+            "page_title": "Produtos e Anúncios",
+            "products": products
+        }
+    )

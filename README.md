@@ -112,3 +112,36 @@ Agora o CommerceHub mostra separadamente:
 - ML_USER_ID
 
 Isso evita copiar o JSON inteiro por engano para a Vercel.
+
+
+## Módulo Produtos/Anúncios
+
+Adicionado módulo inicial de produtos e anúncios.
+
+### Novas rotas web
+
+```text
+/anuncios
+```
+
+### Novas rotas API
+
+```text
+/api/mercadolivre/categories/search?q=suporte celular
+```
+
+```text
+/api/mercadolivre/categories/{category_id}/attributes
+```
+
+```text
+/api/mercadolivre/listing-preview/{sku}?category_id=MLB0000
+```
+
+```text
+POST /api/mercadolivre/listing-test/{sku}?category_id=MLB0000
+```
+
+### Observação
+
+A publicação real deve ser testada somente depois de validar a categoria correta e os atributos obrigatórios.
