@@ -83,3 +83,8 @@ Use:
 ```text
 https://commercehub-vercel-mvp.vercel.app/api/webhooks/mercadolivre
 ```
+
+
+## Hotfix
+
+Correção para evitar Internal Server Error na tela `/mercado-livre` quando o token estiver inválido, incompleto ou quando a API do Mercado Livre retornar erro.

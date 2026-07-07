@@ -18,10 +18,14 @@
 
     <h3>Conta conectada</h3>
     <div class="status-box">
-        {% if account and account.success %}
-            <p><strong>ID:</strong> {{ account.data.id }}</p>
-            <p><strong>Nickname:</strong> {{ account.data.nickname }}</p>
-            <p><strong>País:</strong> {{ account.data.country_id }}</p>
+        {% if account and account.get("success") and account.get("data") %}
+            <p><strong>ID:</strong> {{ account.get("data", {}).get("id", "Não informado") }}</p>
+            <p><strong>Nickname:</strong> {{ account.get("data", {}).get("nickname", "Não informado") }}</p>
+            <p><strong>País:</strong> {{ account.get("data", {}).get("country_id", "Não informado") }}</p>
+        {% elif account %}
+            <p><strong>Status da consulta:</strong> {{ account.get("status_code", "sem status") }}</p>
+            <p><strong>Mensagem:</strong> {{ account.get("message", "Não foi possível carregar a conta. Verifique se o Access Token foi copiado corretamente.") }}</p>
+            <pre>{{ account.get("data", {}) }}</pre>
         {% else %}
             <p>Nenhuma conta conectada ainda.</p>
         {% endif %}

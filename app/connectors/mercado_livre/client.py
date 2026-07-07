@@ -61,20 +61,24 @@ class MercadoLivreClient:
             "content-type": "application/x-www-form-urlencoded"
         }
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(self.TOKEN_URL, data=payload, headers=headers)
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(self.TOKEN_URL, data=payload, headers=headers)
+                return {
+                    "status_code": response.status_code,
+                    "success": response.status_code < 400,
+                    "data": response.json() if response.content else {}
+                }
+        except Exception as exc:
             return {
-                "status_code": response.status_code,
-                "success": response.status_code < 400,
-                "data": response.json() if response.content else {}
+                "status_code": 500,
+                "success": False,
+                "data": {"error": "token_exchange_failed", "message": str(exc)}
             }
 
     async def refresh_access_token(self):
         if not settings.ML_REFRESH_TOKEN:
-            return {
-                "success": False,
-                "message": "ML_REFRESH_TOKEN não configurado."
-            }
+            return {"success": False, "message": "ML_REFRESH_TOKEN não configurado."}
 
         payload = {
             "grant_type": "refresh_token",
@@ -88,31 +92,42 @@ class MercadoLivreClient:
             "content-type": "application/x-www-form-urlencoded"
         }
 
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.post(self.TOKEN_URL, data=payload, headers=headers)
-            return {
-                "status_code": response.status_code,
-                "success": response.status_code < 400,
-                "data": response.json() if response.content else {}
-            }
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.post(self.TOKEN_URL, data=payload, headers=headers)
+                return {
+                    "status_code": response.status_code,
+                    "success": response.status_code < 400,
+                    "data": response.json() if response.content else {}
+                }
+        except Exception as exc:
+            return {"success": False, "message": str(exc)}
 
     async def get_me(self):
         if not settings.ML_ACCESS_TOKEN:
+            return {"success": False, "message": "ML_ACCESS_TOKEN não configurado.", "data": {}}
+
+        headers = {"Authorization": f"Bearer {settings.ML_ACCESS_TOKEN}"}
+
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                response = await client.get(f"{self.API_BASE_URL}/users/me", headers=headers)
+                try:
+                    data = response.json() if response.content else {}
+                except Exception:
+                    data = {"raw_response": response.text}
+
+                return {
+                    "status_code": response.status_code,
+                    "success": response.status_code < 400,
+                    "data": data
+                }
+        except Exception as exc:
             return {
+                "status_code": 500,
                 "success": False,
-                "message": "ML_ACCESS_TOKEN não configurado."
-            }
-
-        headers = {
-            "Authorization": f"Bearer {settings.ML_ACCESS_TOKEN}"
-        }
-
-        async with httpx.AsyncClient(timeout=30) as client:
-            response = await client.get(f"{self.API_BASE_URL}/users/me", headers=headers)
-            return {
-                "status_code": response.status_code,
-                "success": response.status_code < 400,
-                "data": response.json() if response.content else {}
+                "message": "Erro ao consultar /users/me.",
+                "data": {"error": str(exc)}
             }
 
     def build_listing_payload(self, product: dict):
