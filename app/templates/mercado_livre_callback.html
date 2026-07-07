@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel">
+    <h2>Resultado da conexão</h2>
+
+    <div class="status-box">
+        <p><strong>Sucesso:</strong> {{ success }}</p>
+        <p><strong>Mensagem:</strong> {{ message }}</p>
+    </div>
+
+    {% if token_data %}
+        <h3>Dados retornados pelo Mercado Livre</h3>
+        <p class="warning">
+            Copie os tokens para as variáveis de ambiente da Vercel. Não compartilhe esses dados publicamente.
+        </p>
+
+        <pre>{{ token_data }}</pre>
+    {% endif %}
+
+    <a class="button" href="/mercado-livre">Voltar para Mercado Livre</a>
+</section>
+{% endblock %}

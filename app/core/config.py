@@ -13,5 +13,10 @@ class Settings:
     ML_CLIENT_SECRET: str = os.getenv("ML_CLIENT_SECRET", "")
     ML_REDIRECT_URI: str = os.getenv("ML_REDIRECT_URI", "")
 
+    ML_ACCESS_TOKEN: str = os.getenv("ML_ACCESS_TOKEN", "")
+    ML_REFRESH_TOKEN: str = os.getenv("ML_REFRESH_TOKEN", "")
+    ML_TOKEN_EXPIRES_IN: str = os.getenv("ML_TOKEN_EXPIRES_IN", "")
+    ML_USER_ID: str = os.getenv("ML_USER_ID", "")
+
 
 settings = Settings()

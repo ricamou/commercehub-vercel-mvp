@@ -1,25 +1,26 @@
-# CommerceHub v0.2
+# CommerceHub v0.5
 
 Sistema para integração:
 
 **Fornecedor Simulado → CommerceHub → Mercado Livre**
 
-Esta versão mantém o foco no fornecedor simulado e prepara a base para integração real com o Mercado Livre.
+## O que mudou na v0.5
 
-## O que há na v0.2
+Esta versão reorganiza o projeto para uma estrutura mais profissional e adiciona a primeira base para persistência de tokens.
 
-- Arquitetura profissional organizada.
-- Fornecedor simulado mais realista.
-- Cálculo de preço com:
-  - margem de lucro;
-  - comissão estimada do Mercado Livre;
-  - custo fixo estimado;
-  - arredondamento de preço.
-- Preview do produto pronto para anúncio no Mercado Livre.
-- Configuração centralizada.
-- Logs básicos.
-- Estrutura inicial de testes.
-- Documentação técnica.
+## Novidades
+
+- Reorganização geral da arquitetura.
+- Criação de documentação de deploy.
+- Criação de documentação Mercado Livre.
+- Serviço central de tokens.
+- Estrutura para renovação futura de tokens.
+- Tela Mercado Livre melhorada.
+- Endpoint `/api/mercadolivre/token-status`.
+- Endpoint `/api/mercadolivre/refresh-token` estrutural.
+- Mantido painel web.
+- Mantido fornecedor simulado.
+- Mantida base OAuth da v0.4.
 
 ## Estrutura
 
@@ -30,56 +31,92 @@ CommerceHub/
 ├── app/
 │   ├── core/
 │   ├── connectors/
+│   │   ├── mercado_livre/
+│   │   └── mock_supplier/
 │   ├── routers/
+│   │   ├── api/
+│   │   └── web/
 │   ├── schemas/
-│   └── services/
+│   ├── services/
+│   ├── static/
+│   └── templates/
 ├── docs/
 ├── tests/
 ├── .env.example
 ├── .gitignore
+├── CHANGELOG.md
 ├── requirements.txt
-├── vercel.json
-└── README.md
+└── vercel.json
 ```
 
-## Endpoints
-
-Depois de publicar na Vercel:
+## Rotas Web
 
 ```text
 /
 ```
 
 ```text
-/health
+/dashboard
 ```
 
 ```text
-/supplier/products
+/produtos
 ```
 
 ```text
-/supplier/products/SUP-001
+/fornecedor
 ```
 
 ```text
-/products
+/mercado-livre
 ```
 
 ```text
-/products/preview-ml
+/mercadolivre/connect
 ```
 
 ```text
-/products/pricing/SUP-001
+/mercadolivre/callback
+```
+
+## Rotas API
+
+```text
+/api/health
 ```
 
 ```text
-/mercadolivre/status
+/api/supplier/products
+```
+
+```text
+/api/products
+```
+
+```text
+/api/products/preview-ml
+```
+
+```text
+/api/mercadolivre/status
+```
+
+```text
+/api/mercadolivre/auth-url
+```
+
+```text
+/api/mercadolivre/me
+```
+
+```text
+/api/mercadolivre/token-status
+```
+
+```text
+/api/mercadolivre/refresh-token
 ```
 
 ## Importante
 
-A v0.2 ainda **não publica produto real** no Mercado Livre.
-
-Ela prepara os dados e a estrutura para a v0.3, onde iniciaremos autenticação OAuth do Mercado Livre.
+A v0.5 ainda não publica anúncios reais. Ela prepara a base para a v0.6, onde vamos avançar para categorias/atributos e depois publicação controlada.

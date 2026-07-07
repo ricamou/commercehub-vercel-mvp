@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel">
+    <h2>Produtos com preço calculado</h2>
+    <table>
+        <thead>
+            <tr>
+                <th>SKU</th>
+                <th>Produto</th>
+                <th>Categoria</th>
+                <th>Custo</th>
+                <th>Venda</th>
+                <th>Lucro estimado</th>
+                <th>Estoque</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for product in products %}
+            <tr>
+                <td>{{ product.sku }}</td>
+                <td>{{ product.name }}</td>
+                <td>{{ product.category }}</td>
+                <td>R$ {{ "%.2f"|format(product.cost_price) }}</td>
+                <td>R$ {{ "%.2f"|format(product.sale_price) }}</td>
+                <td>R$ {{ "%.2f"|format(product.estimated_profit) }}</td>
+                <td>{{ product.stock }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</section>
+{% endblock %}

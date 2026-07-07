@@ -1,67 +1,55 @@
-# CommerceHub v0.2 — Arquitetura Técnica
+# CommerceHub v0.5 — Arquitetura Técnica
 
 ## Objetivo
 
-Criar a base profissional para um sistema que integre fornecedores ao Mercado Livre.
+Reorganizar a base do projeto para suportar crescimento.
 
-Fluxo atual:
+## Fluxo
 
 ```text
-Fornecedor Simulado → CommerceHub → Mercado Livre
+Fornecedor Simulado → CommerceHub Core → Mercado Livre
 ```
 
-## Camadas
+## Nova organização
 
-### Routers
+### API
 
-Recebem as chamadas HTTP.
+```text
+app/routers/api/
+```
+
+Rotas voltadas para integrações e respostas JSON.
+
+### Web
+
+```text
+app/routers/web/
+```
+
+Rotas do painel administrativo.
 
 ### Services
 
-Contêm regras de negócio, como precificação e preparação dos produtos.
+Regras de negócio.
 
 ### Connectors
 
-Representam sistemas externos ou simulados.
+Comunicação com sistemas externos.
 
-### Schemas
+### Templates
 
-Definem os formatos dos dados.
+Interface web.
 
-## Conectores
+## Tokens
 
-### Mock Supplier
+Na v0.5, os tokens continuam em variáveis de ambiente da Vercel.
 
-Fornecedor simulado com produtos, estoque, custo, medidas, marca, EAN e imagem.
+## Próxima evolução
 
-### Mercado Livre
+Na v0.6 ou v0.7, será necessário decidir onde armazenar tokens:
 
-Ainda estrutural. Na v0.2 ele monta o payload de anúncio, mas não publica.
-
-## Precificação
-
-A v0.2 calcula o preço considerando:
-
-- custo do produto;
-- margem desejada;
-- comissão estimada do Mercado Livre;
-- custo fixo operacional;
-- arredondamento comercial.
-
-## Próximas versões
-
-### v0.3
-
-- Início da autenticação OAuth Mercado Livre.
-- Variáveis de ambiente para credenciais.
-- Callback de autenticação.
-
-### v0.4
-
-- Consulta de categorias.
-- Validação de atributos.
-- Preparação para publicação real.
-
-### v0.5
-
-- Publicação controlada de anúncio teste.
+- Vercel Postgres;
+- Supabase;
+- Neon;
+- Upstash;
+- outro banco externo.

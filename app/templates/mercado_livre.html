@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel">
+    <h2>Status Mercado Livre</h2>
+
+    <div class="status-box">
+        <p><strong>Conectado:</strong> {{ status.connected }}</p>
+        <p><strong>Credenciais configuradas:</strong> {{ status.credentials_configured }}</p>
+        <p><strong>Access token configurado:</strong> {{ status.access_token_configured }}</p>
+        <p><strong>Refresh token configurado:</strong> {{ status.refresh_token_configured }}</p>
+        <p><strong>OAuth pronto:</strong> {{ status.oauth_ready }}</p>
+        <p><strong>Redirect URI:</strong> {{ status.redirect_uri }}</p>
+        <p><strong>User ID:</strong> {{ status.user_id }}</p>
+        <p><strong>Mensagem:</strong> {{ status.message }}</p>
+    </div>
+
+    <h3>Status dos tokens</h3>
+    <div class="status-box">
+        <p><strong>Modo de armazenamento:</strong> {{ token_status.storage_mode }}</p>
+        <p><strong>Access token:</strong> {{ token_status.access_token_configured }}</p>
+        <p><strong>Refresh token:</strong> {{ token_status.refresh_token_configured }}</p>
+        <p><strong>Token expires in:</strong> {{ token_status.token_expires_in_configured }}</p>
+        <p><strong>User ID:</strong> {{ token_status.user_id_configured }}</p>
+        <p><strong>Mensagem:</strong> {{ token_status.message }}</p>
+    </div>
+
+    {% if auth_url %}
+        <a class="button" href="/mercadolivre/connect">Conectar ao Mercado Livre</a>
+    {% else %}
+        <a class="button disabled" href="#">Configure as credenciais na Vercel</a>
+    {% endif %}
+
+    <p class="help">
+        Para habilitar a conexão, configure ML_CLIENT_ID, ML_CLIENT_SECRET e ML_REDIRECT_URI nas variáveis da Vercel.
+    </p>
+</section>
+{% endblock %}

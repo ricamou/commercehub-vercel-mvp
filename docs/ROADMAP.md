@@ -1,35 +1,25 @@
 # CommerceHub Roadmap
 
 ## v0.1
-
-- Estrutura inicial profissional.
-- Fornecedor simulado.
-- Rotas básicas.
+- Estrutura inicial.
 
 ## v0.2
-
-- Fornecedor simulado mais completo.
-- Precificação mais realista.
-- Preview de payload Mercado Livre.
-- Logs.
-- Testes iniciais.
+- Precificação e preview Mercado Livre.
 
 ## v0.3
-
-- OAuth Mercado Livre.
+- Painel web.
 
 ## v0.4
-
-- Categorias e atributos Mercado Livre.
+- OAuth Mercado Livre inicial.
 
 ## v0.5
+- Reorganização da arquitetura e token service.
 
+## v0.6
+- Categorias e atributos Mercado Livre.
+
+## v0.7
 - Publicação teste controlada.
 
 ## v1.0
-
-- Fluxo inicial funcional:
-  - importar produto;
-  - calcular preço;
-  - preparar anúncio;
-  - publicar no Mercado Livre.
+- Fluxo inicial funcional.

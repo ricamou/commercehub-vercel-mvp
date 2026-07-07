@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="grid">
+    <div class="card">
+        <span class="label">Produtos do fornecedor</span>
+        <strong>{{ data.supplier_products_count }}</strong>
+        <p>Produtos simulados disponíveis.</p>
+    </div>
+
+    <div class="card">
+        <span class="label">Estoque total</span>
+        <strong>{{ data.total_stock }}</strong>
+        <p>Unidades disponíveis no fornecedor simulado.</p>
+    </div>
+
+    <div class="card">
+        <span class="label">Custo estimado</span>
+        <strong>R$ {{ "%.2f"|format(data.total_cost) }}</strong>
+        <p>Valor total de custo do estoque simulado.</p>
+    </div>
+
+    <div class="card">
+        <span class="label">Mercado Livre</span>
+        <strong>{% if data.mercado_livre_connected %}Conectado{% else %}Pendente{% endif %}</strong>
+        <p>Base OAuth e token service criados.</p>
+    </div>
+</section>
+
+<section class="panel">
+    <h2>Status do projeto</h2>
+    <p><strong>Versão:</strong> {{ data.version }}</p>
+    <p><strong>Fluxo:</strong> {{ data.flow }}</p>
+    <p><strong>Credenciais ML configuradas:</strong> {{ data.mercado_livre_credentials_configured }}</p>
+</section>
+{% endblock %}

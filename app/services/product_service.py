@@ -1,6 +1,6 @@
-from app.services.supplier_service import SupplierService
-from app.services.pricing_service import PricingService
 from app.connectors.mercado_livre.client import MercadoLivreClient
+from app.services.pricing_service import PricingService
+from app.services.supplier_service import SupplierService
 
 
 class ProductService:

@@ -22,9 +22,6 @@ class PricingService:
         )
 
         target_profit = cost_price * (margin / 100)
-
-        # Fórmula aproximada:
-        # preço - comissão% - custo fixo - custo produto = lucro desejado
         gross_price = (cost_price + fixed_cost + target_profit) / (1 - commission_percent / 100)
 
         sale_price = self._round_price(gross_price)
@@ -42,7 +39,6 @@ class PricingService:
         }
 
     def _round_price(self, price: float) -> float:
-        # Arredonda para preço comercial terminando em .90
         rounded = int(price) + 0.90
         if rounded < price:
             rounded += 1
