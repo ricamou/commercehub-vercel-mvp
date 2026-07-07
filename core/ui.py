@@ -23,7 +23,6 @@ pre{{background:#0b1220;color:white;padding:14px;border-radius:10px;overflow:aut
 <nav>
 <a href="/dashboard">Dashboard</a>
 <a href="/enterprise-final">Enterprise Final</a>\n<a href="/sprint1">Sprint 1</a>
-<a href="/sprint2">Sprint 2</a>
 <a href="/mercado-livre">Mercado Livre</a>
 <a href="/fornecedores">Fornecedores</a>
 <a href="/universal-connector">Universal Connector</a>

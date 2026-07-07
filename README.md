@@ -1,42 +1,20 @@
-# CommerceHub v2 STABLE
+# CommerceHub Sprint 1 — Universal Supplier Connector v1
 
-Versão estável e consolidada para Vercel/GitHub Web.
+Primeira sprint pós Enterprise v1.
 
-## Importante
-
-Esta versão foi refeita para evitar erro de imports entre módulos.
-Todo o núcleo está concentrado em `api/index.py`, mantendo o projeto pequeno e estável.
-
-## Arquivos
-
-- api/index.py
-- requirements.txt
-- vercel.json
-- .env.example
-- README.md
-
-Total: 5 arquivos.
+## Objetivo
+Conectores operacionais para API REST, JSON, XML e CSV.
 
 ## Testes
-
-- /api/health
-- /dashboard
-- /enterprise-final
 - /sprint1
-- /sprint2
-- /sprint3
-- /mercado-livre
-- /produtos
-- /anuncios
-- /relatorios
-- /ai
-
-## APIs principais
-
-- GET /api/connectors/status
+- /api/connectors/status
+- /api/import/preview
+- POST /api/connectors/preview
 - POST /api/connectors/parse/json
+- POST /api/connectors/parse/csv
+- POST /api/connectors/parse/xml
 - POST /api/import/from-payload/json
-- GET /api/sync/compare
-- GET /api/sync/marketplace-payload
-- POST /api/sync/run-demo
-- GET /api/anuncios/preview/SUP-001?category_id=MLBXXXX
+- POST /api/connectors/api-fetch
+
+## Próxima sprint
+Supplier Product Import Persistente.
