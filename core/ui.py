@@ -19,16 +19,30 @@ pre{{background:#0b1220;color:white;padding:14px;border-radius:10px;overflow:aut
 </head>
 <body>
 <aside>
-<div class="logo"><b>CH</b><div><strong>CommerceHub</strong><span>v2 Enterprise</span></div></div>
+<div class="logo"><b>CH</b><div><strong>CommerceHub</strong><span>Enterprise v1 Final</span></div></div>
 <nav>
 <a href="/dashboard">Dashboard</a>
+<a href="/enterprise-final">Enterprise Final</a>\n<a href="/sprint1">Sprint 1</a>
+<a href="/sprint2">Sprint 2</a>
 <a href="/mercado-livre">Mercado Livre</a>
 <a href="/fornecedores">Fornecedores</a>
+<a href="/universal-connector">Universal Connector</a>
+<a href="/supplier-crud">Supplier CRUD</a>
 <a href="/produtos">Produtos</a>
+<a href="/inventory-sync">Inventory Sync</a>
+<a href="/pricing-automation">Pricing</a>
+<a href="/product-crud">Product CRUD</a>
 <a href="/anuncios">Anúncios</a>
+<a href="/ml-publish">ML Publish</a>
+<a href="/marketplace-ops">Marketplace Ops</a>
+<a href="/sync-engine">Sync Engine</a>
+<a href="/scheduler">Scheduler</a>
+<a href="/audit">Audit</a>
 <a href="/pedidos">Pedidos</a>
+<a href="/orders-engine">Orders Engine</a>
 <a href="/relatorios">Relatórios</a>
 <a href="/ai">AI Engine</a>
+<a href="/ai-optimizer">AI Optimizer</a>
 <a href="/usuarios">Usuários</a>
 <a href="/database">Database</a>
 <a href="/arquitetura">Arquitetura</a>

@@ -1,7 +1,7 @@
-from modules.ai.service import enrich
+from modules.ai.service import enrich, optimize_listing
 
 def listing_payload(product, category_id="MLBXXXX"):
-    enriched = enrich(product)
+    enriched = optimize_listing(product)
     return {
         "title": enriched["title"],
         "category_id": category_id or "MLBXXXX",
