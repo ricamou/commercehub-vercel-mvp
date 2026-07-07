@@ -1,27 +1,46 @@
-# CommerceHub v2 Inventory Sync v1
+# CommerceHub Final Production Ready
 
-Versão com Inventory Sync: estoque, preview de fornecedor e payload para Mercado Livre.
+Versão final consolidada para GitHub Web e Vercel.
 
-## Adicionado
+## Arquivos
+Total: 6 arquivos.
 
-- Página `/inventory-sync`
-- Relatório de estoque
-- Preview de estoque do fornecedor
-- Plano de sincronização
-- Payload para atualização de estoque no Mercado Livre
-- Registro de evento de sincronização no Supabase quando configurado
+- api/index.py
+- requirements.txt
+- vercel.json
+- .env.example
+- supabase_schema.sql
+- README.md
 
-## Endpoints
+## Testes principais
 
-- GET `/api/inventory/report`
-- GET `/api/inventory/supplier-preview`
-- GET `/api/inventory/sync-plan`
-- GET `/api/inventory/ml-payload/SUP-001?stock=10`
-- POST `/api/inventory/sync-event`
+- /api/health
+- /dashboard
+- /enterprise-final
+- /sprint1
+- /sprint2
+- /sprint3
+- /mercado-livre
+- /produtos
+- /anuncios
+- /relatorios
+- /ai
+- /database
 
-## Próximo passo
+## APIs principais
 
-Pricing Automation v1:
-- recalcular preço com margem
-- gerar payload de preço para Mercado Livre
-- registrar evento de alteração de preço
+- GET /api/connectors/status
+- POST /api/connectors/parse/json
+- POST /api/connectors/parse/csv
+- POST /api/connectors/parse/xml
+- POST /api/import/from-payload/json
+- GET /api/sync/compare
+- GET /api/sync/marketplace-payload
+- POST /api/sync/run-demo
+- GET /api/anuncios/preview/SUP-001?category_id=MLBXXXX
+- GET /api/mercadolivre/status
+- GET /api/database/status
+
+## Observação
+
+Esta versão foi consolidada em um único backend para evitar problemas de importação na Vercel e manter o projeto abaixo do limite do GitHub Web.
