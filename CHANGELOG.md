@@ -1,23 +1,18 @@
 # Changelog
 
-## v0.5.0
+## Milestone 1
 
 ### Added
-- Reorganização profissional da estrutura de rotas.
-- Novo pacote `app/routers/api`.
-- Novo pacote `app/routers/web`.
-- Serviço `TokenService`.
+- OAuth Mercado Livre completo.
+- Webhook Mercado Livre.
+- Endpoint `/api/webhooks/mercadolivre`.
+- Endpoint `/api/mercadolivre/auth-url`.
+- Endpoint `/api/mercadolivre/me`.
 - Endpoint `/api/mercadolivre/token-status`.
 - Endpoint `/api/mercadolivre/refresh-token`.
-- Documentação de deploy.
-- Documentação Mercado Livre.
-- Tela Mercado Livre com bloco de orientação.
-
-### Changed
-- Separação mais clara entre rotas API e rotas Web.
-- Dashboard atualizado para versão 0.5.0.
-- README atualizado.
+- Tela de callback com instruções para copiar tokens.
+- Tela Mercado Livre com status de credenciais e tokens.
 
 ### Notes
-- Tokens continuam via variáveis de ambiente da Vercel nesta versão.
-- Persistência em banco externo fica planejada para versão futura.
+- Tokens ainda são configurados manualmente na Vercel após o primeiro callback.
+- Banco de dados externo será adicionado em etapa futura.

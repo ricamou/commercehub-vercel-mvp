@@ -1,5 +1,4 @@
 from fastapi import APIRouter, HTTPException, Query
-
 from app.services.product_service import ProductService
 
 router = APIRouter()
@@ -19,8 +18,6 @@ def preview_products_for_mercado_livre(margin_percent: float | None = Query(defa
 @router.get("/pricing/{sku}")
 def get_product_pricing(sku: str, margin_percent: float | None = Query(default=None)):
     result = service.get_product_pricing(sku=sku, margin_percent=margin_percent)
-
     if not result:
         raise HTTPException(status_code=404, detail="Produto não encontrado")
-
     return result

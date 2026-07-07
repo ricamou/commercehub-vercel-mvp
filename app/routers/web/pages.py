@@ -26,46 +26,26 @@ def index(request: Request):
 @router.get("/dashboard")
 def dashboard(request: Request):
     data = dashboard_service.get_dashboard_data()
-    return templates.TemplateResponse(
-        "dashboard.html",
-        {
-            "request": request,
-            "page_title": "Dashboard",
-            "data": data
-        }
-    )
+    return templates.TemplateResponse("dashboard.html", {"request": request, "page_title": "Dashboard", "data": data})
 
 
 @router.get("/produtos")
 def produtos(request: Request):
     products = product_service.list_products_with_sale_price()
-    return templates.TemplateResponse(
-        "products.html",
-        {
-            "request": request,
-            "page_title": "Produtos",
-            "products": products
-        }
-    )
+    return templates.TemplateResponse("products.html", {"request": request, "page_title": "Produtos", "products": products})
 
 
 @router.get("/fornecedor")
 def fornecedor(request: Request):
     products = supplier_service.list_products()
-    return templates.TemplateResponse(
-        "supplier.html",
-        {
-            "request": request,
-            "page_title": "Fornecedor Simulado",
-            "products": products
-        }
-    )
+    return templates.TemplateResponse("supplier.html", {"request": request, "page_title": "Fornecedor Simulado", "products": products})
 
 
 @router.get("/mercado-livre")
-def mercado_livre(request: Request):
+async def mercado_livre(request: Request):
     status = ml_client.status()
     token_status = token_service.get_token_status()
+    account = await ml_client.get_me() if status["access_token_configured"] else None
 
     return templates.TemplateResponse(
         "mercado_livre.html",
@@ -74,7 +54,8 @@ def mercado_livre(request: Request):
             "page_title": "Mercado Livre",
             "status": status,
             "token_status": token_status,
-            "auth_url": ml_client.get_authorization_url()
+            "auth_url": ml_client.get_authorization_url(),
+            "account": account
         }
     )
 
@@ -92,25 +73,13 @@ async def mercado_livre_callback(request: Request, code: str | None = None, erro
     if error:
         return templates.TemplateResponse(
             "mercado_livre_callback.html",
-            {
-                "request": request,
-                "page_title": "Callback Mercado Livre",
-                "success": False,
-                "message": f"Mercado Livre retornou erro: {error}",
-                "token_data": None
-            }
+            {"request": request, "page_title": "Callback Mercado Livre", "success": False, "message": f"Mercado Livre retornou erro: {error}", "token_data": None}
         )
 
     if not code:
         return templates.TemplateResponse(
             "mercado_livre_callback.html",
-            {
-                "request": request,
-                "page_title": "Callback Mercado Livre",
-                "success": False,
-                "message": "Nenhum code foi recebido.",
-                "token_data": None
-            }
+            {"request": request, "page_title": "Callback Mercado Livre", "success": False, "message": "Nenhum code foi recebido.", "token_data": None}
         )
 
     result = await ml_client.exchange_code_for_token(code)

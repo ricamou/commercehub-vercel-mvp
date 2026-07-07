@@ -1,28 +1,27 @@
-# Integração Mercado Livre
+# Mercado Livre — Milestone 1
 
-## v0.5
+## URLs
 
-A integração atual contém:
-
-- geração da URL de autorização;
-- callback OAuth;
-- troca do `code` por token;
-- leitura de tokens por variável de ambiente;
-- consulta `/users/me`;
-- refresh token estrutural.
-
-## Redirect URI
-
-Use:
+Redirect URI:
 
 ```text
 https://commercehub-vercel-mvp.vercel.app/mercadolivre/callback
 ```
 
-## Próximas etapas
+Webhook:
 
-- persistir tokens em banco externo;
-- renovar token automaticamente;
-- consultar categorias;
-- validar atributos obrigatórios;
-- publicar produto teste.
+```text
+https://commercehub-vercel-mvp.vercel.app/api/webhooks/mercadolivre
+```
+
+## Fluxo
+
+1. Usuário clica em conectar.
+2. Mercado Livre autentica.
+3. Mercado Livre retorna para callback.
+4. CommerceHub troca `code` por token.
+5. Usuário copia tokens para Vercel.
+
+## Próxima etapa
+
+Adicionar banco externo para salvar tokens automaticamente.

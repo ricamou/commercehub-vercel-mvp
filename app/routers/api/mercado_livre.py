@@ -43,11 +43,6 @@ async def mercado_livre_me():
 @router.post("/publish-test/{sku}")
 def publish_test_product(sku: str):
     product = product_service.get_product_for_marketplace_by_sku(sku)
-
     if not product:
-        return {
-            "success": False,
-            "message": "Produto não encontrado."
-        }
-
+        return {"success": False, "message": "Produto não encontrado."}
     return client.publish_product(product)

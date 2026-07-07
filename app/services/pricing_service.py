@@ -2,24 +2,10 @@ from app.core.config import settings
 
 
 class PricingService:
-    def calculate_sale_price(
-        self,
-        cost_price: float,
-        margin_percent: float | None = None,
-        ml_commission_percent: float | None = None,
-        fixed_operational_cost: float | None = None
-    ) -> dict:
+    def calculate_sale_price(self, cost_price: float, margin_percent: float | None = None) -> dict:
         margin = margin_percent if margin_percent is not None else settings.DEFAULT_MARGIN_PERCENT
-        commission_percent = (
-            ml_commission_percent
-            if ml_commission_percent is not None
-            else settings.ML_COMMISSION_PERCENT
-        )
-        fixed_cost = (
-            fixed_operational_cost
-            if fixed_operational_cost is not None
-            else settings.FIXED_OPERATIONAL_COST
-        )
+        commission_percent = settings.ML_COMMISSION_PERCENT
+        fixed_cost = settings.FIXED_OPERATIONAL_COST
 
         target_profit = cost_price * (margin / 100)
         gross_price = (cost_price + fixed_cost + target_profit) / (1 - commission_percent / 100)

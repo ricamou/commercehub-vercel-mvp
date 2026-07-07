@@ -11,50 +11,19 @@ class ProductService:
 
     def list_products_with_sale_price(self, margin_percent: float | None = None):
         products = self.supplier_service.list_products()
-        result = []
-
-        for product in products:
-            pricing = self.pricing_service.calculate_sale_price(
-                cost_price=product["cost_price"],
-                margin_percent=margin_percent
-            )
-
-            result.append({
-                **product,
-                **pricing
-            })
-
-        return result
+        return [{**product, **self.pricing_service.calculate_sale_price(product["cost_price"], margin_percent)} for product in products]
 
     def get_product_pricing(self, sku: str, margin_percent: float | None = None):
         product = self.supplier_service.get_product_by_sku(sku)
-
         if not product:
             return None
-
-        pricing = self.pricing_service.calculate_sale_price(
-            cost_price=product["cost_price"],
-            margin_percent=margin_percent
-        )
-
-        return {
-            "sku": product["sku"],
-            "name": product["name"],
-            **pricing
-        }
+        return {"sku": product["sku"], "name": product["name"], **self.pricing_service.calculate_sale_price(product["cost_price"], margin_percent)}
 
     def get_product_for_marketplace_by_sku(self, sku: str):
-        products = self.list_products_with_sale_price()
-        for product in products:
+        for product in self.list_products_with_sale_price():
             if product["sku"] == sku:
                 return product
         return None
 
     def preview_products_for_marketplace(self, margin_percent: float | None = None):
-        products = self.list_products_with_sale_price(margin_percent=margin_percent)
-        preview = []
-
-        for product in products:
-            preview.append(self.ml_client.build_listing_payload(product))
-
-        return preview
+        return [self.ml_client.build_listing_payload(product) for product in self.list_products_with_sale_price(margin_percent)]

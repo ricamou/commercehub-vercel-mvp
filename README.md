@@ -1,70 +1,47 @@
-# CommerceHub v0.5
+# CommerceHub — Milestone 1
 
 Sistema para integração:
 
 **Fornecedor Simulado → CommerceHub → Mercado Livre**
 
-## O que mudou na v0.5
+## Entrega
 
-Esta versão reorganiza o projeto para uma estrutura mais profissional e adiciona a primeira base para persistência de tokens.
+Esta versão adiciona a primeira integração real com Mercado Livre:
 
-## Novidades
+- OAuth completo
+- Botão de conexão
+- Callback de autenticação
+- Troca de code por token
+- Consulta `/users/me`
+- Endpoint de webhook obrigatório do Mercado Livre
+- Tela Mercado Livre melhorada
+- Preparação para publicação teste controlada
 
-- Reorganização geral da arquitetura.
-- Criação de documentação de deploy.
-- Criação de documentação Mercado Livre.
-- Serviço central de tokens.
-- Estrutura para renovação futura de tokens.
-- Tela Mercado Livre melhorada.
-- Endpoint `/api/mercadolivre/token-status`.
-- Endpoint `/api/mercadolivre/refresh-token` estrutural.
-- Mantido painel web.
-- Mantido fornecedor simulado.
-- Mantida base OAuth da v0.4.
+## Variáveis na Vercel
 
-## Estrutura
+Configure em **Settings → Environment Variables**:
 
 ```text
-CommerceHub/
-├── api/
-│   └── main.py
-├── app/
-│   ├── core/
-│   ├── connectors/
-│   │   ├── mercado_livre/
-│   │   └── mock_supplier/
-│   ├── routers/
-│   │   ├── api/
-│   │   └── web/
-│   ├── schemas/
-│   ├── services/
-│   ├── static/
-│   └── templates/
-├── docs/
-├── tests/
-├── .env.example
-├── .gitignore
-├── CHANGELOG.md
-├── requirements.txt
-└── vercel.json
+APP_NAME=CommerceHub
+APP_ENV=production
+DEFAULT_MARGIN_PERCENT=35
+ML_COMMISSION_PERCENT=16
+FIXED_OPERATIONAL_COST=6.00
+
+ML_CLIENT_ID=6835052957272496
+ML_CLIENT_SECRET=SUA_CHAVE_SECRETA
+ML_REDIRECT_URI=https://commercehub-vercel-mvp.vercel.app/mercadolivre/callback
+
+ML_ACCESS_TOKEN=
+ML_REFRESH_TOKEN=
+ML_TOKEN_EXPIRES_IN=
+ML_USER_ID=
 ```
 
-## Rotas Web
+## Rotas importantes
 
 ```text
 /
-```
-
-```text
-/dashboard
-```
-
-```text
-/produtos
-```
-
-```text
-/fornecedor
 ```
 
 ```text
@@ -79,22 +56,8 @@ CommerceHub/
 /mercadolivre/callback
 ```
 
-## Rotas API
-
 ```text
 /api/health
-```
-
-```text
-/api/supplier/products
-```
-
-```text
-/api/products
-```
-
-```text
-/api/products/preview-ml
 ```
 
 ```text
@@ -110,13 +73,13 @@ CommerceHub/
 ```
 
 ```text
-/api/mercadolivre/token-status
+/api/webhooks/mercadolivre
 ```
+
+## URL de notificações para o Mercado Livre
+
+Use:
 
 ```text
-/api/mercadolivre/refresh-token
+https://commercehub-vercel-mvp.vercel.app/api/webhooks/mercadolivre
 ```
-
-## Importante
-
-A v0.5 ainda não publica anúncios reais. Ela prepara a base para a v0.6, onde vamos avançar para categorias/atributos e depois publicação controlada.
