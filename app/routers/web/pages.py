@@ -8,6 +8,7 @@ from app.services.product_service import ProductService
 from app.services.supplier_service import SupplierService
 from app.services.token_service import TokenService
 from app.services.ad_service import AdService
+from app.services.product_store_service import ProductStoreService
 
 router = APIRouter()
 templates = Jinja2Templates(directory="app/templates")
@@ -18,6 +19,7 @@ supplier_service = SupplierService()
 ml_client = MercadoLivreClient()
 token_service = TokenService()
 ad_service = AdService()
+product_store_service = ProductStoreService()
 
 
 @router.get("/")
@@ -121,5 +123,30 @@ def anuncios(request: Request):
             "request": request,
             "page_title": "Produtos e Anúncios",
             "products": enriched_products
+        }
+    )
+
+
+@router.get("/catalogo/produtos")
+def catalogo_produtos(request: Request):
+    stored_products = product_store_service.list_products()
+
+    return templates.TemplateResponse(
+        "catalog_products.html",
+        {
+            "request": request,
+            "page_title": "Catálogo de Produtos",
+            "products": stored_products
+        }
+    )
+
+
+@router.get("/catalogo/produtos/novo")
+def catalogo_produto_novo(request: Request):
+    return templates.TemplateResponse(
+        "catalog_product_form.html",
+        {
+            "request": request,
+            "page_title": "Novo Produto"
         }
     )

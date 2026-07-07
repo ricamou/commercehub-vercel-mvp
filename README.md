@@ -162,3 +162,45 @@ Novas funções:
 ```text
 /api/mercadolivre/listing-ready/{sku}?category_id=MLBXXXX
 ```
+
+
+## Catálogo de Produtos v1
+
+Adicionada primeira base do catálogo de produtos.
+
+### Rotas web
+
+```text
+/catalogo/produtos
+```
+
+```text
+/catalogo/produtos/novo
+```
+
+### Rotas API
+
+```text
+GET /api/catalog/products
+```
+
+```text
+POST /api/catalog/products
+```
+
+```text
+GET /api/catalog/products/{product_id}
+```
+
+```text
+PUT /api/catalog/products/{product_id}
+```
+
+```text
+DELETE /api/catalog/products/{product_id}
+```
+
+### Observação
+
+Esta versão usa armazenamento temporário em `/tmp`, adequado apenas para validar o fluxo.
+A próxima evolução deve usar banco externo persistente.

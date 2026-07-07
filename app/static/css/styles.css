@@ -25,3 +25,30 @@
     color: white;
     font-size: 13px;
 }
+
+.page-actions {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 16px;
+}
+
+.form-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(220px, 1fr));
+    gap: 16px;
+    margin: 20px 0;
+}
+
+.form-grid label {
+    display: block;
+    font-weight: 700;
+    margin-bottom: 6px;
+}
+
+.form-grid input {
+    width: 100%;
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+}

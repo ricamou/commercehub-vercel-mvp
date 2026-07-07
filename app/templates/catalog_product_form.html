@@ -1,0 +1,43 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel">
+    <h2>Novo Produto</h2>
+    <p>Use esta tela como guia de cadastro. Nesta etapa, o envio é feito pela API.</p>
+
+    <div class="form-grid">
+        <div><label>SKU</label><input placeholder="SKU-001"></div>
+        <div><label>Nome</label><input placeholder="Nome do produto"></div>
+        <div><label>Marca</label><input placeholder="Marca"></div>
+        <div><label>EAN/GTIN</label><input placeholder="789..."></div>
+        <div><label>Categoria interna</label><input placeholder="Casa, Pet, Auto..."></div>
+        <div><label>Categoria Mercado Livre</label><input placeholder="MLBXXXX"></div>
+        <div><label>Custo</label><input placeholder="0.00"></div>
+        <div><label>Preço venda</label><input placeholder="0.00"></div>
+        <div><label>Estoque</label><input placeholder="0"></div>
+        <div><label>Peso kg</label><input placeholder="0.00"></div>
+        <div><label>Altura cm</label><input placeholder="0"></div>
+        <div><label>Largura cm</label><input placeholder="0"></div>
+        <div><label>Comprimento cm</label><input placeholder="0"></div>
+        <div><label>Imagem URL</label><input placeholder="https://..."></div>
+    </div>
+
+    <h3>Exemplo de criação via API</h3>
+    <pre>{
+  "sku": "SKU-001",
+  "name": "Produto de teste",
+  "brand": "Marca",
+  "ean": "7890000000000",
+  "internal_category": "Casa",
+  "ml_category_id": "MLBXXXX",
+  "cost_price": 20.00,
+  "sale_price": 49.90,
+  "stock": 10,
+  "weight_kg": 0.3,
+  "height_cm": 10,
+  "width_cm": 20,
+  "length_cm": 30,
+  "image_url": "https://via.placeholder.com/600"
+}</pre>
+</section>
+{% endblock %}

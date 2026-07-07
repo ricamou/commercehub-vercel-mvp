@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+
+{% block content %}
+<section class="panel">
+    <div class="page-actions">
+        <div>
+            <h2>Catálogo de Produtos</h2>
+            <p>Primeira base para produtos cadastrados no CommerceHub.</p>
+        </div>
+        <a class="button" href="/catalogo/produtos/novo">Novo produto</a>
+    </div>
+
+    <div class="status-box">
+        <p><strong>Importante:</strong> nesta etapa os produtos são salvos em armazenamento temporário do ambiente serverless.</p>
+        <p>Na próxima etapa vamos migrar para banco persistente externo.</p>
+    </div>
+
+    {% if products %}
+        <table>
+            <thead>
+                <tr>
+                    <th>SKU</th>
+                    <th>Nome</th>
+                    <th>Marca</th>
+                    <th>Categoria ML</th>
+                    <th>Preço</th>
+                    <th>Estoque</th>
+                    <th>Status</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for product in products %}
+                <tr>
+                    <td>{{ product.sku }}</td>
+                    <td>{{ product.name }}</td>
+                    <td>{{ product.brand }}</td>
+                    <td>{{ product.ml_category_id }}</td>
+                    <td>R$ {{ "%.2f"|format(product.sale_price) }}</td>
+                    <td>{{ product.stock }}</td>
+                    <td>{{ product.status }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    {% else %}
+        <p>Nenhum produto cadastrado ainda.</p>
+    {% endif %}
+</section>
+
+<section class="panel">
+    <h2>API do catálogo</h2>
+    <pre>GET /api/catalog/products</pre>
+    <pre>POST /api/catalog/products</pre>
+</section>
+{% endblock %}
