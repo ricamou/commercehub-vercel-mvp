@@ -1,0 +1,11 @@
+{% extends "layout.html" %}
+{% block content %}
+<section class="panel">
+  <h2>Fornecedor simulado</h2>
+  <table><tr><th>SKU</th><th>Produto</th><th>Custo</th><th>Preço sugerido</th><th>Estoque</th></tr>
+  {% for p in mock_products %}
+  <tr><td>{{p.sku}}</td><td>{{p.name}}</td><td>R$ {{p.cost_price}}</td><td>R$ {{p.sale_price}}</td><td>{{p.stock}}</td></tr>
+  {% endfor %}</table>
+  <p>Importar produtos: <code>POST /api/fornecedores/mock/import</code></p>
+</section>
+{% endblock %}

@@ -1,0 +1,10 @@
+{% extends "layout.html" %}
+{% block content %}
+<section class="panel">
+  <h2>Anúncios</h2>
+  <table><tr><th>SKU</th><th>Produto</th><th>Preview</th></tr>
+  {% for p in produtos %}
+  <tr><td>{{p.sku}}</td><td>{{p.name}}</td><td><code>/api/anuncios/preview/{{p.sku}}?category_id=MLBXXXX</code></td></tr>
+  {% endfor %}</table>
+</section>
+{% endblock %}

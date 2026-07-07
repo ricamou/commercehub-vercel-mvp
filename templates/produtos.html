@@ -1,0 +1,12 @@
+{% extends "layout.html" %}
+{% block content %}
+<section class="panel">
+  <h2>Catálogo</h2>
+  {% if produtos %}
+  <table><tr><th>SKU</th><th>Produto</th><th>Marca</th><th>Preço</th><th>Estoque</th></tr>
+  {% for p in produtos %}
+  <tr><td>{{p.sku}}</td><td>{{p.name}}</td><td>{{p.brand}}</td><td>R$ {{p.sale_price}}</td><td>{{p.stock}}</td></tr>
+  {% endfor %}</table>
+  {% else %}<p>Nenhum produto cadastrado. Importe em <code>POST /api/fornecedores/mock/import</code>.</p>{% endif %}
+</section>
+{% endblock %}

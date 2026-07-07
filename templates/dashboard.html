@@ -1,0 +1,10 @@
+{% extends "layout.html" %}
+{% block content %}
+<section class="grid">
+  <div class="card"><span>Produtos</span><strong>{{ produtos|length }}</strong></div>
+  <div class="card"><span>Fornecedores</span><strong>{{ fornecedores|length }}</strong></div>
+  <div class="card"><span>Pedidos</span><strong>{{ pedidos|length }}</strong></div>
+  <div class="card"><span>Estoque total</span><strong>{{ estoque_total }}</strong></div>
+</section>
+<section class="panel"><h2>Status Mercado Livre</h2><pre>{{ ml_status }}</pre></section>
+{% endblock %}

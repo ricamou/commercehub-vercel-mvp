@@ -1,0 +1,12 @@
+{% extends "layout.html" %}
+{% block content %}
+<section class="panel">
+  <h2>Pedidos</h2><p>Simular pedido: <code>POST /api/pedidos/simulate</code></p>
+  {% if pedidos %}
+  <table><tr><th>ID externo</th><th>Status</th><th>Total</th><th>Marketplace</th></tr>
+  {% for p in pedidos %}
+  <tr><td>{{p.external_order_id}}</td><td>{{p.status}}</td><td>R$ {{p.total_amount}}</td><td>{{p.marketplace}}</td></tr>
+  {% endfor %}</table>
+  {% else %}<p>Nenhum pedido ainda.</p>{% endif %}
+</section>
+{% endblock %}

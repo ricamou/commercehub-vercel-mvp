@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ page }} · CommerceHub</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+  <aside>
+    <div class="brand"><div class="logo">CH</div><div><strong>CommerceHub</strong><small>Simple Working v1</small></div></div>
+    <nav>
+      <a href="/dashboard">Dashboard</a>
+      <a href="/mercado-livre">Mercado Livre</a>
+      <a href="/fornecedores">Fornecedores</a>
+      <a href="/produtos">Produtos</a>
+      <a href="/anuncios">Anúncios</a>
+      <a href="/pedidos">Pedidos</a>
+      <a href="/relatorios">Relatórios</a>
+      <a href="/arquitetura">Arquitetura</a>
+      <a href="/api/health" target="_blank">API Health</a>
+    </nav>
+  </aside>
+  <main>
+    <header><h1>{{ page }}</h1><p>Fornecedor → CommerceHub → Mercado Livre → Cliente</p></header>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

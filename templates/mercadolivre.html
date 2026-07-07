@@ -1,0 +1,9 @@
+{% extends "layout.html" %}
+{% block content %}
+<section class="panel">
+  <h2>Status Mercado Livre</h2><pre>{{ status }}</pre>
+  {% if auth_url %}<a class="button" href="{{ auth_url }}">Conectar ao Mercado Livre</a>{% endif %}
+  <p><b>Webhook:</b> {{ webhook_url }}</p>
+</section>
+<section class="panel"><h2>Rotas úteis</h2><pre>/api/mercadolivre/me</pre><pre>/api/mercadolivre/categories/search?q=suporte celular</pre></section>
+{% endblock %}

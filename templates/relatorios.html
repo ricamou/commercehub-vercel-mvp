@@ -1,0 +1,16 @@
+{% extends "layout.html" %}
+{% block content %}
+<section class="grid">
+  <div class="card"><span>Produtos</span><strong>{{ financeiro.products_count }}</strong></div>
+  <div class="card"><span>Pedidos</span><strong>{{ financeiro.orders_count }}</strong></div>
+  <div class="card"><span>Custo estoque</span><strong>R$ {{ financeiro.stock_cost }}</strong></div>
+  <div class="card"><span>Vendas</span><strong>R$ {{ financeiro.total_sales }}</strong></div>
+</section>
+<section class="panel">
+  <h2>Lucro por produto</h2>
+  <table><tr><th>SKU</th><th>Produto</th><th>Lucro</th><th>Margem</th></tr>
+  {% for p in financeiro.products %}
+  <tr><td>{{p.sku}}</td><td>{{p.name}}</td><td>R$ {{p.profit}}</td><td>{{p.margin}}%</td></tr>
+  {% endfor %}</table>
+</section>
+{% endblock %}
