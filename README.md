@@ -1,16 +1,8 @@
-# CommerceHub Final Vercel
+# CommerceHub Modular Pro v1
 
-Versão final corrigida para Vercel.
+Versão reorganizada por módulos, mantendo poucos arquivos e deploy simples na Vercel.
 
-## Arquivos
-
-- api/index.py
-- requirements.txt
-- vercel.json
-- .env.example
-- README.md
-
-## Testar
+## Testes
 
 - /api/health
 - /dashboard
@@ -18,3 +10,5 @@ Versão final corrigida para Vercel.
 - /produtos
 - /anuncios
 - /relatorios
+- /ai
+- /arquitetura
