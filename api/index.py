@@ -12,17 +12,11 @@ from modules.ai.service import enrich, optimize_listing
 from modules.ai import repository as ai_repo
 from modules.marketplace_ops import service as marketplace_ops
 from modules.marketplace_ops import repository as marketplace_ops_repo
-from modules.universal_connector import service as universal_connector
-from modules.import_engine import service as import_engine
-from modules.sync_engine import service as sync_engine
-from modules.scheduler import service as scheduler
-from modules.audit import service as audit
-from modules.enterprise_dashboard import service as enterprise_dashboard
 from modules.mercadolivre import service as ml
 from modules.auth import service as auth
 from modules.database import service as database
 
-app = FastAPI(title="CommerceHub Sprint 1 Universal Connector", version="v2-enterprise-base")
+app = FastAPI(title="CommerceHub v2 Marketplace Operations v1", version="v2-enterprise-base")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -42,7 +36,7 @@ def dashboard():
 <section class="panel"><h2>Status</h2>
 <p><b>Mercado Livre configurado:</b> {bool(config.ML_CLIENT_ID and config.ML_CLIENT_SECRET)}</p>
 <p><b>Mercado Livre conectado:</b> {bool(config.ML_ACCESS_TOKEN)}</p>
-<p><b>Banco:</b> {database.status()["mode"]}</p><p><b>Versão:</b> CommerceHub Sprint 1 Universal Connector</p></section>
+<p><b>Banco:</b> {database.status()["mode"]}</p><p><b>Versão:</b> CommerceHub v2 Marketplace Operations v1</p></section>
 """
     return layout("Dashboard", body)
 
@@ -383,112 +377,6 @@ def page_marketplace_ops():
     return layout("Marketplace Operations", body)
 
 
-
-
-@app.get("/enterprise-final", response_class=HTMLResponse)
-def page_enterprise_final():
-    summary = enterprise_dashboard.enterprise_summary()
-    k = summary["kpis"]
-    body = f"""
-<section class="grid">
-<div class="card"><span>Produtos</span><strong>{k['products']}</strong></div>
-<div class="card"><span>Fornecedores</span><strong>{k['suppliers']}</strong></div>
-<div class="card"><span>Estoque</span><strong>{k['stock_total']}</strong></div>
-<div class="card"><span>Lucro potencial</span><strong>R$ {k['profit_potential']:,.2f}</strong></div>
-</section>
-<section class="panel">
-<h2>Enterprise v1 Final</h2>
-<p>Versão consolidada com conectores, importação, sincronização, scheduler, auditoria e dashboard final.</p>
-<table>
-<tr><th>Módulo</th><th>Status</th></tr>
-<tr><td>Universal Supplier Connector</td><td>Ready</td></tr>
-<tr><td>Import Engine</td><td>Ready</td></tr>
-<tr><td>Sync Engine</td><td>Ready</td></tr>
-<tr><td>Scheduler</td><td>Cron-ready</td></tr>
-<tr><td>Audit / Logs</td><td>Ready</td></tr>
-<tr><td>Dashboard Final</td><td>Ready</td></tr>
-</table>
-</section>
-"""
-    return layout("Enterprise Final", body)
-
-
-@app.get("/universal-connector", response_class=HTMLResponse)
-def page_universal_connector():
-    body = """
-<section class="panel">
-<h2>Universal Supplier Connector v1</h2>
-<p>Conectores preparados para API, XML, CSV, FTP e Excel.</p>
-<pre>/api/connectors/status
-/api/connectors/preview</pre>
-</section>
-"""
-    return layout("Universal Connector", body)
-
-
-@app.get("/sync-engine", response_class=HTMLResponse)
-def page_sync_engine():
-    body = """
-<section class="panel">
-<h2>Sync Engine v1</h2>
-<p>Motor final de sincronização fornecedor → catálogo → marketplace.</p>
-<pre>/api/sync/status
-/api/sync/plan
-/api/sync/run-demo</pre>
-</section>
-"""
-    return layout("Sync Engine", body)
-
-
-@app.get("/scheduler", response_class=HTMLResponse)
-def page_scheduler():
-    body = """
-<section class="panel">
-<h2>Scheduler v1</h2>
-<p>Jobs preparados para sincronização automática usando Vercel Cron ou serviço externo.</p>
-<pre>/api/scheduler/status</pre>
-</section>
-"""
-    return layout("Scheduler", body)
-
-
-@app.get("/audit", response_class=HTMLResponse)
-def page_audit():
-    body = """
-<section class="panel">
-<h2>Audit / Logs v1</h2>
-<p>Camada final de eventos e auditoria.</p>
-<pre>/api/audit/status</pre>
-</section>
-"""
-    return layout("Audit", body)
-
-
-
-
-@app.get("/sprint1", response_class=HTMLResponse)
-def page_sprint1():
-    body = """
-<section class="panel">
-<h2>Sprint 1 — Universal Supplier Connector</h2>
-<p>Conexão real por API, JSON, XML e CSV.</p>
-<table>
-<tr><th>Recurso</th><th>Status</th></tr>
-<tr><td>API REST Connector</td><td>Ready</td></tr>
-<tr><td>JSON Parser</td><td>Ready</td></tr>
-<tr><td>CSV Parser</td><td>Ready</td></tr>
-<tr><td>XML Parser</td><td>Ready</td></tr>
-<tr><td>Import Engine</td><td>Ready</td></tr>
-</table>
-</section>
-<section class="panel"><h2>Endpoints</h2><pre>GET  /api/connectors/status
-POST /api/connectors/parse/{source_type}
-POST /api/import/from-payload/{source_type}
-POST /api/connectors/api-fetch</pre></section>
-"""
-    return layout("Sprint 1", body)
-
-
 @app.get("/api/database/health")
 async def api_database_health():
     return {"success": True, "database": await database.health_check()}
@@ -567,7 +455,7 @@ async def api_suppliers_db():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "commercehub", "version": "sprint1-universal-connector-v1"}
+    return {"status": "ok", "service": "commercehub", "version": "v2-marketplace-operations-v1"}
 
 
 @app.get("/api/produtos")
@@ -718,90 +606,6 @@ def api_marketplace_ops_preview(sku: str, category_id: str = "MLBXXXX"):
 async def api_marketplace_ops_event(payload: dict):
     saved = await marketplace_ops_repo.save_operation_event(payload)
     return {"success": True, "saved": saved, "payload": payload}
-
-
-
-
-@app.get("/api/enterprise/summary")
-def api_enterprise_summary():
-    return enterprise_dashboard.enterprise_summary()
-
-
-@app.get("/api/connectors/status")
-def api_connectors_status():
-    return universal_connector.connector_status()
-
-
-@app.post("/api/connectors/preview")
-def api_connectors_preview(payload: dict):
-    return universal_connector.preview_connector_payload(payload, payload.get("source_type", "manual"))
-
-
-@app.get("/api/import/preview")
-def api_import_preview():
-    return import_engine.import_preview()
-
-
-@app.get("/api/import/plan")
-def api_import_plan():
-    return import_engine.import_plan()
-
-
-@app.get("/api/sync/status")
-def api_sync_status():
-    return sync_engine.sync_status()
-
-
-@app.get("/api/sync/plan")
-def api_sync_plan():
-    return sync_engine.full_sync_plan()
-
-
-@app.post("/api/sync/run-demo")
-def api_sync_run_demo():
-    return sync_engine.run_demo_sync()
-
-
-@app.get("/api/scheduler/status")
-def api_scheduler_status():
-    return scheduler.scheduler_status()
-
-
-@app.get("/api/scheduler/job/{job_id}")
-def api_scheduler_job(job_id: str):
-    return scheduler.job_plan(job_id)
-
-
-@app.get("/api/audit/status")
-def api_audit_status():
-    return audit.audit_status()
-
-
-@app.post("/api/audit/event")
-def api_audit_event(payload: dict):
-    return {"success": True, "event": audit.build_event(payload.get("event_type", "manual"), payload.get("message", ""), payload)}
-
-
-
-
-@app.post("/api/connectors/parse/{source_type}")
-def api_connectors_parse(source_type: str, payload: dict):
-    raw_payload = payload.get("payload", payload)
-    return universal_connector.parse_payload_by_type(source_type, raw_payload)
-
-
-@app.post("/api/import/from-payload/{source_type}")
-def api_import_from_payload(source_type: str, payload: dict):
-    raw_payload = payload.get("payload", payload)
-    return import_engine.import_from_payload(source_type, raw_payload)
-
-
-@app.post("/api/connectors/api-fetch")
-async def api_connector_api_fetch(payload: dict):
-    return await universal_connector.fetch_api_products(
-        url=payload.get("url", ""),
-        headers=payload.get("headers", {})
-    )
 
 
 @app.get("/api/relatorios/finance")

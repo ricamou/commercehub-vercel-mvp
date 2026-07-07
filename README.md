@@ -1,20 +1,26 @@
-# CommerceHub Sprint 1 — Universal Supplier Connector v1
+# CommerceHub v2 Marketplace Operations v1
 
-Primeira sprint pós Enterprise v1.
+Versão com camada operacional de marketplace.
 
-## Objetivo
-Conectores operacionais para API REST, JSON, XML e CSV.
+## Adicionado
 
-## Testes
-- /sprint1
-- /api/connectors/status
-- /api/import/preview
-- POST /api/connectors/preview
-- POST /api/connectors/parse/json
-- POST /api/connectors/parse/csv
-- POST /api/connectors/parse/xml
-- POST /api/import/from-payload/json
-- POST /api/connectors/api-fetch
+- Página `/marketplace-ops`
+- Status operacional de marketplaces
+- Plano de operação
+- Preview operacional por SKU
+- Integração com Listing, Pricing e Inventory
+- Registro de evento operacional no Supabase quando configurado
 
-## Próxima sprint
-Supplier Product Import Persistente.
+## Endpoints
+
+- GET `/api/marketplace-ops/status`
+- GET `/api/marketplace-ops/plan`
+- GET `/api/marketplace-ops/preview/SUP-001?category_id=MLBXXXX`
+- POST `/api/marketplace-ops/event`
+
+## Próximo passo
+
+Universal Supplier Connector v1:
+- preparar conectores API/XML/CSV/FTP
+- importar produtos de fornecedores reais
+- mapear produtos para o catálogo mestre
