@@ -8,15 +8,12 @@ from core import config
 from modules.products.service import all_products, stock_status
 from modules.suppliers.service import supplier_products
 from modules.listings.service import listing_payload
-from modules.ai.service import enrich, optimize_listing
-from modules.ai import repository as ai_repo
-from modules.marketplace_ops import service as marketplace_ops
-from modules.marketplace_ops import repository as marketplace_ops_repo
+from modules.ai.service import enrich
 from modules.mercadolivre import service as ml
 from modules.auth import service as auth
 from modules.database import service as database
 
-app = FastAPI(title="CommerceHub v2 Marketplace Operations v1", version="v2-enterprise-base")
+app = FastAPI(title="CommerceHub v2 Inventory Sync v1", version="v2-enterprise-base")
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -36,7 +33,7 @@ def dashboard():
 <section class="panel"><h2>Status</h2>
 <p><b>Mercado Livre configurado:</b> {bool(config.ML_CLIENT_ID and config.ML_CLIENT_SECRET)}</p>
 <p><b>Mercado Livre conectado:</b> {bool(config.ML_ACCESS_TOKEN)}</p>
-<p><b>Banco:</b> {database.status()["mode"]}</p><p><b>Versão:</b> CommerceHub v2 Marketplace Operations v1</p></section>
+<p><b>Banco:</b> {database.status()["mode"]}</p><p><b>Versão:</b> CommerceHub v2 Inventory Sync v1</p></section>
 """
     return layout("Dashboard", body)
 
@@ -313,70 +310,6 @@ def page_inventory_sync():
     return layout("Inventory Sync", body)
 
 
-
-
-@app.get("/pricing-automation", response_class=HTMLResponse)
-def page_pricing_automation():
-    body = """
-<section class="panel">
-<h2>Pricing Automation v1</h2>
-<p>Camada de precificação automática, margem, lucro e payload para Mercado Livre.</p>
-<table>
-<tr><th>Ação</th><th>Endpoint</th></tr>
-<tr><td>Relatório de preços</td><td><code>GET /api/pricing/report</code></td></tr>
-<tr><td>Preço por produto</td><td><code>GET /api/pricing/product/SUP-001</code></td></tr>
-<tr><td>Simular margem</td><td><code>GET /api/pricing/product/SUP-001?margin_percent=45</code></td></tr>
-<tr><td>Payload Mercado Livre</td><td><code>GET /api/pricing/ml-payload/SUP-001</code></td></tr>
-<tr><td>Registrar evento</td><td><code>POST /api/pricing/event</code></td></tr>
-</table>
-</section>
-"""
-    return layout("Pricing Automation", body)
-
-
-
-
-@app.get("/ai-optimizer", response_class=HTMLResponse)
-def page_ai_optimizer():
-    body = """
-<section class="panel">
-<h2>AI Listing Optimizer v1</h2>
-<p>Camada de otimização de anúncios com IA: título, descrição, SEO, palavras-chave e busca de categoria.</p>
-<table>
-<tr><th>Ação</th><th>Endpoint</th></tr>
-<tr><td>Otimizar produto</td><td><code>GET /api/ai/optimize/SUP-001</code></td></tr>
-<tr><td>Relatório IA</td><td><code>GET /api/ai/report</code></td></tr>
-<tr><td>Preview de anúncio otimizado</td><td><code>GET /api/anuncios/preview/SUP-001?category_id=MLBXXXX</code></td></tr>
-<tr><td>Registrar evento IA</td><td><code>POST /api/ai/event</code></td></tr>
-</table>
-</section>
-"""
-    return layout("AI Listing Optimizer", body)
-
-
-
-
-@app.get("/marketplace-ops", response_class=HTMLResponse)
-def page_marketplace_ops():
-    body = """
-<section class="panel">
-<h2>Marketplace Operations v1</h2>
-<p>Camada operacional para controlar anúncios, preço, estoque e eventos de marketplace.</p>
-<table>
-<tr><th>Ação</th><th>Endpoint</th></tr>
-<tr><td>Status</td><td><code>GET /api/marketplace-ops/status</code></td></tr>
-<tr><td>Plano operacional</td><td><code>GET /api/marketplace-ops/plan</code></td></tr>
-<tr><td>Preview operacional</td><td><code>GET /api/marketplace-ops/preview/SUP-001?category_id=MLBXXXX</code></td></tr>
-<tr><td>Publicar ML</td><td><code>POST /api/anuncios/publish-ml/SUP-001?category_id=MLBXXXX</code></td></tr>
-<tr><td>Atualizar preço/estoque</td><td><code>PUT /api/mercadolivre/items/MLB123/price-stock</code></td></tr>
-<tr><td>Pausar anúncio</td><td><code>PUT /api/mercadolivre/items/MLB123/pause</code></td></tr>
-<tr><td>Registrar evento</td><td><code>POST /api/marketplace-ops/event</code></td></tr>
-</table>
-</section>
-"""
-    return layout("Marketplace Operations", body)
-
-
 @app.get("/api/database/health")
 async def api_database_health():
     return {"success": True, "database": await database.health_check()}
@@ -455,7 +388,7 @@ async def api_suppliers_db():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "commercehub", "version": "v2-marketplace-operations-v1"}
+    return {"status": "ok", "service": "commercehub", "version": "v2-inventory-sync-v1"}
 
 
 @app.get("/api/produtos")
@@ -526,85 +459,6 @@ def api_inventory_ml_payload(sku: str, stock: int, marketplace_item_id: str = ""
 @app.post("/api/inventory/sync-event")
 async def api_inventory_sync_event(payload: dict):
     saved = await inventory_repo.save_inventory_event(payload)
-    return {"success": True, "saved": saved, "payload": payload}
-
-
-
-
-@app.get("/api/pricing/report")
-def api_pricing_report(margin_percent: float = None):
-    return pricing.pricing_report(margin_percent=margin_percent)
-
-
-@app.get("/api/pricing/product/{sku}")
-def api_pricing_product(sku: str, margin_percent: float = None):
-    return pricing.product_pricing(sku, margin_percent=margin_percent)
-
-
-@app.get("/api/pricing/ml-payload/{sku}")
-def api_pricing_ml_payload(sku: str, margin_percent: float = None, marketplace_item_id: str = ""):
-    return pricing.ml_price_payload(sku, margin_percent=margin_percent, marketplace_item_id=marketplace_item_id)
-
-
-@app.post("/api/pricing/event")
-async def api_pricing_event(payload: dict):
-    saved = await pricing_repo.save_pricing_event(payload)
-    return {"success": True, "saved": saved, "payload": payload}
-
-
-
-
-@app.get("/api/ai/optimize/{sku}")
-def api_ai_optimize(sku: str):
-    product = product_by_sku(sku)
-    if not product:
-        return {"success": False, "message": "Produto não encontrado"}
-    return {"success": True, "product": product, "optimized": optimize_listing(product)}
-
-
-@app.get("/api/ai/report")
-def api_ai_report():
-    products = all_products()
-    return {
-        "success": True,
-        "count": len(products),
-        "products": [
-            {
-                "sku": p.get("sku"),
-                "name": p.get("name"),
-                "optimized": optimize_listing(p)
-            }
-            for p in products
-        ]
-    }
-
-
-@app.post("/api/ai/event")
-async def api_ai_event(payload: dict):
-    saved = await ai_repo.save_ai_event(payload)
-    return {"success": True, "saved": saved, "payload": payload}
-
-
-
-
-@app.get("/api/marketplace-ops/status")
-def api_marketplace_ops_status():
-    return marketplace_ops.status()
-
-
-@app.get("/api/marketplace-ops/plan")
-def api_marketplace_ops_plan():
-    return marketplace_ops.operations_plan()
-
-
-@app.get("/api/marketplace-ops/preview/{sku}")
-def api_marketplace_ops_preview(sku: str, category_id: str = "MLBXXXX"):
-    return marketplace_ops.listing_operation_preview(sku, category_id)
-
-
-@app.post("/api/marketplace-ops/event")
-async def api_marketplace_ops_event(payload: dict):
-    saved = await marketplace_ops_repo.save_operation_event(payload)
     return {"success": True, "saved": saved, "payload": payload}
 
 

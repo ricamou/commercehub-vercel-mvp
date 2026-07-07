@@ -1,26 +1,27 @@
-# CommerceHub v2 Marketplace Operations v1
+# CommerceHub v2 Inventory Sync v1
 
-Versão com camada operacional de marketplace.
+Versão com Inventory Sync: estoque, preview de fornecedor e payload para Mercado Livre.
 
 ## Adicionado
 
-- Página `/marketplace-ops`
-- Status operacional de marketplaces
-- Plano de operação
-- Preview operacional por SKU
-- Integração com Listing, Pricing e Inventory
-- Registro de evento operacional no Supabase quando configurado
+- Página `/inventory-sync`
+- Relatório de estoque
+- Preview de estoque do fornecedor
+- Plano de sincronização
+- Payload para atualização de estoque no Mercado Livre
+- Registro de evento de sincronização no Supabase quando configurado
 
 ## Endpoints
 
-- GET `/api/marketplace-ops/status`
-- GET `/api/marketplace-ops/plan`
-- GET `/api/marketplace-ops/preview/SUP-001?category_id=MLBXXXX`
-- POST `/api/marketplace-ops/event`
+- GET `/api/inventory/report`
+- GET `/api/inventory/supplier-preview`
+- GET `/api/inventory/sync-plan`
+- GET `/api/inventory/ml-payload/SUP-001?stock=10`
+- POST `/api/inventory/sync-event`
 
 ## Próximo passo
 
-Universal Supplier Connector v1:
-- preparar conectores API/XML/CSV/FTP
-- importar produtos de fornecedores reais
-- mapear produtos para o catálogo mestre
+Pricing Automation v1:
+- recalcular preço com margem
+- gerar payload de preço para Mercado Livre
+- registrar evento de alteração de preço
