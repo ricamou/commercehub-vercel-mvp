@@ -10,7 +10,7 @@ try:
 except Exception:
     httpx = None
 
-app = FastAPI(title="CommerceHub Enterprise Supabase Final Fix", version="enterprise-supabase-final-fix")
+app = FastAPI(title="CommerceHub Enterprise Supabase Stable Fix", version="enterprise-supabase-stable-fix")
 
 
 # =========================================================
@@ -157,16 +157,28 @@ async def db_select(table: str, query: str = "select=*"):
     if not db_configured():
         return {"success": True, "mode": "memory", "data": MEMORY.get(table, [])}
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.get(f"{SUPABASE_URL}/rest/v1/{table}?{query}", headers=headers())
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"{SUPABASE_URL}/rest/v1/{table}?{query}", headers=headers())
 
-    return {
-        "success": r.status_code < 400,
-        "mode": "supabase",
-        "status_code": r.status_code,
-        "data": r.json() if r.content else [],
-        "error": r.text if r.status_code >= 400 else "",
-    }
+        return {
+            "success": r.status_code < 400,
+            "mode": "supabase",
+            "status_code": r.status_code,
+            "data": r.json() if r.content and r.status_code < 500 else [],
+            "error": r.text if r.status_code >= 400 else "",
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "mode": "supabase_error",
+            "status_code": 0,
+            "data": [],
+            "error": str(exc),
+            "table": table,
+            "query": query,
+            "message": "Falha temporária ao conectar no Supabase. A aplicação não vai mais cair com erro 500."
+        }
 
 
 async def db_insert(table: str, payload):
@@ -177,17 +189,27 @@ async def db_insert(table: str, payload):
             MEMORY.setdefault(table, []).append(payload)
         return {"success": True, "mode": "memory", "data": payload}
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.post(f"{SUPABASE_URL}/rest/v1/{table}", headers=headers(), json=payload)
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(f"{SUPABASE_URL}/rest/v1/{table}", headers=headers(), json=payload)
 
-    return {
-        "success": r.status_code < 400,
-        "mode": "supabase",
-        "status_code": r.status_code,
-        "data": r.json() if r.content else None,
-        "error": r.text if r.status_code >= 400 else "",
-    }
-
+        return {
+            "success": r.status_code < 400,
+            "mode": "supabase",
+            "status_code": r.status_code,
+            "data": r.json() if r.content and r.status_code < 500 else None,
+            "error": r.text if r.status_code >= 400 else "",
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "mode": "supabase_error",
+            "status_code": 0,
+            "data": None,
+            "error": str(exc),
+            "table": table,
+            "message": "db_insert_error"
+        }
 
 async def db_upsert(table: str, payload, conflict: str = "id"):
     if not db_configured():
@@ -204,27 +226,37 @@ async def db_upsert(table: str, payload, conflict: str = "id"):
                 items.append(value)
         return {"success": True, "mode": "memory", "data": payload}
 
-    async with httpx.AsyncClient(timeout=30) as client:
-        r = await client.post(
-            f"{SUPABASE_URL}/rest/v1/{table}?on_conflict={conflict}",
-            headers=headers("resolution=merge-duplicates,return=representation"),
-            json=payload,
-        )
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(
+                f"{SUPABASE_URL}/rest/v1/{table}?on_conflict={conflict}",
+                headers=headers("resolution=merge-duplicates,return=representation"),
+                json=payload,
+            )
 
-    return {
-        "success": r.status_code < 400,
-        "mode": "supabase",
-        "status_code": r.status_code,
-        "data": r.json() if r.content else None,
-        "error": r.text if r.status_code >= 400 else "",
-    }
-
+        return {
+            "success": r.status_code < 400,
+            "mode": "supabase",
+            "status_code": r.status_code,
+            "data": r.json() if r.content and r.status_code < 500 else None,
+            "error": r.text if r.status_code >= 400 else "",
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "mode": "supabase_error",
+            "status_code": 0,
+            "data": None,
+            "error": str(exc),
+            "table": table,
+            "message": "db_upsert_error"
+        }
 
 async def db_patch(table: str, filters: str, payload: dict):
     if not db_configured():
         return {"success": True, "mode": "memory", "message": "Patch aplicado apenas em Supabase.", "payload": payload}
 
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=10) as client:
         r = await client.patch(f"{SUPABASE_URL}/rest/v1/{table}?{filters}", headers=headers(), json=payload)
 
     return {
@@ -419,7 +451,7 @@ async def ml_exchange_code(code):
         "code": code,
         "redirect_uri": ML_REDIRECT_URI,
     }
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=10) as client:
         r = await client.post("https://api.mercadolibre.com/oauth/token", data=payload)
     data = r.json() if r.content else {}
     if r.status_code < 400:
@@ -437,7 +469,7 @@ async def ml_refresh_token():
         "client_secret": ML_CLIENT_SECRET,
         "refresh_token": token["refresh_token"],
     }
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=10) as client:
         r = await client.post("https://api.mercadolibre.com/oauth/token", data=payload)
     data = r.json() if r.content else {}
     save = None
@@ -451,7 +483,7 @@ async def ml_request(method, path, params=None, payload=None):
     if not token.get("access_token"):
         return {"success": False, "message": "Access token ausente"}
     access = token["access_token"]
-    async with httpx.AsyncClient(timeout=30) as client:
+    async with httpx.AsyncClient(timeout=10) as client:
         r = await client.request(
             method,
             "https://api.mercadolibre.com" + path,
@@ -464,7 +496,7 @@ async def ml_request(method, path, params=None, payload=None):
         if not refreshed.get("success"):
             return {"success": False, "status_code": 401, "refresh": refreshed}
         access = refreshed["data"].get("access_token")
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=10) as client:
             r = await client.request(
                 method,
                 "https://api.mercadolibre.com" + path,
@@ -734,7 +766,7 @@ async def supabase_connection_test():
         return {"success": False, "error": "httpx não instalado."}
 
     try:
-        async with httpx.AsyncClient(timeout=30) as client:
+        async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(
                 f"{SUPABASE_URL}/rest/v1/",
                 headers={
@@ -784,7 +816,7 @@ pre{{background:#0b1220;color:white;padding:14px;border-radius:10px;overflow:aut
 </head>
 <body>
 <aside>
-<div class="logo"><b>CH</b><div><strong>CommerceHub</strong><span>Enterprise Supabase Final Fix</span></div></div>
+<div class="logo"><b>CH</b><div><strong>CommerceHub</strong><span>Enterprise Supabase Stable Fix</span></div></div>
 <nav>
 <a href="/">Dashboard</a>
 <a href="/foundation">Fundação</a>
@@ -833,7 +865,7 @@ async def dashboard():
 <div class="card"><span>Pedidos</span><strong>{len(orders.get('data', []))}</strong></div>
 </section>
 <section class="panel"><h2>CommerceHub Enterprise</h2>
-<p>Base pronta para operação: Supabase → cadastro único → estoque → marketplaces → pedidos → relatórios.</p>
+<p>Base pronta para operação: Supabase → cadastro único → estoque → marketplaces → pedidos → relatórios.</p><p><b>Observação:</b> se o Supabase oscilar, o sistema agora mostra erro controlado em vez de cair com Internal Server Error.</p>
 {button('/api/foundation/status','Status JSON')}{button('/api/setup/ensure-seed','Preparar banco')}{button('/api/commercial-test/create-product','Criar produto de teste')}</section>
 """
     return layout("Dashboard Enterprise", body)
@@ -1035,14 +1067,14 @@ async def api_supabase_ready():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "commercehub", "version": "enterprise-supabase-final-fix"}
+    return {"status": "ok", "service": "commercehub", "version": "enterprise-supabase-stable-fix"}
 
 
 @app.get("/api/foundation/status")
 def foundation_status():
     return {
         "success": True,
-        "version": "enterprise-supabase-final-fix",
+        "version": "enterprise-supabase-stable-fix",
         "mode": db_mode(),
         "supabase_configured": db_configured(),
         "production_ready": db_configured(),

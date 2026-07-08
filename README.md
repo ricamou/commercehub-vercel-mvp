@@ -1,32 +1,28 @@
-# CommerceHub Enterprise — Supabase Final Fix
+# CommerceHub Enterprise — Supabase Stable Fix
 
-Correção final para diagnóstico e conexão Supabase.
+Correção definitiva para o erro 500 causado por falha de conexão Supabase/httpx.
 
-## O que foi ajustado
+## Erro corrigido
 
-- Aceita `SUPABASE_URL` e também `NEXT_PUBLIC_SUPABASE_URL`.
-- Aceita `SUPABASE_SERVICE_ROLE_KEY` e também `SUPABASE_KEY` ou `SUPABASE_ANON_KEY`.
-- Nova página `/supabase`.
-- Novos endpoints:
-  - `/api/supabase/diagnostics`
-  - `/api/supabase/test`
-  - `/api/supabase/ready`
-- `/api/foundation/status` agora mostra exatamente o que falta.
+`httpx.ConnectError: [Errno 16] Device or resource busy`
 
-## Testes
+Antes, quando o Supabase falhava temporariamente, a aplicação caía com Internal Server Error.
+
+Agora:
+- db_select não derruba o sistema
+- db_insert não derruba o sistema
+- db_upsert não derruba o sistema
+- a aplicação mostra erro controlado
+- endpoints continuam abrindo
+
+## Testes depois do deploy
 
 - `/api/health`
+- `/`
 - `/supabase`
-- `/api/supabase/diagnostics`
-- `/api/supabase/test`
 - `/api/supabase/ready`
 - `/api/foundation/status`
+- `/products`
+- `/suppliers`
 
-## Para ficar `mode: supabase`
-
-Na Vercel precisa existir:
-
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
-
-Depois faça Redeploy.
+Se aparecer `supabase_error`, o problema é conexão/variável/tabela, mas o site não deve mais cair com 500.
