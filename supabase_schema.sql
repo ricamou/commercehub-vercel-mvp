@@ -4,6 +4,18 @@ create table if not exists companies (
   id uuid primary key default uuid_generate_v4(),
   name text not null,
   document text,
+  plan text default 'starter',
+  status text default 'active',
+  created_at timestamptz default now()
+);
+
+create table if not exists users_app (
+  id uuid primary key default uuid_generate_v4(),
+  company_id uuid references companies(id),
+  name text not null,
+  email text not null unique,
+  role text default 'admin',
+  password_hash text,
   status text default 'active',
   created_at timestamptz default now()
 );
@@ -71,7 +83,8 @@ create table if not exists events (
 
 create table if not exists oauth_tokens (
   id uuid primary key default uuid_generate_v4(),
-  marketplace text not null unique,
+  company_id uuid references companies(id),
+  marketplace text not null,
   access_token text,
   refresh_token text,
   user_id text,
@@ -79,5 +92,6 @@ create table if not exists oauth_tokens (
   token_type text default 'Bearer',
   scope text,
   created_at timestamptz default now(),
-  updated_at timestamptz default now()
+  updated_at timestamptz default now(),
+  unique(company_id, marketplace)
 );

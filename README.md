@@ -1,34 +1,48 @@
-# CommerceHub Enterprise Real v1
+# CommerceHub Enterprise V2
 
-Versão com Mercado Livre real nas telas principais.
+Sistema comercial completo em versão compacta para GitHub Web e Vercel.
 
-## O que mudou
+## Inclui
 
-- Nova tela `/real`
-- Produtos lendo anúncios reais do Mercado Livre
-- Anúncios lendo anúncios reais do Mercado Livre
-- Pedidos lendo pedidos reais do Mercado Livre
-- Dashboard real via `/api/ml/dashboard`
-- Endpoints reais:
-  - `/api/ml/items`
-  - `/api/ml/items/{item_id}`
-  - `/api/ml/items/{item_id}/description`
-  - `/api/ml/orders`
-  - `PUT /api/ml/items/{item_id}/price-stock`
-  - `PUT /api/ml/items/{item_id}/pause`
+- Banco definitivo Supabase
+- Login de usuários
+- Multiempresa
+- Cadastro de fornecedores
+- Cadastro de produtos
+- Estoque
+- Sincronização automática
+- Mercado Livre real
+- Shopee preparado
+- Amazon preparado
+- Magalu preparado
+- IA para descrição
+- IA para precificação
+- IA para SEO
+- Dashboard profissional
+- Relatórios
+- Logs
+- Filas
+- Cache
+- Webhooks
+- Sincronização em tempo real
 
-## Testes finais
+## Testes
 
-- `/api/health`
-- `/api/final-check`
-- `/real`
-- `/api/ml/dashboard`
-- `/api/ml/items`
-- `/api/ml/orders`
-- `/produtos`
-- `/anuncios`
-- `/pedidos`
+- /
+- /api/health
+- /api/enterprise/status
+- /mercado-livre
+- /api/mercadolivre/me
+- /api/ml/items
+- /api/ml/orders
+- /products
+- /suppliers
+- /inventory
+- /ai
+- /reports
+- /queue
+- /sync
 
-## Observação
+## Arquivos
 
-Se sua conta ainda não tiver anúncios ou pedidos, as telas aparecerão vazias, mas a conexão estará funcionando.
+Projeto mantido pequeno para uso no GitHub Web.
