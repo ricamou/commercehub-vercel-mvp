@@ -10,7 +10,7 @@ try:
 except Exception:
     httpx = None
 
-app = FastAPI(title="CommerceHub Enterprise Supabase Stable Fix", version="enterprise-supabase-stable-fix")
+app = FastAPI(title="CommerceHub Enterprise Backend Hardened", version="enterprise-backend-hardened")
 
 
 # =========================================================
@@ -132,6 +132,114 @@ DEMO_PRODUCTS = [
 ]
 
 
+
+# =========================================================
+# BACKEND HARDENED CORE
+# =========================================================
+
+DB_RETRY_ATTEMPTS = int(env("DB_RETRY_ATTEMPTS", "2") or 2)
+DB_TIMEOUT_SECONDS = int(env("DB_TIMEOUT_SECONDS", "8") or 8)
+
+def safe_json_loads(raw: str, default):
+    try:
+        if not raw:
+            return default
+        return json.loads(raw)
+    except Exception:
+        return default
+
+
+def supabase_url(path: str):
+    base = (SUPABASE_URL or "").rstrip("/")
+    return f"{base}/rest/v1/{path}"
+
+
+def supabase_request_sync(method: str, path: str, payload=None, prefer: str = "return=representation"):
+    """
+    Stable Supabase transport for Vercel serverless.
+
+    Reason:
+    The async httpx transport was throwing:
+    httpx.ConnectError: [Errno 16] Device or resource busy
+
+    This hardened transport uses urllib from the Python standard library,
+    short timeouts, retries, and never crashes the app.
+    """
+    if not SUPABASE_URL:
+        return {"success": False, "mode": "supabase_error", "status_code": 0, "data": None, "error": "SUPABASE_URL ausente"}
+    if not SUPABASE_SERVICE_ROLE_KEY:
+        return {"success": False, "mode": "supabase_error", "status_code": 0, "data": None, "error": "SUPABASE_SERVICE_ROLE_KEY ausente"}
+
+    body = None
+    if payload is not None:
+        body = json.dumps(payload).encode("utf-8")
+
+    req = urllib.request.Request(
+        supabase_url(path),
+        data=body,
+        method=method.upper(),
+        headers={
+            "apikey": SUPABASE_SERVICE_ROLE_KEY,
+            "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+            "Content-Type": "application/json",
+            "Prefer": prefer,
+        },
+    )
+
+    last_error = ""
+    for attempt in range(DB_RETRY_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(req, timeout=DB_TIMEOUT_SECONDS) as resp:
+                text = resp.read().decode("utf-8")
+                parsed = safe_json_loads(text, [] if method.upper() == "GET" else None)
+                return {
+                    "success": 200 <= resp.status < 400,
+                    "mode": "supabase",
+                    "status_code": resp.status,
+                    "data": parsed,
+                    "error": "",
+                    "attempt": attempt + 1,
+                }
+        except urllib.error.HTTPError as exc:
+            text = exc.read().decode("utf-8", errors="ignore")
+            parsed = safe_json_loads(text, None)
+            return {
+                "success": exc.code < 400,
+                "mode": "supabase",
+                "status_code": exc.code,
+                "data": parsed,
+                "error": text,
+                "attempt": attempt + 1,
+            }
+        except Exception as exc:
+            last_error = str(exc)
+            if attempt >= DB_RETRY_ATTEMPTS:
+                return {
+                    "success": False,
+                    "mode": "supabase_error",
+                    "status_code": 0,
+                    "data": [] if method.upper() == "GET" else None,
+                    "error": last_error,
+                    "attempt": attempt + 1,
+                    "message": "Falha controlada no transporte Supabase. Aplicação protegida contra erro 500.",
+                }
+
+    return {
+        "success": False,
+        "mode": "supabase_error",
+        "status_code": 0,
+        "data": [] if method.upper() == "GET" else None,
+        "error": last_error,
+    }
+
+
+def normalize_order_query(query: str):
+    if "order=" in query:
+        return query
+    return query
+
+
+
 # =========================================================
 # DB CORE
 # =========================================================
@@ -157,29 +265,12 @@ async def db_select(table: str, query: str = "select=*"):
     if not db_configured():
         return {"success": True, "mode": "memory", "data": MEMORY.get(table, [])}
 
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"{SUPABASE_URL}/rest/v1/{table}?{query}", headers=headers())
-
-        return {
-            "success": r.status_code < 400,
-            "mode": "supabase",
-            "status_code": r.status_code,
-            "data": r.json() if r.content and r.status_code < 500 else [],
-            "error": r.text if r.status_code >= 400 else "",
-        }
-    except Exception as exc:
-        return {
-            "success": False,
-            "mode": "supabase_error",
-            "status_code": 0,
-            "data": [],
-            "error": str(exc),
-            "table": table,
-            "query": query,
-            "message": "Falha temporária ao conectar no Supabase. A aplicação não vai mais cair com erro 500."
-        }
-
+    result = supabase_request_sync("GET", f"{table}?{normalize_order_query(query)}")
+    if result.get("data") is None:
+        result["data"] = []
+    result["table"] = table
+    result["query"] = query
+    return result
 
 async def db_insert(table: str, payload):
     if not db_configured():
@@ -189,27 +280,9 @@ async def db_insert(table: str, payload):
             MEMORY.setdefault(table, []).append(payload)
         return {"success": True, "mode": "memory", "data": payload}
 
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.post(f"{SUPABASE_URL}/rest/v1/{table}", headers=headers(), json=payload)
-
-        return {
-            "success": r.status_code < 400,
-            "mode": "supabase",
-            "status_code": r.status_code,
-            "data": r.json() if r.content and r.status_code < 500 else None,
-            "error": r.text if r.status_code >= 400 else "",
-        }
-    except Exception as exc:
-        return {
-            "success": False,
-            "mode": "supabase_error",
-            "status_code": 0,
-            "data": None,
-            "error": str(exc),
-            "table": table,
-            "message": "db_insert_error"
-        }
+    result = supabase_request_sync("POST", table, payload=payload)
+    result["table"] = table
+    return result
 
 async def db_upsert(table: str, payload, conflict: str = "id"):
     if not db_configured():
@@ -226,47 +299,24 @@ async def db_upsert(table: str, payload, conflict: str = "id"):
                 items.append(value)
         return {"success": True, "mode": "memory", "data": payload}
 
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.post(
-                f"{SUPABASE_URL}/rest/v1/{table}?on_conflict={conflict}",
-                headers=headers("resolution=merge-duplicates,return=representation"),
-                json=payload,
-            )
-
-        return {
-            "success": r.status_code < 400,
-            "mode": "supabase",
-            "status_code": r.status_code,
-            "data": r.json() if r.content and r.status_code < 500 else None,
-            "error": r.text if r.status_code >= 400 else "",
-        }
-    except Exception as exc:
-        return {
-            "success": False,
-            "mode": "supabase_error",
-            "status_code": 0,
-            "data": None,
-            "error": str(exc),
-            "table": table,
-            "message": "db_upsert_error"
-        }
+    result = supabase_request_sync(
+        "POST",
+        f"{table}?on_conflict={conflict}",
+        payload=payload,
+        prefer="resolution=merge-duplicates,return=representation",
+    )
+    result["table"] = table
+    result["conflict"] = conflict
+    return result
 
 async def db_patch(table: str, filters: str, payload: dict):
     if not db_configured():
         return {"success": True, "mode": "memory", "message": "Patch aplicado apenas em Supabase.", "payload": payload}
 
-    async with httpx.AsyncClient(timeout=10) as client:
-        r = await client.patch(f"{SUPABASE_URL}/rest/v1/{table}?{filters}", headers=headers(), json=payload)
-
-    return {
-        "success": r.status_code < 400,
-        "mode": "supabase",
-        "status_code": r.status_code,
-        "data": r.json() if r.content else None,
-        "error": r.text if r.status_code >= 400 else "",
-    }
-
+    result = supabase_request_sync("PATCH", f"{table}?{filters}", payload=payload)
+    result["table"] = table
+    result["filters"] = filters
+    return result
 
 async def log_event(event_type: str, message: str, payload=None, company_id: str = None):
     event = {
@@ -762,114 +812,16 @@ async def supabase_connection_test():
         return {"success": False, "error": "SUPABASE_URL ausente na Vercel."}
     if not SUPABASE_SERVICE_ROLE_KEY:
         return {"success": False, "error": "SUPABASE_SERVICE_ROLE_KEY ausente na Vercel."}
-    if not httpx:
-        return {"success": False, "error": "httpx não instalado."}
 
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(
-                f"{SUPABASE_URL}/rest/v1/",
-                headers={
-                    "apikey": SUPABASE_SERVICE_ROLE_KEY,
-                    "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}"
-                }
-            )
-        return {
-            "success": r.status_code < 500,
-            "status_code": r.status_code,
-            "message": "Supabase respondeu. Se status for 401/403, revise a chave. Se for 200/404, conexão existe.",
-            "body_preview": r.text[:300]
-        }
-    except Exception as exc:
-        return {"success": False, "error": str(exc)}
-
-
-
-
-# =========================================================
-# UI
-# =========================================================
-
-def button(path, label, target="_blank"):
-    return f"<a class='btn' href='{path}' target='{target}'>{label}</a>"
-
-
-def layout(title, body):
-    return f"""<!doctype html>
-<html lang="pt-BR">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{title} · CommerceHub V3</title>
-<style>
-*{{box-sizing:border-box}}body{{margin:0;font-family:Arial,Helvetica,sans-serif;background:#f4f7fb;color:#111827}}
-aside{{position:fixed;left:0;top:0;bottom:0;width:250px;background:#0b1220;color:white;padding:20px 14px;overflow:auto}}
-.logo{{display:flex;gap:10px;align-items:center;margin-bottom:24px}}.logo b{{background:#2563eb;padding:12px;border-radius:10px}}.logo span{{display:block;color:#9ca3af;font-size:12px}}
-nav a{{display:block;color:white;text-decoration:none;padding:9px;border-radius:8px;margin:3px 0}}nav a:hover{{background:#172033}}
-main{{margin-left:250px;padding:28px}}h1{{font-size:32px;margin:0}}header p{{color:#64748b}}
-.grid{{display:grid;grid-template-columns:repeat(4,minmax(160px,1fr));gap:16px;margin:22px 0}}.card,.panel{{background:white;border:1px solid #d8dee8;border-radius:16px;box-shadow:0 8px 24px rgba(15,23,42,.05)}}
-.card{{padding:20px}}.card span{{display:block;color:#64748b}}.card strong{{font-size:28px;display:block;margin-top:10px}}
-.panel{{padding:22px;margin:18px 0}}table{{width:100%;border-collapse:collapse;margin-top:12px}}th,td{{padding:11px;border-bottom:1px solid #e5e7eb;text-align:left}}th{{background:#f8fafc}}
-pre{{background:#0b1220;color:white;padding:14px;border-radius:10px;overflow:auto}}code{{background:#eef2ff;padding:3px 6px;border-radius:6px}}.btn{{display:inline-block;background:#2563eb;color:white;text-decoration:none;padding:10px 14px;border-radius:10px;margin:6px 5px 6px 0}}
-.ok{{color:#16a34a;font-weight:bold}}.bad{{color:#dc2626;font-weight:bold}}
-</style>
-</head>
-<body>
-<aside>
-<div class="logo"><b>CH</b><div><strong>CommerceHub</strong><span>Enterprise Supabase Stable Fix</span></div></div>
-<nav>
-<a href="/">Dashboard</a>
-<a href="/foundation">Fundação</a>
-<a href="/supabase">Supabase</a>
-<a href="/companies">Empresas</a>
-<a href="/users">Usuários</a>
-<a href="/suppliers">Fornecedores</a>
-<a href="/products">Produtos</a>
-<a href="/inventory">Estoque</a>
-<a href="/marketplaces">Marketplaces</a>
-<a href="/mercado-livre">Mercado Livre</a>
-<a href="/orders">Pedidos</a>
-<a href="/listings">Anúncios</a>
-<a href="/ai">IA</a>
-<a href="/logs">Logs</a>
-<a href="/queue">Filas</a>
-<a href="/sync">Sync Jobs</a>
-<a href="/webhooks">Webhooks</a>
-<a href="/api/health" target="_blank">API Health</a>
-</nav>
-</aside>
-<main>
-<header><h1>{title}</h1><p>Supabase → Cadastro único → Marketplaces → Cliente</p></header>
-{body}
-</main>
-</body>
-</html>"""
-
-
-# =========================================================
-# PAGES
-# =========================================================
-
-@app.get("/", response_class=HTMLResponse)
-async def dashboard():
-    companies = await db_select("companies", "select=*")
-    products = await db_select("products", "select=*")
-    suppliers = await db_select("suppliers", "select=*")
-    orders = await db_select("orders", "select=*")
-    mode_badge = "SUPABASE" if db_configured() else "MEMORY"
-    body = f"""
-<section class="grid">
-<div class="card"><span>Banco</span><strong>{mode_badge}</strong></div>
-<div class="card"><span>Empresas</span><strong>{len(companies.get('data', []))}</strong></div>
-<div class="card"><span>Produtos</span><strong>{len(products.get('data', []))}</strong></div>
-<div class="card"><span>Pedidos</span><strong>{len(orders.get('data', []))}</strong></div>
-</section>
-<section class="panel"><h2>CommerceHub Enterprise</h2>
-<p>Base pronta para operação: Supabase → cadastro único → estoque → marketplaces → pedidos → relatórios.</p><p><b>Observação:</b> se o Supabase oscilar, o sistema agora mostra erro controlado em vez de cair com Internal Server Error.</p>
-{button('/api/foundation/status','Status JSON')}{button('/api/setup/ensure-seed','Preparar banco')}{button('/api/commercial-test/create-product','Criar produto de teste')}</section>
-"""
-    return layout("Dashboard Enterprise", body)
-
+    result = supabase_request_sync("GET", "companies?select=*&limit=1")
+    return {
+        "success": result.get("success", False),
+        "status_code": result.get("status_code"),
+        "mode": result.get("mode"),
+        "error": result.get("error", ""),
+        "attempt": result.get("attempt"),
+        "message": "Teste usando transporte estável urllib.",
+    }
 
 
 @app.get("/supabase", response_class=HTMLResponse)
@@ -1065,16 +1017,53 @@ async def api_supabase_ready():
 
 
 
+
+
+@app.get("/api/backend/health")
+async def api_backend_health():
+    tables = ["companies", "suppliers", "products", "inventory", "orders", "logs"]
+    results = {}
+    for table in tables:
+        res = await db_select(table, "select=*&limit=1")
+        results[table] = {
+            "success": res.get("success"),
+            "mode": res.get("mode"),
+            "status_code": res.get("status_code"),
+            "error": res.get("error", "")[:160],
+        }
+    return {
+        "success": all(v["success"] for v in results.values()),
+        "version": "enterprise-backend-hardened",
+        "db_mode": db_mode(),
+        "transport": "urllib-sync-stable",
+        "tables": results,
+    }
+
+
+@app.get("/api/backend/stress-light")
+async def api_backend_stress_light():
+    started = time.time()
+    checks = []
+    for i in range(5):
+        res = await db_select("companies", "select=*&limit=1")
+        checks.append({"i": i + 1, "success": res.get("success"), "mode": res.get("mode"), "error": res.get("error", "")[:120]})
+    return {
+        "success": all(c["success"] for c in checks),
+        "duration_ms": round((time.time() - started) * 1000, 2),
+        "checks": checks,
+    }
+
+
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "commercehub", "version": "enterprise-supabase-stable-fix"}
+    return {"status": "ok", "service": "commercehub", "version": "enterprise-backend-hardened"}
 
 
 @app.get("/api/foundation/status")
 def foundation_status():
     return {
         "success": True,
-        "version": "enterprise-supabase-stable-fix",
+        "version": "enterprise-backend-hardened",
         "mode": db_mode(),
         "supabase_configured": db_configured(),
         "production_ready": db_configured(),

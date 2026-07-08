@@ -1,28 +1,41 @@
-# CommerceHub Enterprise — Supabase Stable Fix
+# CommerceHub Enterprise — Backend Hardened
 
-Correção definitiva para o erro 500 causado por falha de conexão Supabase/httpx.
+Revisão completa da arquitetura do backend para reduzir instabilidade em Vercel Serverless.
 
-## Erro corrigido
+## Principais mudanças
 
-`httpx.ConnectError: [Errno 16] Device or resource busy`
+- Substituição do transporte Supabase baseado em `httpx.AsyncClient` por `urllib` síncrono estável.
+- Timeouts curtos.
+- Retentativas controladas.
+- Falhas de banco não derrubam mais a aplicação.
+- Endpoints de health check do backend.
+- Endpoint de teste leve de stress.
+- Proteção contra erro 500 em leitura, escrita e upsert.
 
-Antes, quando o Supabase falhava temporariamente, a aplicação caía com Internal Server Error.
+## Problema resolvido
 
-Agora:
-- db_select não derruba o sistema
-- db_insert não derruba o sistema
-- db_upsert não derruba o sistema
-- a aplicação mostra erro controlado
-- endpoints continuam abrindo
+Erro anterior:
 
-## Testes depois do deploy
+```text
+httpx.ConnectError: [Errno 16] Device or resource busy
+```
 
-- `/api/health`
-- `/`
-- `/supabase`
-- `/api/supabase/ready`
-- `/api/foundation/status`
-- `/products`
-- `/suppliers`
+## Testes
 
-Se aparecer `supabase_error`, o problema é conexão/variável/tabela, mas o site não deve mais cair com 500.
+Depois de subir:
+
+```text
+/api/health
+/
+/supabase
+/api/supabase/ready
+/api/backend/health
+/api/backend/stress-light
+/api/foundation/status
+/products
+/suppliers
+```
+
+## Para operação
+
+Se `/api/backend/health` retornar sucesso nas tabelas principais, o backend está estável para continuar os testes comerciais.
