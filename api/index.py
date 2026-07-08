@@ -10,7 +10,7 @@ try:
 except Exception:
     httpx = None
 
-app = FastAPI(title="CommerceHub Enterprise V2", version="enterprise-v2")
+app = FastAPI(title="CommerceHub Enterprise V2 Persistence", version="enterprise-v2-supabase-persistence")
 
 
 def env(name: str, default: str = "") -> str:
@@ -397,9 +397,9 @@ main{{margin-left:240px;padding:28px}}h1{{font-size:32px;margin:0}}header p{{col
 pre{{background:#0b1220;color:white;padding:14px;border-radius:10px;overflow:auto}}code{{background:#eef2ff;padding:3px 6px;border-radius:6px}}.btn{{display:inline-block;background:#2563eb;color:white;text-decoration:none;padding:10px 14px;border-radius:10px;margin:6px 4px 6px 0}}
 .ok{{color:#16a34a;font-weight:bold}}.bad{{color:#dc2626;font-weight:bold}}
 </style></head><body><aside>
-<div class='logo'><b>CH</b><div><strong>CommerceHub</strong><span>Enterprise V2</span></div></div>
+<div class='logo'><b>CH</b><div><strong>CommerceHub</strong><span>Enterprise V2 Persistence</span></div></div>
 <nav>
-<a href='/'>Dashboard</a><a href='/auth'>Login</a><a href='/companies'>Multiempresa</a><a href='/suppliers'>Fornecedores</a><a href='/products'>Produtos</a><a href='/inventory'>Estoque</a><a href='/marketplaces'>Marketplaces</a><a href='/mercado-livre'>Mercado Livre</a><a href='/ai'>IA</a><a href='/reports'>Relatórios</a><a href='/logs'>Logs</a><a href='/queue'>Filas</a><a href='/cache'>Cache</a><a href='/webhooks'>Webhooks</a><a href='/sync'>Sync Tempo Real</a><a href='/api/health' target='_blank'>API Health</a>
+<a href='/'>Dashboard</a><a href='/auth'>Login</a><a href='/persistence'>Persistência</a><a href='/companies'>Multiempresa</a><a href='/suppliers'>Fornecedores</a><a href='/products'>Produtos</a><a href='/inventory'>Estoque</a><a href='/marketplaces'>Marketplaces</a><a href='/mercado-livre'>Mercado Livre</a><a href='/ai'>IA</a><a href='/reports'>Relatórios</a><a href='/logs'>Logs</a><a href='/queue'>Filas</a><a href='/cache'>Cache</a><a href='/webhooks'>Webhooks</a><a href='/sync'>Sync Tempo Real</a><a href='/api/health' target='_blank'>API Health</a>
 </nav></aside><main><header><h1>{title}</h1><p>Fornecedor → CommerceHub → Marketplaces → Cliente</p></header>{body}</main></body></html>"""
 
 
@@ -425,9 +425,37 @@ async def dashboard():
 <div class='card'><span>Anúncios ML</span><strong>{item_total}</strong></div>
 <div class='card'><span>Pedidos ML</span><strong>{order_total}</strong></div>
 </section>
-<section class='panel'><h2>CommerceHub Enterprise V2</h2><p>Sistema comercial com banco, login, multiempresa, marketplaces, IA, filas, cache, webhooks e sincronização.</p>{btn('/api/enterprise/status','Status JSON')}</section>
+<section class='panel'><h2>CommerceHub Enterprise V2 Persistence</h2><p>Sistema comercial com banco, login, multiempresa, marketplaces, IA, filas, cache, webhooks e sincronização.</p>{btn('/api/enterprise/status','Status JSON')}</section>
 """
     return layout("Dashboard Profissional", body)
+
+
+
+
+@app.get("/persistence", response_class=HTMLResponse)
+def persistence_page():
+    body = f"""
+<section class='panel'>
+<h2>Persistência Supabase</h2>
+<p>Modo atual: <b>{persistence_mode()}</b></p>
+<table>
+<tr><th>Item</th><th>Endpoint</th></tr>
+<tr><td>Status</td><td><code>/api/persistence/status</code></td></tr>
+<tr><td>Seed inicial</td><td><code>POST /api/persistence/seed</code></td></tr>
+<tr><td>Salvar token ML</td><td><code>POST /api/persistence/token</code></td></tr>
+<tr><td>Produtos salvos</td><td><code>/api/db/products</code></td></tr>
+<tr><td>Fornecedores salvos</td><td><code>/api/db/suppliers</code></td></tr>
+<tr><td>Estoque salvo</td><td><code>/api/db/inventory_movements</code></td></tr>
+<tr><td>Logs salvos</td><td><code>/api/db/events</code></td></tr>
+<tr><td>Pedidos/Webhooks salvos</td><td><code>/api/db/orders</code></td></tr>
+<tr><td>Tokens salvos</td><td><code>/api/db/oauth_tokens</code></td></tr>
+</table>
+<p><a class='btn' href='/api/persistence/status' target='_blank'>Status</a>
+<a class='btn' href='/api/db/products' target='_blank'>Produtos no banco</a>
+<a class='btn' href='/api/db/events' target='_blank'>Logs no banco</a></p>
+</section>
+"""
+    return layout("Persistência Supabase", body)
 
 
 @app.get("/auth", response_class=HTMLResponse)
@@ -523,18 +551,234 @@ async def ml_callback(code: str = ""):
     return layout("Mercado Livre Conectado", f"<section class='panel'><h2>Resultado da conexão</h2><pre>{result}</pre>{btn('/api/mercadolivre/me','Testar Conta')}</section>")
 
 
+
+# =========================================================
+# SUPABASE PERSISTENCE V2
+# =========================================================
+
+def persistence_mode():
+    return "supabase" if db_configured() else "memory"
+
+
+async def seed_company():
+    payload = {
+        "id": DEMO_COMPANY["id"],
+        "name": DEMO_COMPANY["name"],
+        "plan": DEMO_COMPANY["plan"],
+        "status": DEMO_COMPANY["status"]
+    }
+    return await db_upsert("companies", payload, "id")
+
+
+async def persist_supplier(payload: dict):
+    supplier = {
+        "id": payload.get("id") or str(uuid.uuid4()),
+        "company_id": payload.get("company_id") or DEMO_COMPANY["id"],
+        "name": payload.get("name") or "Fornecedor sem nome",
+        "type": payload.get("type") or "manual",
+        "status": payload.get("status") or "active",
+        "config": payload.get("config") or {}
+    }
+    await seed_company()
+    result = await db_upsert("suppliers", supplier, "id")
+    await save_log("supplier_saved", "Fornecedor salvo no banco", supplier, supplier["company_id"])
+    return {"success": True, "mode": persistence_mode(), "supplier": supplier, "db_result": result}
+
+
+async def persist_product(payload: dict):
+    pricing = calculate_price(payload.get("cost_price", 0))
+    product = {
+        "id": payload.get("id") or str(uuid.uuid4()),
+        "company_id": payload.get("company_id") or DEMO_COMPANY["id"],
+        "supplier_id": payload.get("supplier_id"),
+        "sku": payload.get("sku") or f"SKU-{str(uuid.uuid4())[:8]}",
+        "name": payload.get("name") or "Produto sem nome",
+        "brand": payload.get("brand") or "",
+        "ean": payload.get("ean") or "",
+        "category": payload.get("category") or "",
+        "description": payload.get("description") or "",
+        "cost_price": float(payload.get("cost_price") or 0),
+        "sale_price": float(payload.get("sale_price") or pricing["sale_price"]),
+        "stock": int(payload.get("stock") or 0),
+        "status": payload.get("status") or "active",
+        "raw_data": payload.get("raw_data") or payload
+    }
+    await seed_company()
+    result = await db_upsert("products", product, "id")
+    await save_log("product_saved", "Produto salvo no banco", product, product["company_id"])
+    return {"success": True, "mode": persistence_mode(), "product": product, "pricing": pricing, "db_result": result}
+
+
+async def persist_inventory(payload: dict):
+    movement = {
+        "id": payload.get("id") or str(uuid.uuid4()),
+        "company_id": payload.get("company_id") or DEMO_COMPANY["id"],
+        "product_id": payload.get("product_id"),
+        "sku": payload.get("sku"),
+        "movement_type": payload.get("movement_type") or "set",
+        "quantity": int(payload.get("quantity") or payload.get("stock") or 0),
+        "previous_stock": int(payload.get("previous_stock") or 0),
+        "new_stock": int(payload.get("new_stock") or payload.get("stock") or payload.get("quantity") or 0),
+        "source": payload.get("source") or "manual",
+        "created_at": datetime.utcnow().isoformat()
+    }
+    await seed_company()
+    result = await db_insert("inventory_movements", movement)
+    await save_log("inventory_saved", "Movimento de estoque salvo no banco", movement, movement["company_id"])
+    return {"success": True, "mode": persistence_mode(), "movement": movement, "db_result": result}
+
+
+async def persist_order(payload: dict):
+    order = {
+        "id": payload.get("id") or str(uuid.uuid4()),
+        "company_id": payload.get("company_id") or DEMO_COMPANY["id"],
+        "marketplace": payload.get("marketplace") or "mercado_livre",
+        "external_order_id": str(payload.get("external_order_id") or payload.get("id") or payload.get("resource") or ""),
+        "status": payload.get("status") or "received",
+        "total_amount": float(payload.get("total_amount") or payload.get("paid_amount") or 0),
+        "payload": payload,
+        "created_at": payload.get("created_at") or datetime.utcnow().isoformat()
+    }
+    await seed_company()
+    result = await db_upsert("orders", order, "id")
+    await save_log("order_saved", "Pedido/webhook salvo no banco", order, order["company_id"])
+    return {"success": True, "mode": persistence_mode(), "order": order, "db_result": result}
+
+
+async def persist_ml_token_from_env():
+    if not ML_ACCESS_TOKEN and not ML_REFRESH_TOKEN:
+        return {"success": False, "message": "Tokens Mercado Livre ausentes nas variáveis de ambiente."}
+
+    data = {
+        "access_token": ML_ACCESS_TOKEN,
+        "refresh_token": ML_REFRESH_TOKEN,
+        "user_id": ML_USER_ID,
+        "expires_in": int(env("ML_TOKEN_EXPIRES_IN", "21600") or 21600),
+        "token_type": "Bearer",
+        "scope": "env_import"
+    }
+    result = await oauth_save_token(data)
+    await save_log("oauth_token_saved", "Token Mercado Livre persistido", {"user_id": ML_USER_ID, "source": "env"})
+    return {"success": True, "mode": persistence_mode(), "save_result": result}
+
+
+async def persist_all_demo_data():
+    await seed_company()
+    suppliers = []
+    products = []
+    inventory = []
+
+    for supplier in DEMO_SUPPLIERS:
+        suppliers.append(await persist_supplier(supplier))
+
+    for product in DEMO_PRODUCTS:
+        saved = await persist_product(product)
+        products.append(saved)
+        inventory.append(await persist_inventory({
+            "product_id": saved["product"]["id"],
+            "sku": saved["product"]["sku"],
+            "stock": saved["product"]["stock"],
+            "source": "initial_seed"
+        }))
+
+    token = await persist_ml_token_from_env()
+    event = await save_log("seed_completed", "Seed inicial persistido", {
+        "suppliers": len(suppliers),
+        "products": len(products),
+        "inventory": len(inventory),
+        "token": token.get("success")
+    })
+
+    return {
+        "success": True,
+        "mode": persistence_mode(),
+        "company": DEMO_COMPANY,
+        "suppliers": suppliers,
+        "products": products,
+        "inventory": inventory,
+        "token": token,
+        "event": event
+    }
+
+
+async def list_persisted(table: str):
+    if not db_configured():
+        return {"success": True, "mode": "memory", "message": "Supabase não configurado. Exibindo dados demo.", "data": []}
+    return await db_select(table, "select=*&order=created_at.desc")
+
+
+
 # =========================================================
 # API
 # =========================================================
 
+
+
+@app.get("/api/persistence/status")
+def api_persistence_status():
+    return {
+        "success": True,
+        "mode": persistence_mode(),
+        "supabase_configured": db_configured(),
+        "tables": [
+            "companies",
+            "users_app",
+            "suppliers",
+            "products",
+            "inventory_movements",
+            "listings",
+            "orders",
+            "events",
+            "oauth_tokens"
+        ]
+    }
+
+
+@app.post("/api/persistence/seed")
+async def api_persistence_seed():
+    return await persist_all_demo_data()
+
+
+@app.post("/api/persistence/token")
+async def api_persistence_token():
+    return await persist_ml_token_from_env()
+
+
+@app.post("/api/inventory/movement")
+async def api_inventory_movement(payload: dict):
+    return await persist_inventory(payload)
+
+
+@app.post("/api/orders/save")
+async def api_orders_save(payload: dict):
+    return await persist_order(payload)
+
+
+@app.get("/api/db/{table}")
+async def api_db_table(table: str):
+    allowed = {"companies", "users_app", "suppliers", "products", "inventory_movements", "listings", "orders", "events", "oauth_tokens"}
+    if table not in allowed:
+        return {"success": False, "message": "Tabela não permitida."}
+    result = await list_persisted(table)
+    if table == "oauth_tokens" and result.get("data"):
+        safe = []
+        for row in result["data"]:
+            row = dict(row)
+            row["access_token"] = bool(row.get("access_token"))
+            row["refresh_token"] = bool(row.get("refresh_token"))
+            safe.append(row)
+        result["data"] = safe
+    return result
+
+
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "commercehub", "version": "enterprise-v2"}
+    return {"status": "ok", "service": "commercehub", "version": "enterprise-v2-supabase-persistence"}
 
 
 @app.get("/api/enterprise/status")
 def enterprise_status():
-    return {"success": True, "version": "enterprise-v2", "database": "supabase" if db_configured() else "memory", "marketplaces": marketplace_status(), "features": ["supabase","login","multiempresa","fornecedores","produtos","estoque","sync","mercado_livre","shopee","amazon","magalu","ia","dashboard","relatorios","logs","filas","cache","webhooks","realtime"]}
+    return {"success": True, "version": "enterprise-v2-supabase-persistence", "database": "supabase" if db_configured() else "memory", "marketplaces": marketplace_status(), "features": ["supabase","login","multiempresa","fornecedores","produtos","estoque","sync","mercado_livre","shopee","amazon","magalu","ia","dashboard","relatorios","logs","filas","cache","webhooks","realtime"]}
 
 
 @app.get("/api/auth/me")
@@ -555,10 +799,7 @@ def api_suppliers():
 
 @app.post("/api/suppliers")
 async def api_supplier_create(payload: dict):
-    payload["id"] = payload.get("id") or str(uuid.uuid4())
-    payload["company_id"] = payload.get("company_id") or DEMO_COMPANY["id"]
-    await save_log("supplier_created", "Fornecedor criado", payload)
-    return await db_insert("suppliers", payload)
+    return await persist_supplier(payload)
 
 
 @app.get("/api/products")
@@ -568,10 +809,7 @@ def api_products():
 
 @app.post("/api/products")
 async def api_product_create(payload: dict):
-    payload["id"] = payload.get("id") or str(uuid.uuid4())
-    payload["company_id"] = payload.get("company_id") or DEMO_COMPANY["id"]
-    await save_log("product_created", "Produto criado", payload)
-    return await db_insert("products", payload)
+    return await persist_product(payload)
 
 
 @app.get("/api/inventory")
@@ -580,9 +818,11 @@ def api_inventory():
 
 
 @app.post("/api/inventory/sync")
-def api_inventory_sync():
+async def api_inventory_sync():
     job = enqueue("sync_inventory", {"company_id": DEMO_COMPANY["id"]})
-    return {"success": True, "job": job}
+    for product in demo_products():
+        await persist_inventory({"sku": product["sku"], "stock": product["stock"], "source": "sync"})
+    return {"success": True, "job": job, "message": "Estoque enviado para persistência."}
 
 
 @app.get("/api/pricing/report")
@@ -637,7 +877,13 @@ async def webhook_ml(request: Request):
     payload = await request.json()
     await save_log("webhook_ml", "Webhook Mercado Livre recebido", payload)
     enqueue("webhook_process", payload)
-    return {"success": True, "received": payload}
+    saved_order = await persist_order({
+        "marketplace": "mercado_livre",
+        "external_order_id": payload.get("id") or payload.get("resource") or str(uuid.uuid4()),
+        "status": "webhook_received",
+        "payload": payload
+    })
+    return {"success": True, "received": payload, "saved_order": saved_order}
 
 
 @app.get("/api/sync/run")

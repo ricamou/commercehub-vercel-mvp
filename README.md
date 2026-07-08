@@ -1,48 +1,47 @@
-# CommerceHub Enterprise V2
+# CommerceHub Enterprise V2 — Supabase Persistence
 
-Sistema comercial completo em versão compacta para GitHub Web e Vercel.
+Versão com persistência real preparada para Supabase.
 
-## Inclui
+## Agora salva no banco
 
-- Banco definitivo Supabase
-- Login de usuários
-- Multiempresa
-- Cadastro de fornecedores
-- Cadastro de produtos
-- Estoque
-- Sincronização automática
-- Mercado Livre real
-- Shopee preparado
-- Amazon preparado
-- Magalu preparado
-- IA para descrição
-- IA para precificação
-- IA para SEO
-- Dashboard profissional
-- Relatórios
-- Logs
-- Filas
-- Cache
-- Webhooks
-- Sincronização em tempo real
+- Produto salvo no banco
+- Fornecedor salvo no banco
+- Estoque salvo no banco
+- Logs persistidos
+- Token Mercado Livre persistido
+- Pedido/webhook salvo no banco
+
+## Tabelas
+
+- companies
+- users_app
+- suppliers
+- products
+- inventory_movements
+- listings
+- orders
+- events
+- oauth_tokens
 
 ## Testes
 
-- /
 - /api/health
-- /api/enterprise/status
-- /mercado-livre
-- /api/mercadolivre/me
-- /api/ml/items
-- /api/ml/orders
-- /products
-- /suppliers
-- /inventory
-- /ai
-- /reports
-- /queue
-- /sync
+- /api/persistence/status
+- /persistence
+- POST /api/persistence/seed
+- POST /api/persistence/token
+- /api/db/products
+- /api/db/suppliers
+- /api/db/inventory_movements
+- /api/db/events
+- /api/db/orders
+- /api/db/oauth_tokens
 
-## Arquivos
+## Importante
 
-Projeto mantido pequeno para uso no GitHub Web.
+Para persistência real, configure na Vercel:
+
+- SUPABASE_URL
+- SUPABASE_SERVICE_ROLE_KEY
+
+E rode o arquivo `supabase_schema.sql` no SQL Editor do Supabase.

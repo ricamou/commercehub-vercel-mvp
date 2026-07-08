@@ -49,6 +49,21 @@ create table if not exists products (
   updated_at timestamptz default now()
 );
 
+
+
+create table if not exists inventory_movements (
+  id uuid primary key default uuid_generate_v4(),
+  company_id uuid references companies(id),
+  product_id uuid,
+  sku text,
+  movement_type text default 'set',
+  quantity integer default 0,
+  previous_stock integer default 0,
+  new_stock integer default 0,
+  source text default 'manual',
+  created_at timestamptz default now()
+);
+
 create table if not exists listings (
   id uuid primary key default uuid_generate_v4(),
   company_id uuid references companies(id),
