@@ -10,7 +10,7 @@ try:
 except Exception:
     httpx = None
 
-app = FastAPI(title="CommerceHub Enterprise Backend Hardened", version="enterprise-backend-hardened")
+app = FastAPI(title="CommerceHub Enterprise Root Fix", version="enterprise-root-fix")
 
 
 # =========================================================
@@ -849,6 +849,30 @@ async def supabase_page():
 
 
 
+
+@app.get("/", response_class=HTMLResponse)
+async def dashboard():
+    companies = await db_select("companies", "select=*&limit=100")
+    products = await db_select("products", "select=*&limit=100")
+    suppliers = await db_select("suppliers", "select=*&limit=100")
+    orders = await db_select("orders", "select=*&limit=100")
+
+    body = f"""
+<section class="grid">
+<div class="card"><span>Banco</span><strong>{db_mode().upper()}</strong></div>
+<div class="card"><span>Empresas</span><strong>{len(companies.get('data', []))}</strong></div>
+<div class="card"><span>Produtos</span><strong>{len(products.get('data', []))}</strong></div>
+<div class="card"><span>Pedidos</span><strong>{len(orders.get('data', []))}</strong></div>
+</section>
+<section class="panel">
+<h2>CommerceHub Enterprise</h2>
+<p>Backend Hardened ativo. Supabase → Cadastro único → Estoque → Marketplaces → Pedidos → Relatórios.</p>
+<p>{button('/api/foundation/status','Status JSON')}{button('/api/backend/health','Backend Health')}{button('/supabase','Supabase')}{button('/products','Produtos')}</p>
+</section>
+"""
+    return layout("Dashboard Enterprise", body)
+
+
 @app.get("/foundation", response_class=HTMLResponse)
 def foundation_page():
     tables = ["companies", "users", "suppliers", "products", "inventory", "orders", "listings", "oauth_tokens", "logs", "ai_history", "queue", "webhooks", "sync_jobs"]
@@ -1033,7 +1057,7 @@ async def api_backend_health():
         }
     return {
         "success": all(v["success"] for v in results.values()),
-        "version": "enterprise-backend-hardened",
+        "version": "enterprise-root-fix",
         "db_mode": db_mode(),
         "transport": "urllib-sync-stable",
         "tables": results,
@@ -1054,16 +1078,28 @@ async def api_backend_stress_light():
     }
 
 
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_alias():
+    return await dashboard()
+
+
+
+@app.get("/api/routes")
+def api_routes():
+    return {"success": True, "routes": sorted([getattr(r, "path", "") for r in app.routes if getattr(r, "path", "")])}
+
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "commercehub", "version": "enterprise-backend-hardened"}
+    return {"status": "ok", "service": "commercehub", "version": "enterprise-root-fix"}
 
 
 @app.get("/api/foundation/status")
 def foundation_status():
     return {
         "success": True,
-        "version": "enterprise-backend-hardened",
+        "version": "enterprise-root-fix",
         "mode": db_mode(),
         "supabase_configured": db_configured(),
         "production_ready": db_configured(),
