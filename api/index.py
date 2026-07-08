@@ -15,7 +15,7 @@ try:
 except Exception:
     httpx = None
 
-app = FastAPI(title="CommerceHub Programa Pronto v1", version="programa-pronto-v1")
+app = FastAPI(title="CommerceHub Enterprise Real v1", version="enterprise-real-v1")
 
 
 def env(name: str, default: str = "") -> str:
@@ -821,6 +821,137 @@ async def ml_publish_item(payload):
     }
 
 
+# =========================================================
+# MERCADO LIVRE REAL OPERATIONS
+# =========================================================
+
+async def ml_get(path: str, params: dict | None = None):
+    current = await oauth_get_token()
+    access_token = current.get("access_token")
+
+    if not access_token:
+        return {"success": False, "message": "Access token não configurado."}
+    if not httpx:
+        return {"success": False, "message": "httpx não instalado."}
+
+    url = "https://api.mercadolibre.com" + path
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.get(url, params=params or {}, headers={"Authorization": f"Bearer {access_token}"})
+
+    if response.status_code != 401:
+        return {"success": response.status_code < 400, "status_code": response.status_code, "data": response.json() if response.content else {}}
+
+    refreshed = await ml_refresh_access_token()
+    if not refreshed.get("success"):
+        return {"success": False, "status_code": 401, "message": "Token inválido e refresh falhou.", "refresh_result": refreshed}
+
+    new_access_token = refreshed.get("data", {}).get("access_token", "")
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.get(url, params=params or {}, headers={"Authorization": f"Bearer {new_access_token}"})
+
+    return {
+        "success": response.status_code < 400,
+        "status_code": response.status_code,
+        "token_refreshed": True,
+        "data": response.json() if response.content else {}
+    }
+
+
+async def ml_put(path: str, payload: dict):
+    current = await oauth_get_token()
+    access_token = current.get("access_token")
+
+    if not access_token:
+        return {"success": False, "message": "Access token não configurado."}
+    if not httpx:
+        return {"success": False, "message": "httpx não instalado."}
+
+    url = "https://api.mercadolibre.com" + path
+    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.put(url, headers=headers, json=payload)
+
+    if response.status_code != 401:
+        return {"success": response.status_code < 400, "status_code": response.status_code, "data": response.json() if response.content else {}, "payload_sent": payload}
+
+    refreshed = await ml_refresh_access_token()
+    if not refreshed.get("success"):
+        return {"success": False, "status_code": 401, "message": "Token inválido e refresh falhou.", "refresh_result": refreshed}
+
+    new_access_token = refreshed.get("data", {}).get("access_token", "")
+    headers = {"Authorization": f"Bearer {new_access_token}", "Content-Type": "application/json"}
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.put(url, headers=headers, json=payload)
+
+    return {
+        "success": response.status_code < 400,
+        "status_code": response.status_code,
+        "token_refreshed": True,
+        "data": response.json() if response.content else {},
+        "payload_sent": payload
+    }
+
+
+async def ml_my_items(limit: int = 20, offset: int = 0):
+    me = await ml_me()
+    if not me.get("success"):
+        return {"success": False, "message": "Não foi possível consultar usuário.", "me": me}
+
+    user_id = me.get("data", {}).get("id") or ML_USER_ID
+    return await ml_get(f"/users/{user_id}/items/search", {"limit": limit, "offset": offset})
+
+
+async def ml_item_detail(item_id: str):
+    return await ml_get(f"/items/{item_id}")
+
+
+async def ml_item_description(item_id: str):
+    return await ml_get(f"/items/{item_id}/description")
+
+
+async def ml_orders(limit: int = 20, offset: int = 0):
+    me = await ml_me()
+    if not me.get("success"):
+        return {"success": False, "message": "Não foi possível consultar usuário.", "me": me}
+
+    seller_id = me.get("data", {}).get("id") or ML_USER_ID
+    return await ml_get("/orders/search", {"seller": seller_id, "limit": limit, "offset": offset})
+
+
+async def ml_real_dashboard():
+    me = await ml_me()
+    items = await ml_my_items(20, 0)
+    orders = await ml_orders(20, 0)
+
+    total_items = 0
+    total_orders = 0
+
+    if items.get("success"):
+        total_items = items.get("data", {}).get("paging", {}).get("total", 0)
+
+    if orders.get("success"):
+        total_orders = orders.get("data", {}).get("paging", {}).get("total", 0)
+
+    return {
+        "success": True,
+        "me_success": me.get("success", False),
+        "items_success": items.get("success", False),
+        "orders_success": orders.get("success", False),
+        "user": me.get("data", {}),
+        "total_items": total_items,
+        "total_orders": total_orders,
+        "items": items,
+        "orders": orders
+    }
+
+
+def html_json_link(path: str, label: str):
+    return f'<a class="btn" href="{path}" target="_blank">{label}</a>'
+
+
+
 def layout(title, body):
     return f"""<!doctype html>
 <html lang="pt-BR">
@@ -842,9 +973,10 @@ pre{{background:#0b1220;color:white;padding:14px;border-radius:10px;overflow:aut
 </head>
 <body>
 <aside>
-<div class="logo"><b>CH</b><div><strong>CommerceHub</strong><span>Programa Pronto v1</span></div></div>
+<div class="logo"><b>CH</b><div><strong>CommerceHub</strong><span>Enterprise Real v1</span></div></div>
 <nav>
 <a href="/dashboard">Dashboard</a>
+<a href="/real">CommerceHub Real</a>
 <a href="/enterprise-final">Enterprise Final</a>
 <a href="/sprint1">Sprint 1</a>
 <a href="/sprint2">Sprint 2</a>
@@ -885,7 +1017,7 @@ def dashboard():
 <section class="panel"><h2>Status</h2>
 <p><b>Mercado Livre conectado:</b> {bool(ML_ACCESS_TOKEN)}</p>
 <p><b>Banco:</b> {database_status()["mode"]}</p>
-<p><b>Versão:</b> CommerceHub Programa Pronto v1</p></section>
+<p><b>Versão:</b> CommerceHub Enterprise Real v1</p></section>
 """
     return layout("Dashboard", body)
 
@@ -979,20 +1111,74 @@ def fornecedores():
 
 
 @app.get("/produtos", response_class=HTMLResponse)
-def produtos():
-    rows = "".join([f"<tr><td>{p['sku']}</td><td>{p['name']}</td><td>{p['brand']}</td><td>{stock_status(p['stock'])}</td><td>R$ {p['sale_price']:.2f}</td></tr>" for p in all_products()])
-    return layout("Produtos", f"<section class='panel'><h2>Catálogo</h2><table><tr><th>SKU</th><th>Produto</th><th>Marca</th><th>Estoque</th><th>Preço</th></tr>{rows}</table></section>")
+async def produtos():
+    items = await ml_my_items(20, 0)
+    if items.get("success"):
+        ids = items.get("data", {}).get("results", [])
+        rows = ""
+        for item_id in ids[:20]:
+            rows += f"<tr><td>{item_id}</td><td>Mercado Livre</td><td><code>/api/ml/items/{item_id}</code></td></tr>"
+        body = f"""
+<section class="panel">
+<h2>Produtos reais Mercado Livre</h2>
+<p>Total de anúncios encontrados: <b>{items.get('data', {}).get('paging', {}).get('total', 0)}</b></p>
+<table><tr><th>ID Anúncio</th><th>Origem</th><th>Detalhes</th></tr>{rows}</table>
+<p>{html_json_link('/api/ml/items', 'Ver JSON dos anúncios')}</p>
+</section>
+"""
+        return layout("Produtos", body)
+
+    products = all_products()
+    rows = "".join([f"<tr><td>{p['sku']}</td><td>{p['name']}</td><td>{p['brand']}</td><td>{stock_status(p['stock'])}</td><td>R$ {p['sale_price']:.2f}</td></tr>" for p in products])
+    return layout("Produtos", f"<section class='panel'><h2>Catálogo local</h2><p>Não foi possível ler anúncios reais. Exibindo catálogo local.</p><pre>{items}</pre><table><tr><th>SKU</th><th>Produto</th><th>Marca</th><th>Estoque</th><th>Preço</th></tr>{rows}</table></section>")
 
 
 @app.get("/anuncios", response_class=HTMLResponse)
-def anuncios():
+async def anuncios():
+    items = await ml_my_items(20, 0)
+    if items.get("success"):
+        ids = items.get("data", {}).get("results", [])
+        rows = ""
+        for item_id in ids[:20]:
+            rows += f"<tr><td>{item_id}</td><td><code>/api/ml/items/{item_id}</code></td><td><code>/api/ml/items/{item_id}/description</code></td></tr>"
+        body = f"""
+<section class="panel">
+<h2>Anúncios reais Mercado Livre</h2>
+<p>Total de anúncios encontrados: <b>{items.get('data', {}).get('paging', {}).get('total', 0)}</b></p>
+<table><tr><th>ID</th><th>Detalhe</th><th>Descrição</th></tr>{rows}</table>
+<p>{html_json_link('/api/ml/items', 'Ver JSON dos anúncios')}</p>
+</section>
+<section class="panel">
+<h2>Preview de novo anúncio</h2>
+<p>Antes de publicar, use o preview:</p>
+<pre>/api/anuncios/preview/SUP-001?category_id=MLBXXXX</pre>
+</section>
+"""
+        return layout("Anúncios", body)
+
     rows = "".join([f"<tr><td>{p['sku']}</td><td>{p['name']}</td><td>{readiness(p)['ready']}</td><td><code>/api/anuncios/preview/{p['sku']}?category_id=MLBXXXX</code></td></tr>" for p in all_products()])
-    return layout("Anúncios", f"<section class='panel'><h2>Anúncios</h2><table><tr><th>SKU</th><th>Produto</th><th>Pronto?</th><th>Preview</th></tr>{rows}</table></section>")
+    return layout("Anúncios", f"<section class='panel'><h2>Anúncios locais</h2><p>Não foi possível ler anúncios reais.</p><pre>{items}</pre><table><tr><th>SKU</th><th>Produto</th><th>Pronto?</th><th>Preview</th></tr>{rows}</table></section>")
 
 
 @app.get("/pedidos", response_class=HTMLResponse)
-def pedidos():
-    return layout("Pedidos", "<section class='panel'><h2>Orders Engine</h2><p>Simular pedido: <code>POST /api/pedidos/simulate</code></p></section>")
+async def pedidos():
+    orders = await ml_orders(20, 0)
+    if orders.get("success"):
+        data = orders.get("data", {})
+        rows = ""
+        for order in data.get("results", [])[:20]:
+            rows += f"<tr><td>{order.get('id')}</td><td>{order.get('status')}</td><td>{order.get('total_amount')}</td><td>{order.get('date_created')}</td></tr>"
+        body = f"""
+<section class="panel">
+<h2>Pedidos reais Mercado Livre</h2>
+<p>Total de pedidos encontrados: <b>{data.get('paging', {}).get('total', 0)}</b></p>
+<table><tr><th>ID</th><th>Status</th><th>Total</th><th>Data</th></tr>{rows}</table>
+<p>{html_json_link('/api/ml/orders', 'Ver JSON dos pedidos')}</p>
+</section>
+"""
+        return layout("Pedidos", body)
+
+    return layout("Pedidos", f"<section class='panel'><h2>Pedidos</h2><p>Não foi possível ler pedidos reais.</p><pre>{orders}</pre><p>Simular pedido: <code>POST /api/pedidos/simulate</code></p></section>")
 
 
 @app.get("/relatorios", response_class=HTMLResponse)
@@ -1054,9 +1240,32 @@ async def ml_callback_page(code: str = ""):
 """)
 
 
+
+
+@app.get("/real", response_class=HTMLResponse)
+async def real_page():
+    data = await ml_real_dashboard()
+    body = f"""
+<section class="grid">
+<div class="card"><span>Conta ML</span><strong>{'OK' if data.get('me_success') else 'ERRO'}</strong></div>
+<div class="card"><span>Anúncios ML</span><strong>{data.get('total_items', 0)}</strong></div>
+<div class="card"><span>Pedidos ML</span><strong>{data.get('total_orders', 0)}</strong></div>
+<div class="card"><span>Token</span><strong>{'OK' if data.get('me_success') else 'ERRO'}</strong></div>
+</section>
+<section class="panel">
+<h2>CommerceHub Real</h2>
+<p>Esta tela usa dados reais da API do Mercado Livre.</p>
+<p>{html_json_link('/api/ml/dashboard', 'Ver JSON Dashboard Real')}</p>
+<p>{html_json_link('/api/ml/items', 'Ver Anúncios Reais')}</p>
+<p>{html_json_link('/api/ml/orders', 'Ver Pedidos Reais')}</p>
+</section>
+"""
+    return layout("CommerceHub Real", body)
+
+
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "commercehub", "version": "programa-pronto-v1"}
+    return {"status": "ok", "service": "commercehub", "version": "enterprise-real-v1"}
 
 
 
@@ -1066,7 +1275,7 @@ def api_final_check():
     return {
         "success": True,
         "program": "CommerceHub",
-        "version": "programa-pronto-v1",
+        "version": "enterprise-real-v1",
         "status": "ready",
         "mercado_livre_configured": bool(ML_CLIENT_ID and ML_CLIENT_SECRET and ML_ACCESS_TOKEN and ML_REFRESH_TOKEN and ML_USER_ID),
         "database": database_status(),
@@ -1076,10 +1285,55 @@ def api_final_check():
             "/mercado-livre",
             "/api/mercadolivre/status",
             "/api/mercadolivre/me",
-            "/api/produtos",
+            "/api/ml/dashboard", "/api/ml/items", "/api/ml/orders", "/api/produtos",
             "/api/anuncios/preview/SUP-001?category_id=MLBXXXX"
         ]
     }
+
+
+
+
+@app.get("/api/ml/dashboard")
+async def api_ml_dashboard_real():
+    return await ml_real_dashboard()
+
+
+@app.get("/api/ml/items")
+async def api_ml_items(limit: int = 20, offset: int = 0):
+    return await ml_my_items(limit, offset)
+
+
+@app.get("/api/ml/items/{item_id}")
+async def api_ml_item_detail(item_id: str):
+    return await ml_item_detail(item_id)
+
+
+@app.get("/api/ml/items/{item_id}/description")
+async def api_ml_item_description(item_id: str):
+    return await ml_item_description(item_id)
+
+
+@app.get("/api/ml/orders")
+async def api_ml_orders(limit: int = 20, offset: int = 0):
+    return await ml_orders(limit, offset)
+
+
+@app.put("/api/ml/items/{item_id}/price-stock")
+async def api_ml_update_price_stock(item_id: str, payload: dict):
+    update = {}
+    if "price" in payload:
+        update["price"] = float(payload.get("price"))
+    if "stock" in payload:
+        update["available_quantity"] = int(payload.get("stock"))
+    if not update:
+        return {"success": False, "message": "Informe price e/ou stock."}
+    return await ml_put(f"/items/{item_id}", update)
+
+
+@app.put("/api/ml/items/{item_id}/pause")
+async def api_ml_pause_item(item_id: str):
+    return await ml_put(f"/items/{item_id}", {"status": "paused"})
+
 
 
 @app.get("/api/produtos")

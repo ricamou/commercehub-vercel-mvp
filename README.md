@@ -1,35 +1,34 @@
-# CommerceHub Programa Pronto v1
+# CommerceHub Enterprise Real v1
 
-Versão fechada do programa, sem novos módulos e sem expansão de escopo.
+Versão com Mercado Livre real nas telas principais.
 
-## Objetivo
+## O que mudou
 
-Entregar o sistema funcionando com:
+- Nova tela `/real`
+- Produtos lendo anúncios reais do Mercado Livre
+- Anúncios lendo anúncios reais do Mercado Livre
+- Pedidos lendo pedidos reais do Mercado Livre
+- Dashboard real via `/api/ml/dashboard`
+- Endpoints reais:
+  - `/api/ml/items`
+  - `/api/ml/items/{item_id}`
+  - `/api/ml/items/{item_id}/description`
+  - `/api/ml/orders`
+  - `PUT /api/ml/items/{item_id}/price-stock`
+  - `PUT /api/ml/items/{item_id}/pause`
 
-- Dashboard
-- Produtos
-- Fornecedores
-- Anúncios
-- Relatórios
-- AI Engine
-- Mercado Livre OAuth
-- Refresh de token
-- Preview de anúncio
-- Testes finais
+## Testes finais
 
-## Teste final
-
-Depois de subir na Vercel:
-
-- /api/health
-- /api/final-check
-- /mercado-livre
-- /api/mercadolivre/status
-- /api/mercadolivre/me
-- /api/produtos
-- /api/anuncios/preview/SUP-001?category_id=MLBXXXX
+- `/api/health`
+- `/api/final-check`
+- `/real`
+- `/api/ml/dashboard`
+- `/api/ml/items`
+- `/api/ml/orders`
+- `/produtos`
+- `/anuncios`
+- `/pedidos`
 
 ## Observação
 
-O sistema funciona com tokens nas Environment Variables da Vercel.
-Supabase continua opcional para persistência.
+Se sua conta ainda não tiver anúncios ou pedidos, as telas aparecerão vazias, mas a conexão estará funcionando.
