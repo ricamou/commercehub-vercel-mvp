@@ -1,47 +1,51 @@
-# CommerceHub Enterprise V2 — Supabase Persistence
+# CommerceHub Enterprise V3 Core
 
-Versão com persistência real preparada para Supabase.
+Fundação definitiva do CommerceHub.
 
-## Agora salva no banco
-
-- Produto salvo no banco
-- Fornecedor salvo no banco
-- Estoque salvo no banco
-- Logs persistidos
-- Token Mercado Livre persistido
-- Pedido/webhook salvo no banco
-
-## Tabelas
+## Banco definitivo
 
 - companies
-- users_app
+- users
 - suppliers
 - products
-- inventory_movements
-- listings
+- inventory
 - orders
-- events
+- listings
 - oauth_tokens
+- logs
+- ai_history
+- queue
+- webhooks
+- sync_jobs
+
+## Fluxo
+
+Supabase → Cadastro único → Tela → Mercado Livre / Shopee / Amazon
 
 ## Testes
 
 - /api/health
-- /api/persistence/status
-- /persistence
-- POST /api/persistence/seed
-- POST /api/persistence/token
-- /api/db/products
-- /api/db/suppliers
-- /api/db/inventory_movements
-- /api/db/events
-- /api/db/orders
-- /api/db/oauth_tokens
+- /api/foundation/status
+- /foundation
+- /api/foundation/seed
+- /companies
+- /users
+- /suppliers
+- /products
+- /inventory
+- /orders
+- /listings
+- /logs
+- /queue
+- /sync
+- /mercado-livre
+- /api/mercadolivre/me
+- /api/ml/items
+- /api/ml/orders
 
-## Importante
+## Passo obrigatório
 
-Para persistência real, configure na Vercel:
+Rode `supabase_schema.sql` no Supabase e configure na Vercel:
 
 - SUPABASE_URL
 - SUPABASE_SERVICE_ROLE_KEY
-
-E rode o arquivo `supabase_schema.sql` no SQL Editor do Supabase.
