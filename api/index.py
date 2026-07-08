@@ -15,7 +15,7 @@ try:
 except Exception:
     httpx = None
 
-app = FastAPI(title="CommerceHub Final Supabase OAuth", version="final-supabase-oauth")
+app = FastAPI(title="CommerceHub Final Engineer Fix", version="final-engineer-fix")
 
 
 def env(name: str, default: str = "") -> str:
@@ -40,6 +40,91 @@ SUPABASE_SERVICE_ROLE_KEY = env("SUPABASE_SERVICE_ROLE_KEY")
 DEFAULT_MARGIN_PERCENT = float(env("DEFAULT_MARGIN_PERCENT", "35") or 35)
 ML_COMMISSION_PERCENT = float(env("ML_COMMISSION_PERCENT", "16") or 16)
 FIXED_OPERATIONAL_COST = float(env("FIXED_OPERATIONAL_COST", "6") or 6)
+
+SUPABASE_SCHEMA_SQL = """create extension if not exists "uuid-ossp";
+
+create table if not exists companies (
+  id uuid primary key default uuid_generate_v4(),
+  name text not null,
+  document text,
+  status text default 'active',
+  created_at timestamptz default now()
+);
+
+create table if not exists suppliers (
+  id uuid primary key default uuid_generate_v4(),
+  company_id uuid references companies(id),
+  name text not null,
+  type text default 'manual',
+  status text default 'active',
+  config jsonb default '{}',
+  created_at timestamptz default now()
+);
+
+create table if not exists products (
+  id uuid primary key default uuid_generate_v4(),
+  company_id uuid references companies(id),
+  supplier_id uuid references suppliers(id),
+  sku text not null,
+  name text not null,
+  brand text,
+  ean text,
+  category text,
+  description text,
+  cost_price numeric default 0,
+  sale_price numeric default 0,
+  stock integer default 0,
+  status text default 'active',
+  raw_data jsonb default '{}',
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+
+create table if not exists listings (
+  id uuid primary key default uuid_generate_v4(),
+  company_id uuid references companies(id),
+  product_id uuid references products(id),
+  marketplace text not null,
+  external_id text,
+  status text default 'draft',
+  payload jsonb default '{}',
+  permalink text,
+  created_at timestamptz default now()
+);
+
+create table if not exists orders (
+  id uuid primary key default uuid_generate_v4(),
+  company_id uuid references companies(id),
+  marketplace text not null,
+  external_order_id text,
+  status text,
+  total_amount numeric default 0,
+  payload jsonb default '{}',
+  created_at timestamptz default now()
+);
+
+create table if not exists events (
+  id uuid primary key default uuid_generate_v4(),
+  company_id uuid references companies(id),
+  event_type text not null,
+  message text,
+  payload jsonb default '{}',
+  created_at timestamptz default now()
+);
+
+create table if not exists oauth_tokens (
+  id uuid primary key default uuid_generate_v4(),
+  marketplace text not null unique,
+  access_token text,
+  refresh_token text,
+  user_id text,
+  expires_in integer,
+  token_type text default 'Bearer',
+  scope text,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);
+"""
 
 MOCK_PRODUCTS = [
     {"sku":"SUP-001","name":"Suporte Veicular Para Celular","brand":"MockAuto","ean":"7890000000011","category":"Acessórios Automotivos","description":"Suporte veicular para celular.","cost_price":22.90,"stock":50},
@@ -800,7 +885,7 @@ def dashboard():
 <section class="panel"><h2>Status</h2>
 <p><b>Mercado Livre conectado:</b> {bool(ML_ACCESS_TOKEN)}</p>
 <p><b>Banco:</b> {database_status()["mode"]}</p>
-<p><b>Versão:</b> CommerceHub Final Supabase OAuth</p></section>
+<p><b>Versão:</b> CommerceHub Final Engineer Fix</p></section>
 """
     return layout("Dashboard", body)
 
@@ -963,9 +1048,38 @@ async def ml_callback_page(code: str = ""):
 """)
 
 
+
+
+@app.get("/setup", response_class=HTMLResponse)
+def setup_page():
+    return layout("Setup CommerceHub", f"""
+<section class="panel">
+<h2>Setup Supabase</h2>
+<p>Esta tela centraliza o SQL que precisa ser rodado no Supabase. O sistema continua funcionando em modo ENV, mas para salvar tokens automaticamente é necessário criar a tabela <code>oauth_tokens</code>.</p>
+<h3>SQL completo</h3>
+<pre>{SUPABASE_SCHEMA_SQL}</pre>
+</section>
+<section class="panel">
+<h2>Testes após deploy</h2>
+<pre>/api/health
+/api/database/status
+/api/setup/sql
+/api/mercadolivre/oauth-config
+/api/mercadolivre/token-store
+/api/mercadolivre/refresh-token
+/api/mercadolivre/me</pre>
+</section>
+""")
+
+
+@app.get("/api/setup/sql")
+def api_setup_sql():
+    return {"success": True, "sql": SUPABASE_SCHEMA_SQL}
+
+
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "commercehub", "version": "final-supabase-oauth"}
+    return {"status": "ok", "service": "commercehub", "version": "final-engineer-fix"}
 
 
 @app.get("/api/produtos")

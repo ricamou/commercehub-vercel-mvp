@@ -1,36 +1,33 @@
-# CommerceHub FINAL Supabase OAuth
+# CommerceHub FINAL ENGINEER FIX
 
-Agora os tokens do Mercado Livre são salvos no Supabase e renovados automaticamente.
+Correção final preparada como engenheiro do projeto.
 
-## O que mudou
+## O que foi arrumado
 
-- Nova tabela: `oauth_tokens`
-- Callback salva o token no Supabase
-- `/api/mercadolivre/me` busca token no Supabase
-- Se o token expirar, o sistema usa o refresh token e salva o novo token
-- Novo endpoint: `/api/mercadolivre/token-store`
-- Novo endpoint: `/api/mercadolivre/refresh-token`
+- Mantém o projeto pequeno para GitHub Web.
+- Adiciona `/setup` com o SQL visível dentro do próprio sistema.
+- Adiciona `/api/setup/sql`.
+- Corrige callback Mercado Livre em `/mercadolivre/callback`.
+- Adiciona store de tokens via Supabase.
+- Mantém fallback por Environment Variables.
+- Adiciona `/api/mercadolivre/token-store`.
+- Adiciona `/api/mercadolivre/refresh-token`.
+- `/api/mercadolivre/me` tenta renovar token automaticamente se receber 401.
 
-## Passo obrigatório
+## Depois de subir
 
-No Supabase SQL Editor, rode o conteúdo do arquivo:
-
-`supabase_schema.sql`
-
-Depois confirme que a Vercel tem:
-
-- SUPABASE_URL
-- SUPABASE_SERVICE_ROLE_KEY
-- ML_CLIENT_ID
-- ML_CLIENT_SECRET
-- ML_REDIRECT_URI=https://commercehub-vercel-mvp.vercel.app/mercadolivre/callback
-
-## Testes
+Teste:
 
 - /api/health
+- /setup
+- /api/setup/sql
 - /api/database/status
 - /api/mercadolivre/oauth-config
-- /mercado-livre
 - /api/mercadolivre/token-store
 - /api/mercadolivre/refresh-token
 - /api/mercadolivre/me
+
+## Supabase
+
+O arquivo `supabase_schema.sql` está incluído.
+Ele cria a tabela `oauth_tokens`, necessária para salvar tokens automaticamente.
