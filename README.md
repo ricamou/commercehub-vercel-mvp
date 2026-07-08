@@ -1,38 +1,32 @@
-# CommerceHub Enterprise — No Mocks Ready
+# CommerceHub Enterprise — Supabase Final Fix
 
-Versão pronta para operar com Supabase como fonte principal.
+Correção final para diagnóstico e conexão Supabase.
 
-## O que foi corrigido
+## O que foi ajustado
 
-- Telas principais priorizam dados reais do Supabase.
-- Produtos, fornecedores e estoque deixam de depender de mocks quando Supabase está conectado.
-- Endpoints de preparação automática do banco.
-- Endpoint de criação de produto real de teste.
-- Preview comercial para Mercado Livre.
-- Fluxo pronto para: Supabase → Produto → Estoque → Preview → Marketplace.
+- Aceita `SUPABASE_URL` e também `NEXT_PUBLIC_SUPABASE_URL`.
+- Aceita `SUPABASE_SERVICE_ROLE_KEY` e também `SUPABASE_KEY` ou `SUPABASE_ANON_KEY`.
+- Nova página `/supabase`.
+- Novos endpoints:
+  - `/api/supabase/diagnostics`
+  - `/api/supabase/test`
+  - `/api/supabase/ready`
+- `/api/foundation/status` agora mostra exatamente o que falta.
 
 ## Testes
 
 - `/api/health`
+- `/supabase`
+- `/api/supabase/diagnostics`
+- `/api/supabase/test`
+- `/api/supabase/ready`
 - `/api/foundation/status`
-- `/api/setup/ensure-seed`
-- `/api/commercial-test/create-product`
-- `/api/commercial-test/check`
-- `/products`
-- `/suppliers`
-- `/inventory`
-- `/api/commercial-test/preview?category_id=MLBXXXX`
 
-## Uso
+## Para ficar `mode: supabase`
 
-Suba no GitHub Web e aguarde a Vercel.
+Na Vercel precisa existir:
 
-Depois teste:
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
 
-1. `/api/foundation/status`
-2. `/api/setup/ensure-seed`
-3. `/api/commercial-test/create-product`
-4. `/products`
-5. `/suppliers`
-6. `/inventory`
-7. `/api/commercial-test/preview?category_id=MLBXXXX`
+Depois faça Redeploy.

@@ -10,7 +10,7 @@ try:
 except Exception:
     httpx = None
 
-app = FastAPI(title="CommerceHub Enterprise No Mocks Ready", version="enterprise-no-mocks-ready")
+app = FastAPI(title="CommerceHub Enterprise Supabase Final Fix", version="enterprise-supabase-final-fix")
 
 
 # =========================================================
@@ -29,8 +29,8 @@ def env(name: str, default: str = "") -> str:
 
 APP_URL = env("APP_URL", "https://commercehub-vercel-mvp.vercel.app")
 APP_SECRET = env("APP_SECRET", "commercehub-change-me")
-SUPABASE_URL = env("SUPABASE_URL")
-SUPABASE_SERVICE_ROLE_KEY = env("SUPABASE_SERVICE_ROLE_KEY")
+SUPABASE_URL = env("SUPABASE_URL") or env("NEXT_PUBLIC_SUPABASE_URL")
+SUPABASE_SERVICE_ROLE_KEY = env("SUPABASE_SERVICE_ROLE_KEY") or env("SUPABASE_KEY") or env("SUPABASE_ANON_KEY")
 OPENAI_API_KEY = env("OPENAI_API_KEY")
 
 ML_CLIENT_ID = env("ML_CLIENT_ID")
@@ -701,6 +701,59 @@ async def create_demo_real_product():
 
 
 
+
+# =========================================================
+# SUPABASE FINAL FIX / DIAGNOSTICS
+# =========================================================
+
+def supabase_env_diagnostics():
+    return {
+        "SUPABASE_URL": bool(SUPABASE_URL),
+        "SUPABASE_SERVICE_ROLE_KEY_or_fallback": bool(SUPABASE_SERVICE_ROLE_KEY),
+        "httpx": bool(httpx),
+        "configured": db_configured(),
+        "mode": db_mode(),
+        "required_in_vercel": [
+            "SUPABASE_URL",
+            "SUPABASE_SERVICE_ROLE_KEY"
+        ],
+        "accepted_fallback_names": [
+            "NEXT_PUBLIC_SUPABASE_URL",
+            "SUPABASE_KEY",
+            "SUPABASE_ANON_KEY"
+        ]
+    }
+
+
+async def supabase_connection_test():
+    if not SUPABASE_URL:
+        return {"success": False, "error": "SUPABASE_URL ausente na Vercel."}
+    if not SUPABASE_SERVICE_ROLE_KEY:
+        return {"success": False, "error": "SUPABASE_SERVICE_ROLE_KEY ausente na Vercel."}
+    if not httpx:
+        return {"success": False, "error": "httpx não instalado."}
+
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(
+                f"{SUPABASE_URL}/rest/v1/",
+                headers={
+                    "apikey": SUPABASE_SERVICE_ROLE_KEY,
+                    "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}"
+                }
+            )
+        return {
+            "success": r.status_code < 500,
+            "status_code": r.status_code,
+            "message": "Supabase respondeu. Se status for 401/403, revise a chave. Se for 200/404, conexão existe.",
+            "body_preview": r.text[:300]
+        }
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+
+
 # =========================================================
 # UI
 # =========================================================
@@ -731,10 +784,11 @@ pre{{background:#0b1220;color:white;padding:14px;border-radius:10px;overflow:aut
 </head>
 <body>
 <aside>
-<div class="logo"><b>CH</b><div><strong>CommerceHub</strong><span>Enterprise No Mocks Ready</span></div></div>
+<div class="logo"><b>CH</b><div><strong>CommerceHub</strong><span>Enterprise Supabase Final Fix</span></div></div>
 <nav>
 <a href="/">Dashboard</a>
 <a href="/foundation">Fundação</a>
+<a href="/supabase">Supabase</a>
 <a href="/companies">Empresas</a>
 <a href="/users">Usuários</a>
 <a href="/suppliers">Fornecedores</a>
@@ -783,6 +837,32 @@ async def dashboard():
 {button('/api/foundation/status','Status JSON')}{button('/api/setup/ensure-seed','Preparar banco')}{button('/api/commercial-test/create-product','Criar produto de teste')}</section>
 """
     return layout("Dashboard Enterprise", body)
+
+
+
+@app.get("/supabase", response_class=HTMLResponse)
+async def supabase_page():
+    diag = supabase_env_diagnostics()
+    test = await supabase_connection_test()
+    body = f"""
+<section class="panel">
+<h2>Supabase Produção</h2>
+<p>Modo atual: <b>{db_mode()}</b></p>
+<p>Produção pronta: <b>{db_configured()}</b></p>
+<table>
+<tr><th>Verificação</th><th>Status</th></tr>
+<tr><td>SUPABASE_URL</td><td>{diag['SUPABASE_URL']}</td></tr>
+<tr><td>SUPABASE_SERVICE_ROLE_KEY</td><td>{diag['SUPABASE_SERVICE_ROLE_KEY_or_fallback']}</td></tr>
+<tr><td>httpx</td><td>{diag['httpx']}</td></tr>
+<tr><td>Conectado</td><td>{diag['configured']}</td></tr>
+</table>
+<h3>Teste de conexão</h3>
+<pre>{test}</pre>
+<p>{button('/api/supabase/ready','Status Supabase')}{button('/api/foundation/seed','Seed')}</p>
+</section>
+"""
+    return layout("Supabase Produção", body)
+
 
 
 @app.get("/foundation", response_class=HTMLResponse)
@@ -929,22 +1009,47 @@ async def ml_callback(code: str = ""):
 # API
 # =========================================================
 
+
+@app.get("/api/supabase/diagnostics")
+def api_supabase_diagnostics():
+    return {"success": True, **supabase_env_diagnostics()}
+
+
+@app.get("/api/supabase/test")
+async def api_supabase_test():
+    return await supabase_connection_test()
+
+
+@app.get("/api/supabase/ready")
+async def api_supabase_ready():
+    test = await supabase_connection_test()
+    return {
+        "success": bool(db_configured() and test.get("success")),
+        "mode": db_mode(),
+        "production_ready": bool(db_configured() and test.get("success")),
+        "diagnostics": supabase_env_diagnostics(),
+        "test": test
+    }
+
+
+
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "commercehub", "version": "enterprise-no-mocks-ready"}
+    return {"status": "ok", "service": "commercehub", "version": "enterprise-supabase-final-fix"}
 
 
 @app.get("/api/foundation/status")
 def foundation_status():
     return {
         "success": True,
-        "version": "enterprise-no-mocks-ready",
+        "version": "enterprise-supabase-final-fix",
         "mode": db_mode(),
         "supabase_configured": db_configured(),
         "production_ready": db_configured(),
+        "diagnostics": supabase_env_diagnostics(),
         "tables": ["companies", "users", "suppliers", "products", "inventory", "orders", "listings", "oauth_tokens", "logs", "ai_history", "queue", "webhooks", "sync_jobs"],
         "flow": "Supabase -> Cadastro único -> Tela -> Mercado Livre/Shopee/Amazon",
-        "next_test": "/api/commercial-test/create-product"
+        "next_test": "/api/supabase/test"
     }
 
 
