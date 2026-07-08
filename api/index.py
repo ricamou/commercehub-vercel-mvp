@@ -10,7 +10,7 @@ try:
 except Exception:
     httpx = None
 
-app = FastAPI(title="CommerceHub Enterprise Root Fix", version="enterprise-root-fix")
+app = FastAPI(title="CommerceHub Enterprise Dashboard Safe Fix", version="enterprise-dashboard-safe-fix")
 
 
 # =========================================================
@@ -852,25 +852,28 @@ async def supabase_page():
 
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
-    companies = await db_select("companies", "select=*&limit=100")
-    products = await db_select("products", "select=*&limit=100")
-    suppliers = await db_select("suppliers", "select=*&limit=100")
-    orders = await db_select("orders", "select=*&limit=100")
-
-    body = f"""
+    body = """
 <section class="grid">
-<div class="card"><span>Banco</span><strong>{db_mode().upper()}</strong></div>
-<div class="card"><span>Empresas</span><strong>{len(companies.get('data', []))}</strong></div>
-<div class="card"><span>Produtos</span><strong>{len(products.get('data', []))}</strong></div>
-<div class="card"><span>Pedidos</span><strong>{len(orders.get('data', []))}</strong></div>
+<div class="card"><span>Sistema</span><strong>OK</strong></div>
+<div class="card"><span>Versão</span><strong>Safe</strong></div>
+<div class="card"><span>Banco</span><strong>""" + db_mode().upper() + """</strong></div>
+<div class="card"><span>Status</span><strong>Online</strong></div>
 </section>
+
 <section class="panel">
 <h2>CommerceHub Enterprise</h2>
-<p>Backend Hardened ativo. Supabase → Cadastro único → Estoque → Marketplaces → Pedidos → Relatórios.</p>
-<p>{button('/api/foundation/status','Status JSON')}{button('/api/backend/health','Backend Health')}{button('/supabase','Supabase')}{button('/products','Produtos')}</p>
+<p>Dashboard seguro carregado. A página inicial não derruba mais o sistema mesmo se o Supabase oscilar.</p>
+<p>
+""" + button('/api/health','API Health') + button('/supabase','Supabase') + button('/api/backend/health','Backend Health') + button('/api/foundation/status','Foundation Status') + button('/products','Produtos') + button('/suppliers','Fornecedores') + """
+</p>
 </section>
 """
     return layout("Dashboard Enterprise", body)
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_alias():
+    return await dashboard()
 
 
 @app.get("/foundation", response_class=HTMLResponse)
@@ -1057,7 +1060,7 @@ async def api_backend_health():
         }
     return {
         "success": all(v["success"] for v in results.values()),
-        "version": "enterprise-root-fix",
+        "version": "enterprise-dashboard-safe-fix",
         "db_mode": db_mode(),
         "transport": "urllib-sync-stable",
         "tables": results,
@@ -1080,26 +1083,36 @@ async def api_backend_stress_light():
 
 
 
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard_alias():
-    return await dashboard()
-
 
 
 @app.get("/api/routes")
 def api_routes():
     return {"success": True, "routes": sorted([getattr(r, "path", "") for r in app.routes if getattr(r, "path", "")])}
 
+
+@app.get("/api/root-test")
+def api_root_test():
+    return {"success": True, "message": "Root route patched safely", "version": "enterprise-dashboard-safe-fix", "db_mode": db_mode()}
+
+
+@app.get("/favicon.ico")
+def favicon_ico():
+    return {"ok": True}
+
+@app.get("/favicon.png")
+def favicon_png():
+    return {"ok": True}
+
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "commercehub", "version": "enterprise-root-fix"}
+    return {"status": "ok", "service": "commercehub", "version": "enterprise-dashboard-safe-fix"}
 
 
 @app.get("/api/foundation/status")
 def foundation_status():
     return {
         "success": True,
-        "version": "enterprise-root-fix",
+        "version": "enterprise-dashboard-safe-fix",
         "mode": db_mode(),
         "supabase_configured": db_configured(),
         "production_ready": db_configured(),

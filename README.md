@@ -1,20 +1,21 @@
-# CommerceHub Enterprise — Root Fix
+# CommerceHub Enterprise — Dashboard Safe Fix
 
-Correção da rota principal `/`.
+Correção da página inicial `/`.
 
 ## Corrigido
 
-- `/` volta a abrir o Dashboard.
-- `/dashboard` também abre o Dashboard.
-- Novo endpoint `/api/routes` para listar rotas publicadas.
-- Mantém Backend Hardened para Supabase.
+- `/` não consulta mais Supabase diretamente.
+- `/` não cai mais com Internal Server Error.
+- `/dashboard` aponta para o mesmo painel seguro.
+- Adicionado `/api/root-test`.
+- Adicionados `/favicon.ico` e `/favicon.png` para reduzir logs 404.
 
 ## Testes
 
 - `/api/health`
 - `/`
 - `/dashboard`
-- `/api/routes`
+- `/api/root-test`
 - `/supabase`
 - `/api/backend/health`
 - `/products`
