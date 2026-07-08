@@ -15,7 +15,7 @@ try:
 except Exception:
     httpx = None
 
-app = FastAPI(title="CommerceHub Final Production Ready", version="final-production-ready")
+app = FastAPI(title="CommerceHub Final OAuth Corrigido", version="final-oauth-corrigido")
 
 
 def env(name: str, default: str = "") -> str:
@@ -31,7 +31,7 @@ def env(name: str, default: str = "") -> str:
 APP_URL = env("APP_URL", "https://commercehub-vercel-mvp.vercel.app")
 ML_CLIENT_ID = env("ML_CLIENT_ID")
 ML_CLIENT_SECRET = env("ML_CLIENT_SECRET")
-ML_REDIRECT_URI = env("ML_REDIRECT_URI", f"{APP_URL}/api/mercadolivre/callback")
+ML_REDIRECT_URI = env("ML_REDIRECT_URI", f"{APP_URL}/mercadolivre/callback")
 ML_ACCESS_TOKEN = env("ML_ACCESS_TOKEN")
 ML_REFRESH_TOKEN = env("ML_REFRESH_TOKEN")
 ML_USER_ID = env("ML_USER_ID")
@@ -610,7 +610,7 @@ def dashboard():
 <section class="panel"><h2>Status</h2>
 <p><b>Mercado Livre conectado:</b> {bool(ML_ACCESS_TOKEN)}</p>
 <p><b>Banco:</b> {database_status()["mode"]}</p>
-<p><b>Versão:</b> CommerceHub Final Production Ready</p></section>
+<p><b>Versão:</b> CommerceHub Final OAuth Corrigido</p></section>
 """
     return layout("Dashboard", body)
 
@@ -715,9 +715,63 @@ def database_page():
     return layout("Database", f"<section class='panel'><h2>Database</h2><pre>{database_status()}</pre></section>")
 
 
+
+
+@app.get("/mercadolivre/callback", response_class=HTMLResponse)
+async def ml_callback_page(code: str = ""):
+    if not code:
+        return layout("Callback Mercado Livre", """
+<section class="panel">
+<h2>Erro na conexão</h2>
+<p>O código OAuth não foi recebido.</p>
+<p>Volte em <code>/mercado-livre</code> e tente conectar novamente.</p>
+</section>
+""")
+
+    result = await ml_exchange_code(code)
+
+    if not result.get("success"):
+        return layout("Callback Mercado Livre", f"""
+<section class="panel">
+<h2>Erro ao trocar código por token</h2>
+<p>O Mercado Livre retornou erro durante a autenticação.</p>
+<pre>{result}</pre>
+<p>Verifique se o Redirect URI no Mercado Livre Developers está exatamente:</p>
+<pre>{ML_REDIRECT_URI}</pre>
+</section>
+""")
+
+    data = result.get("data", {}) or {}
+    access_token = data.get("access_token", "")
+    refresh_token = data.get("refresh_token", "")
+    user_id = data.get("user_id", "")
+    expires_in = data.get("expires_in", "")
+
+    return layout("Mercado Livre conectado", f"""
+<section class="panel">
+<h2>Conexão realizada com sucesso</h2>
+<p><b>Copie os valores abaixo para as Environment Variables da Vercel.</b></p>
+<table>
+<tr><th>Variável</th><th>Valor</th></tr>
+<tr><td>ML_ACCESS_TOKEN</td><td><code>{access_token}</code></td></tr>
+<tr><td>ML_REFRESH_TOKEN</td><td><code>{refresh_token}</code></td></tr>
+<tr><td>ML_USER_ID</td><td><code>{user_id}</code></td></tr>
+<tr><td>ML_TOKEN_EXPIRES_IN</td><td><code>{expires_in}</code></td></tr>
+</table>
+<p>Depois faça Redeploy na Vercel e teste:</p>
+<pre>/api/mercadolivre/status
+/api/mercadolivre/me</pre>
+</section>
+<section class="panel">
+<h2>Resposta completa</h2>
+<pre>{data}</pre>
+</section>
+""")
+
+
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "commercehub", "version": "final-production-ready"}
+    return {"status": "ok", "service": "commercehub", "version": "final-oauth-corrigido"}
 
 
 @app.get("/api/produtos")
@@ -860,6 +914,19 @@ def api_database_status():
 async def api_database_health():
     result = await db_select("companies")
     return {"success": True, "database": database_status(), "test": result}
+
+
+
+
+@app.get("/api/mercadolivre/oauth-config")
+def api_ml_oauth_config():
+    return {
+        "success": True,
+        "redirect_uri": ML_REDIRECT_URI,
+        "has_client_id": bool(ML_CLIENT_ID),
+        "has_client_secret": bool(ML_CLIENT_SECRET),
+        "auth_url": ml_auth_url()
+    }
 
 
 @app.get("/api/mercadolivre/status")

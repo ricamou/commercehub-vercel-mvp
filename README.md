@@ -1,46 +1,33 @@
-# CommerceHub Final Production Ready
+# CommerceHub FINAL OAuth Corrigido
 
-Versão final consolidada para GitHub Web e Vercel.
+Correção aplicada:
 
-## Arquivos
-Total: 6 arquivos.
+- Adicionada rota `GET /mercadolivre/callback`
+- Mantida rota `GET /api/mercadolivre/callback`
+- Página visual para copiar tokens do Mercado Livre
+- Redirect URI padrão corrigido para `/mercadolivre/callback`
+- Endpoint de diagnóstico `/api/mercadolivre/oauth-config`
 
-- api/index.py
-- requirements.txt
-- vercel.json
-- .env.example
-- supabase_schema.sql
-- README.md
-
-## Testes principais
+## Testes depois de subir
 
 - /api/health
-- /dashboard
-- /enterprise-final
-- /sprint1
-- /sprint2
-- /sprint3
 - /mercado-livre
-- /produtos
-- /anuncios
-- /relatorios
-- /ai
-- /database
+- /api/mercadolivre/oauth-config
 
-## APIs principais
+## Redirect URI Mercado Livre
 
-- GET /api/connectors/status
-- POST /api/connectors/parse/json
-- POST /api/connectors/parse/csv
-- POST /api/connectors/parse/xml
-- POST /api/import/from-payload/json
-- GET /api/sync/compare
-- GET /api/sync/marketplace-payload
-- POST /api/sync/run-demo
-- GET /api/anuncios/preview/SUP-001?category_id=MLBXXXX
-- GET /api/mercadolivre/status
-- GET /api/database/status
+No Mercado Livre Developers, configure exatamente:
 
-## Observação
+https://commercehub-vercel-mvp.vercel.app/mercadolivre/callback
 
-Esta versão foi consolidada em um único backend para evitar problemas de importação na Vercel e manter o projeto abaixo do limite do GitHub Web.
+Depois de conectar, copie para a Vercel:
+
+- ML_ACCESS_TOKEN
+- ML_REFRESH_TOKEN
+- ML_USER_ID
+- ML_TOKEN_EXPIRES_IN
+
+Depois faça Redeploy e teste:
+
+- /api/mercadolivre/status
+- /api/mercadolivre/me
