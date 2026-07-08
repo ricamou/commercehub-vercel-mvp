@@ -15,7 +15,7 @@ try:
 except Exception:
     httpx = None
 
-app = FastAPI(title="CommerceHub Final Engineer Fix", version="final-engineer-fix")
+app = FastAPI(title="CommerceHub Programa Pronto v1", version="programa-pronto-v1")
 
 
 def env(name: str, default: str = "") -> str:
@@ -842,7 +842,7 @@ pre{{background:#0b1220;color:white;padding:14px;border-radius:10px;overflow:aut
 </head>
 <body>
 <aside>
-<div class="logo"><b>CH</b><div><strong>CommerceHub</strong><span>Final Ready</span></div></div>
+<div class="logo"><b>CH</b><div><strong>CommerceHub</strong><span>Programa Pronto v1</span></div></div>
 <nav>
 <a href="/dashboard">Dashboard</a>
 <a href="/enterprise-final">Enterprise Final</a>
@@ -885,7 +885,7 @@ def dashboard():
 <section class="panel"><h2>Status</h2>
 <p><b>Mercado Livre conectado:</b> {bool(ML_ACCESS_TOKEN)}</p>
 <p><b>Banco:</b> {database_status()["mode"]}</p>
-<p><b>Versão:</b> CommerceHub Final Engineer Fix</p></section>
+<p><b>Versão:</b> CommerceHub Programa Pronto v1</p></section>
 """
     return layout("Dashboard", body)
 
@@ -937,14 +937,36 @@ def sprint3():
 def mercado_livre():
     s = ml_status()
     auth = ml_auth_url()
+    connected = bool(ML_ACCESS_TOKEN and ML_REFRESH_TOKEN and ML_USER_ID)
+    status_text = "CONECTADO" if connected else "NÃO CONECTADO"
+    status_color = "#16a34a" if connected else "#dc2626"
+
+    if connected:
+        action_html = """
+<p>O Mercado Livre já está conectado ao CommerceHub.</p>
+<p>Teste final da conta: <code>/api/mercadolivre/me</code></p>
+<p>Teste de categorias: <code>/api/mercadolivre/categories/search?q=suporte celular</code></p>
+"""
+    else:
+        action_html = f"""
+<p>O Mercado Livre ainda não está conectado.</p>
+{f'<a class="btn" href="{auth}">Conectar ao Mercado Livre</a>' if auth else '<p>Configure ML_CLIENT_ID e ML_CLIENT_SECRET na Vercel.</p>'}
+"""
+
     body = f"""
-<section class="panel"><h2>Status Mercado Livre</h2>
-<p><b>Client ID:</b> {s['client_id']}</p>
-<p><b>Client Secret:</b> {s['client_secret']}</p>
-<p><b>Redirect URI:</b> {s['redirect_uri']}</p>
-<p><b>Access Token:</b> {s['access_token']}</p>
-<p><b>User ID:</b> {s['user_id']}</p>
-{f'<a class="btn" href="{auth}">Conectar ao Mercado Livre</a>' if auth else '<p>Configure as credenciais na Vercel.</p>'}
+<section class="panel">
+<h2>Status Mercado Livre</h2>
+<h3 style="color:{status_color};">{status_text}</h3>
+<table>
+<tr><th>Item</th><th>Status</th></tr>
+<tr><td>Client ID</td><td>{s['client_id']}</td></tr>
+<tr><td>Client Secret</td><td>{s['client_secret']}</td></tr>
+<tr><td>Redirect URI</td><td>{s['redirect_uri']}</td></tr>
+<tr><td>Access Token</td><td>{s['access_token']}</td></tr>
+<tr><td>Refresh Token</td><td>{s['refresh_token']}</td></tr>
+<tr><td>User ID</td><td>{s['user_id']}</td></tr>
+</table>
+{action_html}
 </section>
 """
     return layout("Mercado Livre", body)
@@ -998,8 +1020,7 @@ async def ml_callback_page(code: str = ""):
         return layout("Callback Mercado Livre", """
 <section class="panel">
 <h2>Erro na conexão</h2>
-<p>O código OAuth não foi recebido.</p>
-<p>Volte em <code>/mercado-livre</code> e tente conectar novamente.</p>
+<p>O código OAuth não foi recebido. Volte em <code>/mercado-livre</code> e tente conectar novamente.</p>
 </section>
 """)
 
@@ -1008,78 +1029,57 @@ async def ml_callback_page(code: str = ""):
     if not result.get("success"):
         return layout("Callback Mercado Livre", f"""
 <section class="panel">
-<h2>Erro ao trocar código por token</h2>
-<p>O Mercado Livre retornou erro durante a autenticação.</p>
+<h2>Erro ao conectar Mercado Livre</h2>
 <pre>{result}</pre>
-<p>Verifique se o Redirect URI no Mercado Livre Developers está exatamente:</p>
-<pre>{ML_REDIRECT_URI}</pre>
 </section>
 """)
 
     data = result.get("data", {}) or {}
-    access_token = data.get("access_token", "")
-    refresh_token = data.get("refresh_token", "")
-    user_id = data.get("user_id", "")
-    expires_in = data.get("expires_in", "")
-
     save_result = await oauth_save_token(data)
 
     return layout("Mercado Livre conectado", f"""
 <section class="panel">
-<h2>Conexão realizada com sucesso</h2>
-<p><b>Token recebido e tentativa de gravação no Supabase executada.</b></p>
-<p>Se o Supabase estiver configurado, você não precisa copiar tokens manualmente.</p>
+<h2>Mercado Livre conectado com sucesso</h2>
+<p>A autenticação foi concluída e o CommerceHub recebeu os tokens da conta.</p>
+<p><b>Próximo teste:</b> abra <code>/api/mercadolivre/me</code>.</p>
 <pre>{save_result}</pre>
 <table>
 <tr><th>Variável</th><th>Valor</th></tr>
-<tr><td>ML_ACCESS_TOKEN</td><td><code>{access_token}</code></td></tr>
-<tr><td>ML_REFRESH_TOKEN</td><td><code>{refresh_token}</code></td></tr>
-<tr><td>ML_USER_ID</td><td><code>{user_id}</code></td></tr>
-<tr><td>ML_TOKEN_EXPIRES_IN</td><td><code>{expires_in}</code></td></tr>
+<tr><td>ML_ACCESS_TOKEN</td><td><code>{data.get('access_token', '')}</code></td></tr>
+<tr><td>ML_REFRESH_TOKEN</td><td><code>{data.get('refresh_token', '')}</code></td></tr>
+<tr><td>ML_USER_ID</td><td><code>{data.get('user_id', '')}</code></td></tr>
+<tr><td>ML_TOKEN_EXPIRES_IN</td><td><code>{data.get('expires_in', '')}</code></td></tr>
 </table>
-<p>Depois faça Redeploy na Vercel e teste:</p>
-<pre>/api/mercadolivre/status
-/api/mercadolivre/me</pre>
-</section>
-<section class="panel">
-<h2>Resposta completa</h2>
-<pre>{data}</pre>
 </section>
 """)
-
-
-
-
-@app.get("/setup", response_class=HTMLResponse)
-def setup_page():
-    return layout("Setup CommerceHub", f"""
-<section class="panel">
-<h2>Setup Supabase</h2>
-<p>Esta tela centraliza o SQL que precisa ser rodado no Supabase. O sistema continua funcionando em modo ENV, mas para salvar tokens automaticamente é necessário criar a tabela <code>oauth_tokens</code>.</p>
-<h3>SQL completo</h3>
-<pre>{SUPABASE_SCHEMA_SQL}</pre>
-</section>
-<section class="panel">
-<h2>Testes após deploy</h2>
-<pre>/api/health
-/api/database/status
-/api/setup/sql
-/api/mercadolivre/oauth-config
-/api/mercadolivre/token-store
-/api/mercadolivre/refresh-token
-/api/mercadolivre/me</pre>
-</section>
-""")
-
-
-@app.get("/api/setup/sql")
-def api_setup_sql():
-    return {"success": True, "sql": SUPABASE_SCHEMA_SQL}
 
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "commercehub", "version": "final-engineer-fix"}
+    return {"status": "ok", "service": "commercehub", "version": "programa-pronto-v1"}
+
+
+
+
+@app.get("/api/final-check")
+def api_final_check():
+    return {
+        "success": True,
+        "program": "CommerceHub",
+        "version": "programa-pronto-v1",
+        "status": "ready",
+        "mercado_livre_configured": bool(ML_CLIENT_ID and ML_CLIENT_SECRET and ML_ACCESS_TOKEN and ML_REFRESH_TOKEN and ML_USER_ID),
+        "database": database_status(),
+        "tests": [
+            "/api/health",
+            "/dashboard",
+            "/mercado-livre",
+            "/api/mercadolivre/status",
+            "/api/mercadolivre/me",
+            "/api/produtos",
+            "/api/anuncios/preview/SUP-001?category_id=MLBXXXX"
+        ]
+    }
 
 
 @app.get("/api/produtos")

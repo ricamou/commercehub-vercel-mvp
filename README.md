@@ -1,33 +1,35 @@
-# CommerceHub FINAL ENGINEER FIX
+# CommerceHub Programa Pronto v1
 
-Correção final preparada como engenheiro do projeto.
+Versão fechada do programa, sem novos módulos e sem expansão de escopo.
 
-## O que foi arrumado
+## Objetivo
 
-- Mantém o projeto pequeno para GitHub Web.
-- Adiciona `/setup` com o SQL visível dentro do próprio sistema.
-- Adiciona `/api/setup/sql`.
-- Corrige callback Mercado Livre em `/mercadolivre/callback`.
-- Adiciona store de tokens via Supabase.
-- Mantém fallback por Environment Variables.
-- Adiciona `/api/mercadolivre/token-store`.
-- Adiciona `/api/mercadolivre/refresh-token`.
-- `/api/mercadolivre/me` tenta renovar token automaticamente se receber 401.
+Entregar o sistema funcionando com:
 
-## Depois de subir
+- Dashboard
+- Produtos
+- Fornecedores
+- Anúncios
+- Relatórios
+- AI Engine
+- Mercado Livre OAuth
+- Refresh de token
+- Preview de anúncio
+- Testes finais
 
-Teste:
+## Teste final
+
+Depois de subir na Vercel:
 
 - /api/health
-- /setup
-- /api/setup/sql
-- /api/database/status
-- /api/mercadolivre/oauth-config
-- /api/mercadolivre/token-store
-- /api/mercadolivre/refresh-token
+- /api/final-check
+- /mercado-livre
+- /api/mercadolivre/status
 - /api/mercadolivre/me
+- /api/produtos
+- /api/anuncios/preview/SUP-001?category_id=MLBXXXX
 
-## Supabase
+## Observação
 
-O arquivo `supabase_schema.sql` está incluído.
-Ele cria a tabela `oauth_tokens`, necessária para salvar tokens automaticamente.
+O sistema funciona com tokens nas Environment Variables da Vercel.
+Supabase continua opcional para persistência.
