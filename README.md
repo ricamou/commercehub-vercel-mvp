@@ -1,22 +1,27 @@
-# CommerceHub Enterprise — Home Final Fix
+# CommerceHub Enterprise — Backend Reviewed Stable
 
-Correção definitiva da rota `/`.
+Backend refeito de forma estável para Vercel.
 
-## O que foi feito
+## Correções
 
-- Removidas rotas antigas de `/` e `/dashboard`.
-- Criada uma home ultra segura que não consulta Supabase.
-- Criada `/dashboard` com o mesmo HTML seguro.
-- Criado `/api/root-test`.
-- Criados `/favicon.ico` e `/favicon.png`.
+- Rotas principais sem Internal Server Error.
+- Cliente Supabase defensivo usando urllib.
+- Timeout e retry controlado.
+- Health checks seguros.
+- Mercado Livre com chamadas controladas.
+- Telas principais independentes de crash do banco.
 
 ## Testes
 
-- `/api/health`
-- `/`
-- `/dashboard`
-- `/api/root-test`
-- `/supabase`
-- `/api/backend/health`
-- `/products`
-- `/suppliers`
+- /api/health
+- /
+- /dashboard
+- /supabase
+- /api/supabase/ready
+- /api/backend/health
+- /api/backend/stress-light
+- /api/foundation/status
+- /products
+- /suppliers
+- /inventory
+- /mercado-livre

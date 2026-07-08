@@ -157,9 +157,3 @@ create table if not exists sync_jobs (
   created_at timestamptz default now(),
   finished_at timestamptz
 );
-
-create index if not exists idx_products_company_sku on products(company_id, sku);
-create index if not exists idx_orders_company_marketplace on orders(company_id, marketplace);
-create index if not exists idx_logs_company_created on logs(company_id, created_at desc);
-create index if not exists idx_queue_status on queue(status);
-create index if not exists idx_sync_jobs_status on sync_jobs(status);
