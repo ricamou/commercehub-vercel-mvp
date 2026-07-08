@@ -10,7 +10,7 @@ try:
 except Exception:
     httpx = None
 
-app = FastAPI(title="CommerceHub Enterprise Dashboard Safe Fix", version="enterprise-dashboard-safe-fix")
+app = FastAPI(title="CommerceHub Enterprise Dashboard Safe Fix", version="enterprise-home-final-fix")
 
 
 # =========================================================
@@ -850,30 +850,6 @@ async def supabase_page():
 
 
 
-@app.get("/", response_class=HTMLResponse)
-async def dashboard():
-    body = """
-<section class="grid">
-<div class="card"><span>Sistema</span><strong>OK</strong></div>
-<div class="card"><span>Versão</span><strong>Safe</strong></div>
-<div class="card"><span>Banco</span><strong>""" + db_mode().upper() + """</strong></div>
-<div class="card"><span>Status</span><strong>Online</strong></div>
-</section>
-
-<section class="panel">
-<h2>CommerceHub Enterprise</h2>
-<p>Dashboard seguro carregado. A página inicial não derruba mais o sistema mesmo se o Supabase oscilar.</p>
-<p>
-""" + button('/api/health','API Health') + button('/supabase','Supabase') + button('/api/backend/health','Backend Health') + button('/api/foundation/status','Foundation Status') + button('/products','Produtos') + button('/suppliers','Fornecedores') + """
-</p>
-</section>
-"""
-    return layout("Dashboard Enterprise", body)
-
-
-@app.get("/dashboard", response_class=HTMLResponse)
-async def dashboard_alias():
-    return await dashboard()
 
 
 @app.get("/foundation", response_class=HTMLResponse)
@@ -1060,7 +1036,7 @@ async def api_backend_health():
         }
     return {
         "success": all(v["success"] for v in results.values()),
-        "version": "enterprise-dashboard-safe-fix",
+        "version": "enterprise-home-final-fix",
         "db_mode": db_mode(),
         "transport": "urllib-sync-stable",
         "tables": results,
@@ -1092,7 +1068,7 @@ def api_routes():
 
 @app.get("/api/root-test")
 def api_root_test():
-    return {"success": True, "message": "Root route patched safely", "version": "enterprise-dashboard-safe-fix", "db_mode": db_mode()}
+    return {"success": True, "message": "Root route patched safely", "version": "enterprise-home-final-fix", "db_mode": db_mode()}
 
 
 @app.get("/favicon.ico")
@@ -1105,14 +1081,14 @@ def favicon_png():
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "commercehub", "version": "enterprise-dashboard-safe-fix"}
+    return {"status": "ok", "service": "commercehub", "version": "enterprise-home-final-fix"}
 
 
 @app.get("/api/foundation/status")
 def foundation_status():
     return {
         "success": True,
-        "version": "enterprise-dashboard-safe-fix",
+        "version": "enterprise-home-final-fix",
         "mode": db_mode(),
         "supabase_configured": db_configured(),
         "production_ready": db_configured(),
@@ -1354,3 +1330,88 @@ def amazon_status():
 @app.get("/api/magalu/status")
 def magalu_status():
     return {"success": True, "marketplace": "magalu", "status": "prepared", "flow": "Cadastro único -> Magalu"}
+
+
+# =========================================================
+# HOME FINAL FIX - ULTRA SAFE
+# =========================================================
+
+def safe_home_html():
+    return """<!doctype html>
+<html lang='pt-BR'>
+<head>
+<meta charset='utf-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1'>
+<title>CommerceHub</title>
+<style>
+body{margin:0;font-family:Arial,Helvetica,sans-serif;background:#f4f7fb;color:#111827}
+aside{position:fixed;left:0;top:0;bottom:0;width:240px;background:#0b1220;color:white;padding:20px}
+aside a{display:block;color:white;text-decoration:none;padding:9px;border-radius:8px;margin:4px 0}
+aside a:hover{background:#172033}
+main{margin-left:260px;padding:28px}
+.card{background:white;border:1px solid #d8dee8;border-radius:16px;padding:22px;margin:16px 0;box-shadow:0 8px 24px rgba(15,23,42,.05)}
+.btn{display:inline-block;background:#2563eb;color:white;text-decoration:none;padding:10px 14px;border-radius:10px;margin:6px 5px 6px 0}
+.grid{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:14px}
+.metric{background:white;border:1px solid #d8dee8;border-radius:14px;padding:18px}
+.metric span{display:block;color:#64748b}.metric strong{font-size:24px}
+</style>
+</head>
+<body>
+<aside>
+<h2>CH</h2>
+<p>CommerceHub<br>Home Final Fix</p>
+<a href='/'>Dashboard</a>
+<a href='/api/health'>API Health</a>
+<a href='/supabase'>Supabase</a>
+<a href='/api/foundation/status'>Foundation</a>
+<a href='/api/backend/health'>Backend Health</a>
+<a href='/products'>Produtos</a>
+<a href='/suppliers'>Fornecedores</a>
+</aside>
+<main>
+<h1>Dashboard Enterprise</h1>
+<p>CommerceHub carregado com rota inicial segura.</p>
+<div class='grid'>
+<div class='metric'><span>Sistema</span><strong>OK</strong></div>
+<div class='metric'><span>Versão</span><strong>Final</strong></div>
+<div class='metric'><span>Home</span><strong>Safe</strong></div>
+<div class='metric'><span>Status</span><strong>Online</strong></div>
+</div>
+<div class='card'>
+<h2>CommerceHub Enterprise</h2>
+<p>A rota inicial não consulta banco e não deve gerar Internal Server Error.</p>
+<a class='btn' href='/api/health'>API Health</a>
+<a class='btn' href='/api/root-test'>Root Test</a>
+<a class='btn' href='/supabase'>Supabase</a>
+<a class='btn' href='/api/backend/health'>Backend Health</a>
+<a class='btn' href='/products'>Produtos</a>
+<a class='btn' href='/suppliers'>Fornecedores</a>
+</div>
+</main>
+</body>
+</html>"""
+
+
+@app.get("/", response_class=HTMLResponse)
+def dashboard():
+    return HTMLResponse(content=safe_home_html(), status_code=200)
+
+
+@app.get("/dashboard", response_class=HTMLResponse)
+def dashboard_alias():
+    return HTMLResponse(content=safe_home_html(), status_code=200)
+
+
+@app.get("/api/root-test")
+def api_root_test():
+    return {"success": True, "message": "Root final fix active", "version": "enterprise-home-final-fix"}
+
+
+@app.get("/favicon.ico")
+def favicon_ico():
+    return {"ok": True}
+
+
+@app.get("/favicon.png")
+def favicon_png():
+    return {"ok": True}

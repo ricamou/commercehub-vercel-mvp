@@ -1,14 +1,14 @@
-# CommerceHub Enterprise — Dashboard Safe Fix
+# CommerceHub Enterprise — Home Final Fix
 
-Correção da página inicial `/`.
+Correção definitiva da rota `/`.
 
-## Corrigido
+## O que foi feito
 
-- `/` não consulta mais Supabase diretamente.
-- `/` não cai mais com Internal Server Error.
-- `/dashboard` aponta para o mesmo painel seguro.
-- Adicionado `/api/root-test`.
-- Adicionados `/favicon.ico` e `/favicon.png` para reduzir logs 404.
+- Removidas rotas antigas de `/` e `/dashboard`.
+- Criada uma home ultra segura que não consulta Supabase.
+- Criada `/dashboard` com o mesmo HTML seguro.
+- Criado `/api/root-test`.
+- Criados `/favicon.ico` e `/favicon.png`.
 
 ## Testes
 
