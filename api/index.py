@@ -15,7 +15,7 @@ try:
 except Exception:
     httpx = None
 
-app = FastAPI(title="CommerceHub Final OAuth Corrigido", version="final-oauth-corrigido")
+app = FastAPI(title="CommerceHub Final Supabase OAuth", version="final-supabase-oauth")
 
 
 def env(name: str, default: str = "") -> str:
@@ -490,6 +490,127 @@ def run_demo_sync():
     }
 
 
+
+
+# =========================================================
+# OAUTH TOKEN STORE - SUPABASE READY
+# =========================================================
+
+OAUTH_TABLE = "oauth_tokens"
+ML_MARKETPLACE = "mercado_livre"
+
+
+async def oauth_get_token():
+    """Busca token no Supabase. Se não existir, usa Environment Variables como fallback."""
+    fallback = {
+        "marketplace": ML_MARKETPLACE,
+        "access_token": ML_ACCESS_TOKEN,
+        "refresh_token": ML_REFRESH_TOKEN,
+        "user_id": ML_USER_ID,
+        "expires_in": env("ML_TOKEN_EXPIRES_IN", ""),
+        "source": "env"
+    }
+
+    if not database_status()["supabase_configured"] or not httpx:
+        return fallback
+
+    try:
+        headers = supabase_headers()
+        async with httpx.AsyncClient(timeout=30) as client:
+            response = await client.get(
+                f"{SUPABASE_URL}/rest/v1/{OAUTH_TABLE}?marketplace=eq.{ML_MARKETPLACE}&select=*&limit=1",
+                headers=headers
+            )
+        if response.status_code >= 400:
+            return {**fallback, "supabase_error": response.text}
+        data = response.json() if response.content else []
+        if not data:
+            return fallback
+        token = data[0]
+        return {
+            "marketplace": token.get("marketplace", ML_MARKETPLACE),
+            "access_token": token.get("access_token") or ML_ACCESS_TOKEN,
+            "refresh_token": token.get("refresh_token") or ML_REFRESH_TOKEN,
+            "user_id": token.get("user_id") or ML_USER_ID,
+            "expires_in": token.get("expires_in") or env("ML_TOKEN_EXPIRES_IN", ""),
+            "source": "supabase",
+            "raw": token
+        }
+    except Exception as exc:
+        return {**fallback, "supabase_error": str(exc)}
+
+
+async def oauth_save_token(data: dict):
+    """Salva/atualiza token no Supabase. Se Supabase não estiver configurado, retorna os valores para copiar."""
+    token = {
+        "marketplace": ML_MARKETPLACE,
+        "access_token": data.get("access_token", ""),
+        "refresh_token": data.get("refresh_token", ""),
+        "user_id": str(data.get("user_id", "")),
+        "expires_in": int(data.get("expires_in") or 0),
+        "token_type": data.get("token_type", "Bearer"),
+        "scope": data.get("scope", ""),
+        "updated_at": datetime.utcnow().isoformat()
+    }
+
+    if not database_status()["supabase_configured"] or not httpx:
+        return {
+            "success": True,
+            "source": "env_manual",
+            "message": "Supabase não configurado. Copie os tokens para a Vercel manualmente.",
+            "token": token
+        }
+
+    headers = supabase_headers()
+    headers["Prefer"] = "resolution=merge-duplicates,return=representation"
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post(
+            f"{SUPABASE_URL}/rest/v1/{OAUTH_TABLE}?on_conflict=marketplace",
+            headers=headers,
+            json=token
+        )
+
+    return {
+        "success": response.status_code < 400,
+        "source": "supabase",
+        "status_code": response.status_code,
+        "data": response.json() if response.content else None,
+        "token": token
+    }
+
+
+async def ml_refresh_access_token():
+    current = await oauth_get_token()
+    refresh_token = current.get("refresh_token") or ML_REFRESH_TOKEN
+
+    if not refresh_token:
+        return {"success": False, "message": "Refresh token não configurado."}
+    if not httpx:
+        return {"success": False, "message": "httpx não instalado."}
+
+    payload = {
+        "grant_type": "refresh_token",
+        "client_id": ML_CLIENT_ID,
+        "client_secret": ML_CLIENT_SECRET,
+        "refresh_token": refresh_token
+    }
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post("https://api.mercadolibre.com/oauth/token", data=payload)
+
+    result = {
+        "success": response.status_code < 400,
+        "status_code": response.status_code,
+        "data": response.json() if response.content else {}
+    }
+
+    if result["success"]:
+        result["save_result"] = await oauth_save_token(result["data"])
+
+    return result
+
+
 def ml_status():
     return {
         "client_id": bool(ML_CLIENT_ID),
@@ -497,7 +618,9 @@ def ml_status():
         "redirect_uri": ML_REDIRECT_URI,
         "access_token": bool(ML_ACCESS_TOKEN),
         "refresh_token": bool(ML_REFRESH_TOKEN),
-        "user_id": ML_USER_ID or None
+        "user_id": ML_USER_ID or None,
+        "supabase_configured": database_status()["supabase_configured"],
+        "token_store": "supabase" if database_status()["supabase_configured"] else "env"
     }
 
 
@@ -517,13 +640,54 @@ async def ml_exchange_code(code):
 
 
 async def ml_me():
-    if not ML_ACCESS_TOKEN:
-        return {"success": False, "message": "ML_ACCESS_TOKEN não configurado"}
+    current = await oauth_get_token()
+    access_token = current.get("access_token")
+
+    if not access_token:
+        return {"success": False, "message": "Access token não configurado."}
     if not httpx:
         return {"success": False, "message": "httpx não instalado"}
+
     async with httpx.AsyncClient(timeout=30) as client:
-        response = await client.get("https://api.mercadolibre.com/users/me", headers={"Authorization": f"Bearer {ML_ACCESS_TOKEN}"})
-        return {"success": response.status_code < 400, "status_code": response.status_code, "data": response.json() if response.content else {}}
+        response = await client.get(
+            "https://api.mercadolibre.com/users/me",
+            headers={"Authorization": f"Bearer {access_token}"}
+        )
+
+    if response.status_code != 401:
+        return {
+            "success": response.status_code < 400,
+            "status_code": response.status_code,
+            "token_source": current.get("source"),
+            "data": response.json() if response.content else {}
+        }
+
+    refreshed = await ml_refresh_access_token()
+
+    if not refreshed.get("success"):
+        return {
+            "success": False,
+            "status_code": 401,
+            "message": "Access token inválido e refresh token não conseguiu renovar.",
+            "token_source": current.get("source"),
+            "refresh_result": refreshed
+        }
+
+    new_access_token = refreshed.get("data", {}).get("access_token", "")
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.get(
+            "https://api.mercadolibre.com/users/me",
+            headers={"Authorization": f"Bearer {new_access_token}"}
+        )
+
+    return {
+        "success": response.status_code < 400,
+        "status_code": response.status_code,
+        "token_refreshed": True,
+        "save_result": refreshed.get("save_result"),
+        "data": response.json() if response.content else {}
+    }
 
 
 async def ml_categories(q):
@@ -536,14 +700,40 @@ async def ml_categories(q):
 
 
 async def ml_publish_item(payload):
-    if not ML_ACCESS_TOKEN:
-        return {"success": False, "message": "ML_ACCESS_TOKEN não configurado"}
+    current = await oauth_get_token()
+    access_token = current.get("access_token")
+
+    if not access_token:
+        return {"success": False, "message": "Access token não configurado"}
     if not httpx:
         return {"success": False, "message": "httpx não instalado"}
-    headers = {"Authorization": f"Bearer {ML_ACCESS_TOKEN}", "Content-Type": "application/json"}
+
+    headers = {"Authorization": f"Bearer {access_token}", "Content-Type": "application/json"}
+
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.post("https://api.mercadolibre.com/items", headers=headers, json=payload)
+
+    if response.status_code != 401:
         return {"success": response.status_code < 400, "status_code": response.status_code, "data": response.json() if response.content else {}, "payload_sent": payload}
+
+    refreshed = await ml_refresh_access_token()
+    if not refreshed.get("success"):
+        return {"success": False, "status_code": 401, "message": "Token inválido e refresh falhou.", "refresh_result": refreshed}
+
+    new_access_token = refreshed.get("data", {}).get("access_token", "")
+    headers = {"Authorization": f"Bearer {new_access_token}", "Content-Type": "application/json"}
+
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.post("https://api.mercadolibre.com/items", headers=headers, json=payload)
+
+    return {
+        "success": response.status_code < 400,
+        "status_code": response.status_code,
+        "token_refreshed": True,
+        "save_result": refreshed.get("save_result"),
+        "data": response.json() if response.content else {},
+        "payload_sent": payload
+    }
 
 
 def layout(title, body):
@@ -610,7 +800,7 @@ def dashboard():
 <section class="panel"><h2>Status</h2>
 <p><b>Mercado Livre conectado:</b> {bool(ML_ACCESS_TOKEN)}</p>
 <p><b>Banco:</b> {database_status()["mode"]}</p>
-<p><b>Versão:</b> CommerceHub Final OAuth Corrigido</p></section>
+<p><b>Versão:</b> CommerceHub Final Supabase OAuth</p></section>
 """
     return layout("Dashboard", body)
 
@@ -747,10 +937,14 @@ async def ml_callback_page(code: str = ""):
     user_id = data.get("user_id", "")
     expires_in = data.get("expires_in", "")
 
+    save_result = await oauth_save_token(data)
+
     return layout("Mercado Livre conectado", f"""
 <section class="panel">
 <h2>Conexão realizada com sucesso</h2>
-<p><b>Copie os valores abaixo para as Environment Variables da Vercel.</b></p>
+<p><b>Token recebido e tentativa de gravação no Supabase executada.</b></p>
+<p>Se o Supabase estiver configurado, você não precisa copiar tokens manualmente.</p>
+<pre>{save_result}</pre>
 <table>
 <tr><th>Variável</th><th>Valor</th></tr>
 <tr><td>ML_ACCESS_TOKEN</td><td><code>{access_token}</code></td></tr>
@@ -771,7 +965,7 @@ async def ml_callback_page(code: str = ""):
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "commercehub", "version": "final-oauth-corrigido"}
+    return {"status": "ok", "service": "commercehub", "version": "final-supabase-oauth"}
 
 
 @app.get("/api/produtos")
@@ -926,6 +1120,35 @@ def api_ml_oauth_config():
         "has_client_id": bool(ML_CLIENT_ID),
         "has_client_secret": bool(ML_CLIENT_SECRET),
         "auth_url": ml_auth_url()
+    }
+
+
+
+
+@app.get("/api/mercadolivre/token-store")
+async def api_ml_token_store():
+    token = await oauth_get_token()
+    safe = {k: v for k, v in token.items() if k not in ["access_token", "refresh_token", "raw"]}
+    safe["has_access_token"] = bool(token.get("access_token"))
+    safe["has_refresh_token"] = bool(token.get("refresh_token"))
+    return {"success": True, "token": safe}
+
+
+@app.get("/api/mercadolivre/refresh-token")
+async def api_ml_refresh_token():
+    result = await ml_refresh_access_token()
+    if not result.get("success"):
+        return result
+    data = result.get("data", {}) or {}
+    return {
+        "success": True,
+        "message": "Token renovado e salvo no Supabase se configurado.",
+        "save_result": result.get("save_result"),
+        "has_access_token": bool(data.get("access_token")),
+        "has_refresh_token": bool(data.get("refresh_token")),
+        "ML_USER_ID": data.get("user_id", ""),
+        "ML_TOKEN_EXPIRES_IN": data.get("expires_in", ""),
+        "raw": data
     }
 
 

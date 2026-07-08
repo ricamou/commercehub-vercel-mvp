@@ -68,3 +68,16 @@ create table if not exists events (
   payload jsonb default '{}',
   created_at timestamptz default now()
 );
+
+create table if not exists oauth_tokens (
+  id uuid primary key default uuid_generate_v4(),
+  marketplace text not null unique,
+  access_token text,
+  refresh_token text,
+  user_id text,
+  expires_in integer,
+  token_type text default 'Bearer',
+  scope text,
+  created_at timestamptz default now(),
+  updated_at timestamptz default now()
+);

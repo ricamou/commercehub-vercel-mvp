@@ -1,25 +1,36 @@
-# CommerceHub FINAL OAuth Refresh Fix
+# CommerceHub FINAL Supabase OAuth
 
-Correção aplicada:
+Agora os tokens do Mercado Livre são salvos no Supabase e renovados automaticamente.
 
-- `/api/mercadolivre/me` agora tenta renovar o token automaticamente se receber 401.
-- Novo endpoint: `/api/mercadolivre/refresh-token`.
-- Quando o token for renovado, o sistema retorna os novos valores para copiar na Vercel.
+## O que mudou
+
+- Nova tabela: `oauth_tokens`
+- Callback salva o token no Supabase
+- `/api/mercadolivre/me` busca token no Supabase
+- Se o token expirar, o sistema usa o refresh token e salva o novo token
+- Novo endpoint: `/api/mercadolivre/token-store`
+- Novo endpoint: `/api/mercadolivre/refresh-token`
+
+## Passo obrigatório
+
+No Supabase SQL Editor, rode o conteúdo do arquivo:
+
+`supabase_schema.sql`
+
+Depois confirme que a Vercel tem:
+
+- SUPABASE_URL
+- SUPABASE_SERVICE_ROLE_KEY
+- ML_CLIENT_ID
+- ML_CLIENT_SECRET
+- ML_REDIRECT_URI=https://commercehub-vercel-mvp.vercel.app/mercadolivre/callback
 
 ## Testes
 
-1. `/api/health`
-2. `/api/mercadolivre/status`
-3. `/api/mercadolivre/refresh-token`
-4. `/api/mercadolivre/me`
-
-## Se `/api/mercadolivre/refresh-token` retornar sucesso
-
-Copie os novos valores para a Vercel:
-
-- ML_ACCESS_TOKEN
-- ML_REFRESH_TOKEN
-- ML_USER_ID
-- ML_TOKEN_EXPIRES_IN
-
-Depois faça Redeploy.
+- /api/health
+- /api/database/status
+- /api/mercadolivre/oauth-config
+- /mercado-livre
+- /api/mercadolivre/token-store
+- /api/mercadolivre/refresh-token
+- /api/mercadolivre/me
