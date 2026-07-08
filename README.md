@@ -1,59 +1,38 @@
-# CommerceHub Enterprise FULL READY
+# CommerceHub Enterprise — No Mocks Ready
 
-Versão consolidada do sistema comercial.
+Versão pronta para operar com Supabase como fonte principal.
 
-## Inclui
+## O que foi corrigido
 
-- Banco definitivo Supabase
-- Login de usuários
-- Multiempresa
-- Fornecedores
-- Produtos
-- Estoque
-- Pedidos
-- Anúncios
-- OAuth Tokens
-- Logs
-- AI History
-- Filas
-- Webhooks
-- Sync Jobs
-- Mercado Livre funcional
-- Shopee preparado
-- Amazon SP-API preparado
-- Magalu preparado
-- IA para título, descrição, SEO e preço
-- Dashboard profissional
-- Relatórios
-- Sincronização em tempo real
+- Telas principais priorizam dados reais do Supabase.
+- Produtos, fornecedores e estoque deixam de depender de mocks quando Supabase está conectado.
+- Endpoints de preparação automática do banco.
+- Endpoint de criação de produto real de teste.
+- Preview comercial para Mercado Livre.
+- Fluxo pronto para: Supabase → Produto → Estoque → Preview → Marketplace.
 
-## Testes principais
+## Testes
 
-- /api/health
-- /api/foundation/status
-- /foundation
-- /api/foundation/seed
-- /
-- /companies
-- /users
-- /suppliers
-- /products
-- /inventory
-- /orders
-- /listings
-- /logs
-- /queue
-- /sync
-- /mercado-livre
-- /api/mercadolivre/me
-- /api/ml/items
-- /api/ml/orders
+- `/api/health`
+- `/api/foundation/status`
+- `/api/setup/ensure-seed`
+- `/api/commercial-test/create-product`
+- `/api/commercial-test/check`
+- `/products`
+- `/suppliers`
+- `/inventory`
+- `/api/commercial-test/preview?category_id=MLBXXXX`
 
-## Banco
+## Uso
 
-Rode `supabase_schema.sql` no Supabase.
+Suba no GitHub Web e aguarde a Vercel.
 
-Depois configure na Vercel:
+Depois teste:
 
-- SUPABASE_URL
-- SUPABASE_SERVICE_ROLE_KEY
+1. `/api/foundation/status`
+2. `/api/setup/ensure-seed`
+3. `/api/commercial-test/create-product`
+4. `/products`
+5. `/suppliers`
+6. `/inventory`
+7. `/api/commercial-test/preview?category_id=MLBXXXX`

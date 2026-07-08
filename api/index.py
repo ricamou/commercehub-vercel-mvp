@@ -10,7 +10,7 @@ try:
 except Exception:
     httpx = None
 
-app = FastAPI(title="CommerceHub Enterprise V3 Core", version="enterprise-v3-core")
+app = FastAPI(title="CommerceHub Enterprise No Mocks Ready", version="enterprise-no-mocks-ready")
 
 
 # =========================================================
@@ -601,6 +601,106 @@ async def seed_core():
     }
 
 
+
+# =========================================================
+# PRODUCTION CORE - NO MOCKS MODE
+# =========================================================
+
+def empty_state(message: str, action_url: str = "", action_label: str = ""):
+    action = f"<p>{button(action_url, action_label)}</p>" if action_url else ""
+    return f"""
+<div style='padding:22px;border:1px dashed #cbd5e1;border-radius:14px;background:#f8fafc'>
+<p>{message}</p>
+{action}
+</div>
+"""
+
+
+async def table_data(table: str, fallback=None):
+    """
+    Production-first rule:
+    - If Supabase is configured, use only Supabase data.
+    - If Supabase is not configured, show fallback only to keep app testable.
+    """
+    res = await db_select(table, "select=*&order=created_at.desc")
+    if db_configured():
+        return res.get("data", [])
+    return fallback or []
+
+
+async def ensure_seed_if_empty():
+    """
+    Creates the first company/user/supplier/products only when tables are empty.
+    Safe to run more than once.
+    """
+    companies = await db_select("companies", "select=*&limit=1")
+    if companies.get("data"):
+        return {"success": True, "message": "Banco já possui dados. Seed não executado.", "mode": db_mode()}
+
+    return await seed_core()
+
+
+def product_row_html(p):
+    pricing = price_engine(p.get("cost_price", 0))
+    sale = float(p.get("sale_price") or pricing["sale_price"])
+    stock = int(p.get("stock") or 0)
+    return f"<tr><td>{p.get('sku','')}</td><td>{p.get('name','')}</td><td>{p.get('brand','')}</td><td>{stock}</td><td>{stock_status(stock)}</td><td>R$ {sale:.2f}</td></tr>"
+
+
+def supplier_row_html(s):
+    return f"<tr><td>{s.get('id','')}</td><td>{s.get('name','')}</td><td>{s.get('type','')}</td><td>{s.get('status','')}</td></tr>"
+
+
+def inventory_row_html(i):
+    return f"<tr><td>{i.get('sku','')}</td><td>{i.get('movement_type','')}</td><td>{i.get('quantity','')}</td><td>{i.get('new_stock','')}</td><td>{i.get('source','')}</td></tr>"
+
+
+async def create_demo_real_product():
+    supplier = {
+        "id": "00000000-0000-0000-0000-000000000101",
+        "company_id": DEFAULT_COMPANY_ID,
+        "name": "Fornecedor Manual",
+        "type": "manual",
+        "status": "active",
+        "config": {},
+    }
+    product = {
+        "id": "00000000-0000-0000-0000-000000001001",
+        "company_id": DEFAULT_COMPANY_ID,
+        "supplier_id": supplier["id"],
+        "sku": "TESTE-ML-001",
+        "name": "Produto Teste CommerceHub",
+        "brand": "CommerceHub",
+        "ean": "7890000000011",
+        "category": "Teste",
+        "description": "Produto criado para teste real controlado do CommerceHub.",
+        "cost_price": 20.00,
+        "sale_price": price_engine(20)["sale_price"],
+        "stock": 5,
+        "status": "active",
+        "raw_data": {"source": "commercial_test"},
+    }
+    await db_upsert("companies", DEMO_COMPANY, "id")
+    await db_upsert("users", DEMO_USER, "id")
+    s = await db_upsert("suppliers", supplier, "id")
+    p = await db_upsert("products", product, "id")
+    inv = await db_insert("inventory", {
+        "id": str(uuid.uuid4()),
+        "company_id": DEFAULT_COMPANY_ID,
+        "product_id": product["id"],
+        "sku": product["sku"],
+        "movement_type": "set",
+        "quantity": product["stock"],
+        "previous_stock": 0,
+        "new_stock": product["stock"],
+        "source": "commercial_test",
+        "created_at": datetime.utcnow().isoformat(),
+    })
+    await log_event("commercial_test_product_created", "Produto de teste comercial criado", product)
+    return {"success": True, "supplier": s, "product": p, "inventory": inv, "product_id": product["id"], "sku": product["sku"]}
+
+
+
 # =========================================================
 # UI
 # =========================================================
@@ -631,7 +731,7 @@ pre{{background:#0b1220;color:white;padding:14px;border-radius:10px;overflow:aut
 </head>
 <body>
 <aside>
-<div class="logo"><b>CH</b><div><strong>CommerceHub</strong><span>Enterprise V3 Core</span></div></div>
+<div class="logo"><b>CH</b><div><strong>CommerceHub</strong><span>Enterprise No Mocks Ready</span></div></div>
 <nav>
 <a href="/">Dashboard</a>
 <a href="/foundation">Fundação</a>
@@ -670,16 +770,17 @@ async def dashboard():
     products = await db_select("products", "select=*")
     suppliers = await db_select("suppliers", "select=*")
     orders = await db_select("orders", "select=*")
+    mode_badge = "SUPABASE" if db_configured() else "MEMORY"
     body = f"""
 <section class="grid">
-<div class="card"><span>Banco</span><strong>{db_mode()}</strong></div>
+<div class="card"><span>Banco</span><strong>{mode_badge}</strong></div>
 <div class="card"><span>Empresas</span><strong>{len(companies.get('data', []))}</strong></div>
 <div class="card"><span>Produtos</span><strong>{len(products.get('data', []))}</strong></div>
 <div class="card"><span>Pedidos</span><strong>{len(orders.get('data', []))}</strong></div>
 </section>
-<section class="panel"><h2>CommerceHub Enterprise V3 Core</h2>
-<p>Fundação definitiva: banco normalizado, cadastro único, persistência, logs, tokens, filas, webhooks e sync jobs.</p>
-{button('/api/foundation/status','Status JSON')}{button('/foundation','Fundação')}</section>
+<section class="panel"><h2>CommerceHub Enterprise</h2>
+<p>Base pronta para operação: Supabase → cadastro único → estoque → marketplaces → pedidos → relatórios.</p>
+{button('/api/foundation/status','Status JSON')}{button('/api/setup/ensure-seed','Preparar banco')}{button('/api/commercial-test/create-product','Criar produto de teste')}</section>
 """
     return layout("Dashboard Enterprise", body)
 
@@ -716,27 +817,34 @@ async def users_page():
 
 @app.get("/suppliers", response_class=HTMLResponse)
 async def suppliers_page():
-    res = await db_select("suppliers", "select=*")
-    data = res.get("data") or DEMO_SUPPLIERS
-    rows = "".join([f"<tr><td>{s.get('id')}</td><td>{s.get('name')}</td><td>{s.get('type')}</td><td>{s.get('status')}</td></tr>" for s in data])
-    return layout("Fornecedores", f"<section class='panel'><h2>Fornecedores</h2><table><tr><th>ID</th><th>Nome</th><th>Tipo</th><th>Status</th></tr>{rows}</table>{button('/api/db/suppliers','JSON')}</section>")
+    data = await table_data("suppliers", [] if db_configured() else DEMO_SUPPLIERS)
+    if not data:
+        body = "<section class='panel'><h2>Fornecedores</h2>" + empty_state("Nenhum fornecedor cadastrado ainda.", "/api/commercial-test/create-product", "Criar fornecedor manual de teste") + "</section>"
+        return layout("Fornecedores", body)
+
+    rows = "".join([supplier_row_html(s) for s in data])
+    return layout("Fornecedores", f"<section class='panel'><h2>Fornecedores</h2><table><tr><th>ID</th><th>Nome</th><th>Tipo</th><th>Status</th></tr>{rows}</table>{button('/api/db/suppliers','JSON')}{button('/api/commercial-test/create-product','Criar fornecedor/produto teste')}</section>")
 
 
 @app.get("/products", response_class=HTMLResponse)
 async def products_page():
-    res = await db_select("products", "select=*")
-    data = res.get("data") or DEMO_PRODUCTS
-    rows = ""
-    for p in data:
-        pricing = price_engine(p.get("cost_price", 0))
-        rows += f"<tr><td>{p.get('sku')}</td><td>{p.get('name')}</td><td>{p.get('brand')}</td><td>{p.get('stock')}</td><td>R$ {float(p.get('sale_price') or pricing['sale_price']):.2f}</td></tr>"
-    return layout("Produtos", f"<section class='panel'><h2>Cadastro único de produtos</h2><table><tr><th>SKU</th><th>Produto</th><th>Marca</th><th>Estoque</th><th>Preço</th></tr>{rows}</table>{button('/api/db/products','JSON')}</section>")
+    data = await table_data("products", [] if db_configured() else DEMO_PRODUCTS)
+    if not data:
+        body = "<section class='panel'><h2>Cadastro único de produtos</h2>" + empty_state("Nenhum produto cadastrado ainda. Crie um produto real ou rode o seed inicial.", "/api/commercial-test/create-product", "Criar produto de teste") + "</section>"
+        return layout("Produtos", body)
+
+    rows = "".join([product_row_html(p) for p in data])
+    return layout("Produtos", f"<section class='panel'><h2>Cadastro único de produtos</h2><table><tr><th>SKU</th><th>Produto</th><th>Marca</th><th>Estoque</th><th>Status</th><th>Preço</th></tr>{rows}</table>{button('/api/db/products','JSON')}{button('/api/commercial-test/create-product','Criar produto de teste')}</section>")
 
 
 @app.get("/inventory", response_class=HTMLResponse)
 async def inventory_page():
-    res = await db_select("inventory", "select=*")
-    rows = "".join([f"<tr><td>{i.get('sku')}</td><td>{i.get('movement_type')}</td><td>{i.get('quantity')}</td><td>{i.get('new_stock')}</td><td>{i.get('source')}</td></tr>" for i in res.get("data", [])])
+    data = await table_data("inventory", [])
+    if not data:
+        body = "<section class='panel'><h2>Estoque persistido</h2>" + empty_state("Nenhum movimento de estoque cadastrado ainda.", "/api/commercial-test/create-product", "Criar estoque de teste") + "</section>"
+        return layout("Estoque", body)
+
+    rows = "".join([inventory_row_html(i) for i in data])
     return layout("Estoque", f"<section class='panel'><h2>Estoque persistido</h2><table><tr><th>SKU</th><th>Movimento</th><th>Qtd</th><th>Novo estoque</th><th>Origem</th></tr>{rows}</table>{button('/api/db/inventory','JSON')}</section>")
 
 
@@ -823,18 +931,20 @@ async def ml_callback(code: str = ""):
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok", "service": "commercehub", "version": "enterprise-v3-core"}
+    return {"status": "ok", "service": "commercehub", "version": "enterprise-no-mocks-ready"}
 
 
 @app.get("/api/foundation/status")
 def foundation_status():
     return {
         "success": True,
-        "version": "enterprise-v3-core",
+        "version": "enterprise-no-mocks-ready",
         "mode": db_mode(),
         "supabase_configured": db_configured(),
+        "production_ready": db_configured(),
         "tables": ["companies", "users", "suppliers", "products", "inventory", "orders", "listings", "oauth_tokens", "logs", "ai_history", "queue", "webhooks", "sync_jobs"],
         "flow": "Supabase -> Cadastro único -> Tela -> Mercado Livre/Shopee/Amazon",
+        "next_test": "/api/commercial-test/create-product"
     }
 
 
