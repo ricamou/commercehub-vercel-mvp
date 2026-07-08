@@ -1,0 +1,380 @@
+{
+  "info": {
+    "name": "CommerceHub QA Testes",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "item": [
+    {
+      "name": "Health",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/health",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "health"
+          ],
+          "query": []
+        }
+      }
+    },
+    {
+      "name": "Dashboard",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/dashboard",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "dashboard"
+          ],
+          "query": []
+        }
+      }
+    },
+    {
+      "name": "Enterprise Final",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/enterprise-final",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "enterprise-final"
+          ],
+          "query": []
+        }
+      }
+    },
+    {
+      "name": "Sprint 1",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/sprint1",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "sprint1"
+          ],
+          "query": []
+        }
+      }
+    },
+    {
+      "name": "Sprint 2",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/sprint2",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "sprint2"
+          ],
+          "query": []
+        }
+      }
+    },
+    {
+      "name": "Sprint 3",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/sprint3",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "sprint3"
+          ],
+          "query": []
+        }
+      }
+    },
+    {
+      "name": "Produtos API",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/produtos",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "produtos"
+          ],
+          "query": []
+        }
+      }
+    },
+    {
+      "name": "Fornecedores API",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/fornecedores",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "fornecedores"
+          ],
+          "query": []
+        }
+      }
+    },
+    {
+      "name": "Connectors Status",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/connectors/status",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "connectors",
+            "status"
+          ],
+          "query": []
+        }
+      }
+    },
+    {
+      "name": "Import Summary Mock",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/import/summary/mock",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "import",
+            "summary",
+            "mock"
+          ],
+          "query": []
+        }
+      }
+    },
+    {
+      "name": "Sync Compare",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/sync/compare",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "sync",
+            "compare"
+          ],
+          "query": []
+        }
+      }
+    },
+    {
+      "name": "Sync Marketplace Payload",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/sync/marketplace-payload",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "sync",
+            "marketplace-payload"
+          ],
+          "query": []
+        }
+      }
+    },
+    {
+      "name": "Pricing Report",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/pricing/report",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "pricing",
+            "report"
+          ],
+          "query": []
+        }
+      }
+    },
+    {
+      "name": "AI Report",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/ai/report",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "ai",
+            "report"
+          ],
+          "query": []
+        }
+      }
+    },
+    {
+      "name": "Preview Anúncio",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/anuncios/preview/SUP-001?category_id=MLBXXXX",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "anuncios",
+            "preview",
+            "SUP-001"
+          ],
+          "query": [
+            {
+              "key": "category_id",
+              "value": "MLBXXXX"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "name": "Mercado Livre Status",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/mercadolivre/status",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "mercadolivre",
+            "status"
+          ],
+          "query": []
+        }
+      }
+    },
+    {
+      "name": "Database Status",
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{base_url}}/api/database/status",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "database",
+            "status"
+          ],
+          "query": []
+        }
+      }
+    },
+    {
+      "name": "POST Connector Parse JSON",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"payload\": {\n    \"sku\": \"TEST-001\",\n    \"name\": \"Produto Teste\",\n    \"brand\": \"Marca Teste\",\n    \"ean\": \"7890000000000\",\n    \"category\": \"Teste\",\n    \"description\": \"Produto de teste\",\n    \"cost_price\": 20,\n    \"stock\": 10\n  }\n}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/connectors/parse/json",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "connectors",
+            "parse",
+            "json"
+          ]
+        }
+      }
+    },
+    {
+      "name": "POST Sync Run Demo",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{}"
+        },
+        "url": {
+          "raw": "{{base_url}}/api/sync/run-demo",
+          "host": [
+            "{{base_url}}"
+          ],
+          "path": [
+            "api",
+            "sync",
+            "run-demo"
+          ]
+        }
+      }
+    }
+  ]
+}
