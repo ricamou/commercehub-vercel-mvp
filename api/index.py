@@ -938,3 +938,188 @@ def env_finder_checklist():
             "/api/test/supabase-insert"
         ]
     }
+
+
+
+
+# =========================
+# SPRINT 8 - RAW HTTP DIAGNOSTIC
+# =========================
+
+@app.get("/raw-http", response_class=HTMLResponse)
+async def raw_http_page():
+    content = """
+<div class='card'>
+<h2>Raw HTTP Diagnostic</h2>
+<p>Teste direto e bruto contra Supabase, sem camada intermediária. Captura status HTTP, headers, body e traceback.</p>
+<a class='btn' href='/api/raw/supabase-url'>URL carregada</a>
+<a class='btn' href='/api/raw/rest-open'>REST sem auth</a>
+<a class='btn' href='/api/raw/rest-auth'>REST com service role</a>
+<a class='btn' href='/api/raw/select-companies'>SELECT companies raw</a>
+<a class='btn' href='/api/raw/full'>Diagnóstico completo</a>
+</div>
+"""
+    return HTMLResponse(shell("Raw HTTP Diagnostic", content))
+
+def _raw_mask(v):
+    if not v:
+        return {"present": False, "length": 0, "preview": ""}
+    v = str(v).strip()
+    return {"present": True, "length": len(v), "preview": (v[:14] + "..." + v[-8:]) if len(v) > 26 else v[:6] + "..."}
+
+def _raw_clean(v):
+    if v is None:
+        return ""
+    v = str(v).strip()
+    if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+        v = v[1:-1].strip()
+    return v
+
+def _raw_env():
+    import os
+    url = _raw_clean(os.getenv("SUPABASE_URL") or os.getenv("NEXT_PUBLIC_SUPABASE_URL"))
+    service = _raw_clean(os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("SUPABASE_KEY"))
+    anon = _raw_clean(os.getenv("SUPABASE_ANON_KEY") or os.getenv("NEXT_PUBLIC_SUPABASE_ANON_KEY"))
+    return url, service, anon
+
+async def _raw_httpx_request(label, method, url, headers=None, json_body=None):
+    import traceback
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=30.0, follow_redirects=False) as client:
+            resp = await client.request(method, url, headers=headers or {}, json=json_body)
+            return {
+                "label": label,
+                "success": 200 <= resp.status_code < 400,
+                "transport": "httpx_raw",
+                "method": method,
+                "url_masked": _raw_mask(url),
+                "status_code": resp.status_code,
+                "headers": {k: v for k, v in list(resp.headers.items())[:20]},
+                "body": resp.text[:3000],
+                "error": "",
+            }
+    except Exception as exc:
+        return {
+            "label": label,
+            "success": False,
+            "transport": "httpx_raw",
+            "method": method,
+            "url_masked": _raw_mask(url),
+            "status_code": 0,
+            "headers": {},
+            "body": "",
+            "error_type": exc.__class__.__name__,
+            "error": str(exc),
+            "traceback": traceback.format_exc()[-5000:],
+        }
+
+@app.get("/api/raw/supabase-url")
+def raw_supabase_url():
+    from urllib.parse import urlparse
+    url, service, anon = _raw_env()
+    parsed = urlparse(url) if url else None
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "supabase_url": _raw_mask(url),
+        "service_role": _raw_mask(service),
+        "anon_key": _raw_mask(anon),
+        "parsed": {
+            "scheme": parsed.scheme if parsed else "",
+            "hostname": parsed.hostname if parsed else "",
+            "path": parsed.path if parsed else "",
+        },
+        "flags": {
+            "url_is_placeholder": "seu-projeto" in url.lower() or "projectref" in url.lower() or "xxxx" in url.lower(),
+            "service_key_too_short": len(service) < 120,
+            "anon_key_missing": not bool(anon),
+            "anon_key_too_short": bool(anon) and len(anon) < 120,
+        }
+    }
+
+@app.get("/api/raw/rest-open")
+async def raw_rest_open():
+    url, service, anon = _raw_env()
+    if not url:
+        return {"success": False, "version": APP_VERSION, "error": "SUPABASE_URL ausente"}
+    return await _raw_httpx_request("rest_open_no_auth", "GET", f"{url.rstrip('/')}/rest/v1/")
+
+@app.get("/api/raw/rest-auth")
+async def raw_rest_auth():
+    url, service, anon = _raw_env()
+    if not url:
+        return {"success": False, "version": APP_VERSION, "error": "SUPABASE_URL ausente"}
+    headers = {
+        "apikey": service,
+        "Authorization": f"Bearer {service}",
+        "Accept": "application/json",
+        "User-Agent": "CommerceHubRawDiagnostic/1.0",
+    }
+    return await _raw_httpx_request("rest_root_with_service_role", "GET", f"{url.rstrip('/')}/rest/v1/", headers=headers)
+
+@app.get("/api/raw/select-companies")
+async def raw_select_companies():
+    url, service, anon = _raw_env()
+    if not url:
+        return {"success": False, "version": APP_VERSION, "error": "SUPABASE_URL ausente"}
+    headers = {
+        "apikey": service,
+        "Authorization": f"Bearer {service}",
+        "Accept": "application/json",
+        "User-Agent": "CommerceHubRawDiagnostic/1.0",
+    }
+    return await _raw_httpx_request(
+        "select_companies_with_service_role",
+        "GET",
+        f"{url.rstrip('/')}/rest/v1/companies?select=*&limit=1",
+        headers=headers
+    )
+
+@app.get("/api/raw/full")
+async def raw_full():
+    steps = {}
+    try:
+        steps["env"] = raw_supabase_url()
+    except Exception as exc:
+        steps["env"] = {"success": False, "error": str(exc)}
+    try:
+        steps["rest_open"] = await raw_rest_open()
+    except Exception as exc:
+        steps["rest_open"] = {"success": False, "error": str(exc)}
+    try:
+        steps["rest_auth"] = await raw_rest_auth()
+    except Exception as exc:
+        steps["rest_auth"] = {"success": False, "error": str(exc)}
+    try:
+        steps["select_companies"] = await raw_select_companies()
+    except Exception as exc:
+        steps["select_companies"] = {"success": False, "error": str(exc)}
+
+    env = steps.get("env", {})
+    flags = env.get("flags", {})
+    select_status = steps.get("select_companies", {}).get("status_code", 0)
+
+    if flags.get("url_is_placeholder"):
+        diagnosis = "SUPABASE_URL ainda é placeholder. Corrija na Vercel."
+    elif flags.get("service_key_too_short"):
+        diagnosis = "SUPABASE_SERVICE_ROLE_KEY está curta/inválida. Corrija na Vercel."
+    elif select_status == 401:
+        diagnosis = "Supabase respondeu 401: chave inválida ou Authorization incorreto."
+    elif select_status == 403:
+        diagnosis = "Supabase respondeu 403: permissão/RLS/policy."
+    elif select_status == 404:
+        diagnosis = "Supabase respondeu 404: tabela/schema/URL REST."
+    elif select_status == 200:
+        diagnosis = "Conexão raw OK. O problema está em outra camada."
+    elif select_status == 0:
+        diagnosis = "Não houve resposta HTTP. Veja traceback em steps.select_companies."
+    else:
+        diagnosis = f"Resposta HTTP inesperada: {select_status}."
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "diagnosis": diagnosis,
+        "steps": steps
+    }

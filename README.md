@@ -1,12 +1,15 @@
-# CommerceHub Enterprise V4 - Sprint 7 Env Error Finder
+# CommerceHub Enterprise V4 - Sprint 8 Raw HTTP Diagnostic
 
-Identifica exatamente erro nas variáveis.
+Diagnóstico HTTP bruto do Supabase.
 
 Teste:
 - /api/health
-- /env-finder
-- /api/env-finder/full
-- /api/env-finder/checklist
+- /raw-http
+- /api/raw/supabase-url
+- /api/raw/rest-open
+- /api/raw/rest-auth
+- /api/raw/select-companies
+- /api/raw/full
 
 Health esperado:
-enterprise-v4-sprint7-env-error-finder
+enterprise-v4-sprint8-raw-http-diagnostic
