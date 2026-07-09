@@ -753,3 +753,188 @@ def vercel_env_audit():
             "Depois faça Redeploy e teste /api/connectivity/full."
         ]
     }
+
+
+
+
+# =========================
+# SPRINT 7 - ENV ERROR FINDER
+# =========================
+
+@app.get("/env-finder", response_class=HTMLResponse)
+async def env_finder_page():
+    content = """
+<div class='card'>
+<h2>Env Error Finder</h2>
+<p>Identifica exatamente erros de URL, service role, anon key, aspas, espaços, placeholder e nomes incorretos.</p>
+<a class='btn' href='/api/env-finder/full'>Executar diagnóstico completo</a>
+<a class='btn' href='/api/env-finder/checklist'>Checklist de correção</a>
+<a class='btn' href='/api/vercel/env-audit'>Auditoria anterior</a>
+</div>
+"""
+    return HTMLResponse(shell("Env Error Finder", content))
+
+def _raw_env(name):
+    import os
+    return os.getenv(name)
+
+def _clean_env_value(value):
+    if value is None:
+        return ""
+    value = str(value)
+    cleaned = value.strip()
+    if (cleaned.startswith('"') and cleaned.endswith('"')) or (cleaned.startswith("'") and cleaned.endswith("'")):
+        cleaned = cleaned[1:-1].strip()
+    return cleaned
+
+def _masked(value):
+    if not value:
+        return {"present": False, "length": 0, "preview": ""}
+    return {"present": True, "length": len(value), "preview": (value[:10] + "..." + value[-6:]) if len(value) > 22 else value[:5] + "..."}
+
+def _analyze_var(name, expected_type):
+    import re
+    raw = _raw_env(name)
+    cleaned = _clean_env_value(raw)
+    issues = []
+    severity = "ok"
+
+    if raw is None:
+        return {
+            "name": name,
+            "present": False,
+            "expected_type": expected_type,
+            "status": "missing",
+            "severity": "critical",
+            "raw_length": 0,
+            "cleaned": _masked(""),
+            "issues": [f"{name} não existe na Vercel."]
+        }
+
+    if raw != cleaned:
+        issues.append("Valor tem espaços, aspas ou quebra de linha antes/depois. O sistema limpou para testar, mas corrija na Vercel.")
+
+    if "\n" in str(raw) or "\r" in str(raw):
+        issues.append("Valor contém quebra de linha.")
+    if str(raw).startswith(" ") or str(raw).endswith(" "):
+        issues.append("Valor contém espaço no início ou no fim.")
+    if str(raw).startswith('"') or str(raw).startswith("'"):
+        issues.append("Valor pode ter aspas no início.")
+    if str(raw).endswith('"') or str(raw).endswith("'"):
+        issues.append("Valor pode ter aspas no fim.")
+
+    low = cleaned.lower()
+
+    if expected_type == "supabase_url":
+        if not cleaned.startswith("https://"):
+            issues.append("SUPABASE_URL precisa começar com https://")
+        if not cleaned.endswith(".supabase.co"):
+            issues.append("SUPABASE_URL precisa terminar com .supabase.co")
+        if "seu-projeto" in low or "seuprojeto" in low or "projectref" in low or "example" in low or "xxxx" in low:
+            issues.append("SUPABASE_URL é placeholder/exemplo, não é URL real.")
+        if not re.match(r"^https://[a-z0-9]{15,30}\.supabase\.co$", cleaned):
+            issues.append("Formato esperado: https://PROJECTREF.supabase.co com project ref real em minúsculas.")
+        if len(cleaned) < 35:
+            issues.append("SUPABASE_URL parece curta demais.")
+
+    if expected_type == "jwt":
+        parts = cleaned.split(".")
+        if len(parts) != 3:
+            issues.append("Chave não parece JWT válida. Uma chave Supabase normalmente tem 3 partes separadas por ponto.")
+        if not cleaned.startswith("eyJ"):
+            issues.append("Chave Supabase normalmente começa com eyJ.")
+        if len(cleaned) < 120:
+            issues.append("Chave parece curta demais. Service Role/Anon normalmente tem mais de 120 caracteres.")
+        if "service_role" == low or "anon" == low or "sua-chave" in low or "xxxx" in low or "example" in low:
+            issues.append("Chave parece placeholder/exemplo.")
+        if " " in cleaned:
+            issues.append("Chave contém espaço interno.")
+
+    if expected_type == "url":
+        if not cleaned.startswith("http"):
+            issues.append("URL precisa começar com http ou https.")
+
+    if issues:
+        severity = "critical" if any("placeholder" in x.lower() or "não existe" in x.lower() or "curta demais" in x.lower() for x in issues) else "warning"
+
+    return {
+        "name": name,
+        "present": True,
+        "expected_type": expected_type,
+        "status": "ok" if not issues else "invalid",
+        "severity": severity,
+        "raw_length": len(str(raw)),
+        "cleaned": _masked(cleaned),
+        "issues": issues
+    }
+
+@app.get("/api/env-finder/full")
+def env_finder_full():
+    checks = [
+        _analyze_var("SUPABASE_URL", "supabase_url"),
+        _analyze_var("SUPABASE_SERVICE_ROLE_KEY", "jwt"),
+        _analyze_var("SUPABASE_ANON_KEY", "jwt"),
+        _analyze_var("ML_CLIENT_ID", "text"),
+        _analyze_var("ML_CLIENT_SECRET", "text"),
+        _analyze_var("ML_REDIRECT_URI", "url"),
+    ]
+
+    fallback_checks = [
+        _analyze_var("NEXT_PUBLIC_SUPABASE_URL", "supabase_url"),
+        _analyze_var("SUPABASE_KEY", "jwt"),
+        _analyze_var("NEXT_PUBLIC_SUPABASE_ANON_KEY", "jwt"),
+    ]
+
+    critical = [c for c in checks if c["severity"] == "critical"]
+    warnings = [c for c in checks + fallback_checks if c["severity"] == "warning"]
+
+    exact_errors = []
+    for c in checks:
+        for issue in c["issues"]:
+            exact_errors.append(f"{c['name']}: {issue}")
+
+    if not exact_errors:
+        exact_errors.append("Nenhum erro crítico encontrado no formato das variáveis principais.")
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "production_ready": len(critical) == 0,
+        "critical_count": len(critical),
+        "warning_count": len(warnings),
+        "exact_errors": exact_errors,
+        "required_checks": checks,
+        "fallback_checks": fallback_checks,
+        "decision": "Corrigir variáveis críticas na Vercel e fazer Redeploy." if critical else "Variáveis principais parecem corretas. Próximo passo: testar /api/connectivity/full.",
+        "next_test_after_fix": "/api/connectivity/full"
+    }
+
+@app.get("/api/env-finder/checklist")
+def env_finder_checklist():
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "where_to_fix": "Vercel > Project > Settings > Environment Variables",
+        "set_exactly_these_names": {
+            "SUPABASE_URL": "Copiar do Supabase > Project Settings > API > Project URL",
+            "SUPABASE_SERVICE_ROLE_KEY": "Copiar do Supabase > Project Settings > API > service_role secret. Backend only.",
+            "SUPABASE_ANON_KEY": "Copiar do Supabase > Project Settings > API > anon public.",
+            "ML_CLIENT_ID": "Mercado Livre App ID",
+            "ML_CLIENT_SECRET": "Mercado Livre Client Secret",
+            "ML_REDIRECT_URI": "https://commercehub-vercel-mvp.vercel.app/mercadolivre/callback"
+        },
+        "important_rules": [
+            "Não use https://seu-projeto.supabase.co.",
+            "Não use aspas.",
+            "Não deixe espaços no começo ou no fim.",
+            "Service Role e Anon Key normalmente começam com eyJ e possuem 3 partes separadas por ponto.",
+            "Depois de alterar variáveis na Vercel, clique em Redeploy. Só alterar variável não atualiza o deploy atual."
+        ],
+        "after_redeploy_test": [
+            "/api/health",
+            "/api/env-finder/full",
+            "/api/connectivity/full",
+            "/api/test/supabase",
+            "/api/test/supabase-insert"
+        ]
+    }

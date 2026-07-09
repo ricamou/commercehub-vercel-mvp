@@ -1,11 +1,12 @@
-# CommerceHub Enterprise V4 - Sprint 6 Vercel Env Audit
+# CommerceHub Enterprise V4 - Sprint 7 Env Error Finder
 
-Testes:
+Identifica exatamente erro nas variáveis.
+
+Teste:
 - /api/health
-- /vercel-env
-- /api/vercel/env-audit
-- /api/vercel/env-required
-- /api/connectivity/full
+- /env-finder
+- /api/env-finder/full
+- /api/env-finder/checklist
 
 Health esperado:
-enterprise-v4-sprint6-vercel-env-audit
+enterprise-v4-sprint7-env-error-finder

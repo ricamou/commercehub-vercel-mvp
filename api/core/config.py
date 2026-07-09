@@ -9,7 +9,7 @@ def env(name: str, default: str = "") -> str:
         value = value[1:-1].strip()
     return value
 
-APP_VERSION = "enterprise-v4-sprint6-vercel-env-audit"
+APP_VERSION = "enterprise-v4-sprint7-env-error-finder"
 APP_URL = env("APP_URL", "https://commercehub-vercel-mvp.vercel.app")
 SUPABASE_URL = env("SUPABASE_URL") or env("NEXT_PUBLIC_SUPABASE_URL")
 SUPABASE_KEY = env("SUPABASE_SERVICE_ROLE_KEY") or env("SUPABASE_KEY") or env("SUPABASE_ANON_KEY")
