@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint10-core-operation"
+APP_VERSION = "enterprise-v5-sprint11-enterprise-debug-mode"
 
 def env(name, default=""):
     value = os.getenv(name, default)
@@ -37,3 +37,5 @@ def is_placeholder(value):
 
 def supabase_configured():
     return bool(SUPABASE_URL and SUPABASE_KEY and not is_placeholder(SUPABASE_URL) and not is_placeholder(SUPABASE_KEY))
+
+DEBUG_MODE = env("DEBUG_MODE", "true").lower() in ["1", "true", "yes", "on"]

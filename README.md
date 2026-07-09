@@ -1,23 +1,22 @@
-# CommerceHub Enterprise V5 - Sprint 10 Core Operation
+# CommerceHub Enterprise V5 - Sprint 11 Enterprise Debug Mode
 
-Esta versão inicia o painel operacional real após o schema do Supabase.
+Adiciona:
+- Global exception handler
+- JSON detalhado para erros 500
+- /debug
+- /api/debug/ping
+- /api/debug/core-status-safe
+- /api/debug/schema-check-safe
+- /api/debug/route-test
+- /api/debug/force-error
 
-Antes:
-1. Execute o SQL de /database-sql no Supabase SQL Editor.
-
-Depois teste:
+Testes:
 - /api/health
-- /api/database/schema-check
-- /core
-- /api/core/status
-- /companies
-- /users
-- /suppliers
-- /products
-- /inventory
-- /logs
-- /api/core/create-test-product
-- /api/core/sell-readiness
+- /debug
+- /api/debug/ping
+- /api/debug/core-status-safe
+- /api/debug/schema-check-safe
+- /api/debug/force-error
 
 Health esperado:
-enterprise-v5-sprint10-core-operation
+enterprise-v5-sprint11-enterprise-debug-mode

@@ -1457,3 +1457,118 @@ async def sell_readiness():
         "ml": ml,
         "next_step": "Conectar OAuth Mercado Livre" if ready_base and ready_ml and not ml["has_access_token"] else "Executar schema/seed primeiro"
     }
+
+
+
+
+# =========================
+# SPRINT 11 - ENTERPRISE DEBUG MODE
+# =========================
+
+@app.get("/debug", response_class=HTMLResponse)
+async def debug_page():
+    content = """
+<div class='card'>
+<h2>Enterprise Debug Mode</h2>
+<p>Diagnóstico profissional de erros, banco, rotas críticas e ambiente.</p>
+<a class='btn' href='/api/debug/ping'>Ping Debug</a>
+<a class='btn' href='/api/debug/core-status-safe'>Core Status Safe</a>
+<a class='btn' href='/api/debug/schema-check-safe'>Schema Check Safe</a>
+<a class='btn' href='/api/debug/route-test'>Route Test</a>
+<a class='btn' href='/api/environment/full'>Environment Full</a>
+<a class='btn' href='/api/raw/full'>Raw HTTP</a>
+</div>
+"""
+    return HTMLResponse(shell("Enterprise Debug Mode", content))
+
+@app.get("/api/debug/ping")
+async def debug_ping():
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "debug_mode": True,
+        "message": "Enterprise Debug Mode ativo. Erros agora devem retornar JSON detalhado."
+    }
+
+@app.get("/api/debug/route-test")
+async def debug_route_test():
+    async def run():
+        return {
+            "success": True,
+            "version": APP_VERSION,
+            "routes": [
+                "/api/health",
+                "/debug",
+                "/api/debug/core-status-safe",
+                "/api/debug/schema-check-safe",
+                "/api/core/status",
+                "/api/database/schema-check",
+                "/api/test/supabase",
+                "/api/test/supabase-insert",
+                "/api/test/supabase-crud",
+            ]
+        }
+    return await safe_route(run, path="/api/debug/route-test")
+
+@app.get("/api/debug/core-status-safe")
+async def debug_core_status_safe():
+    async def run():
+        tables = ["companies", "users_app", "suppliers", "products", "inventory", "logs", "marketplace_accounts", "oauth_tokens", "listings", "orders"]
+        counts = {}
+        ok = True
+        for table in tables:
+            res = await db_select(table, "select=*&limit=1000")
+            counts[table] = {
+                "success": res.get("success", False),
+                "rows": res.get("rows", 0),
+                "status_code": res.get("status_code"),
+                "error": str(res.get("error", ""))[:500]
+            }
+            if not res.get("success"):
+                ok = False
+        return {
+            "success": ok,
+            "version": APP_VERSION,
+            "core_ready": ok,
+            "counts": counts,
+            "next": "/dashboard" if ok else "/database-sql"
+        }
+    return await safe_route(run, path="/api/debug/core-status-safe")
+
+@app.get("/api/debug/schema-check-safe")
+async def debug_schema_check_safe():
+    async def run():
+        expected_tables = [
+            "companies","users_app","settings","suppliers","categories","brands","products",
+            "product_images","inventory","inventory_movements","marketplace_accounts",
+            "oauth_tokens","listings","orders","order_items","queue","sync_jobs","sync_logs",
+            "webhooks","ai_history","logs","audit_logs","notifications"
+        ]
+        results = {}
+        ok_count = 0
+        for table in expected_tables:
+            res = await db_select(table, "select=*&limit=1")
+            success = bool(res.get("success"))
+            if success:
+                ok_count += 1
+            results[table] = {
+                "ok": success,
+                "status_code": res.get("status_code"),
+                "rows": res.get("rows", 0),
+                "error": str(res.get("error", ""))[:500],
+            }
+        return {
+            "success": ok_count == len(expected_tables),
+            "version": APP_VERSION,
+            "ok_count": ok_count,
+            "total": len(expected_tables),
+            "missing_or_error": [t for t, r in results.items() if not r.get("ok")],
+            "results": results
+        }
+    return await safe_route(run, path="/api/debug/schema-check-safe")
+
+@app.get("/api/debug/force-error")
+async def debug_force_error():
+    async def run():
+        raise RuntimeError("Erro proposital para validar o Enterprise Debug Mode")
+    return await safe_route(run, path="/api/debug/force-error")
