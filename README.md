@@ -1,22 +1,16 @@
-# CommerceHub Enterprise V4 - Sprint 3 Infra Audit
+# CommerceHub Enterprise V4 - Sprint 4 Supabase Audit
 
-Auditoria profunda de infraestrutura:
-- variáveis
-- DNS
-- HTTPS
-- REST Supabase
-- Auth Supabase
-- SELECT companies
+Inclui auditoria e correção Supabase.
 
 Teste:
 - /api/health
 - /infra-audit
-- /api/infra/env
-- /api/infra/dns
-- /api/infra/https
-- /api/infra/rest-root
-- /api/infra/auth-root
 - /api/infra/full
+- /supabase-audit-sql
+- /api/foundation/seed
+- /api/test/supabase
+- /api/test/supabase-insert
+- /api/test/supabase-crud
 
 Health esperado:
-enterprise-v4-sprint3-infra-audit
+enterprise-v4-sprint4-supabase-audit

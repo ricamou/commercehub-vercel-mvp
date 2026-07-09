@@ -33,7 +33,7 @@ def setup():
 @app.get("/api/backend/health")
 async def backend_health():
     checks = {}
-    for table in ["companies", "users", "oauth_tokens", "logs"]:
+    for table in ["companies", "users_app", "oauth_tokens", "logs"]:
         res = await store.select(table, "select=*&limit=1")
         checks[table] = {"success": res.get("success"), "mode": res.get("mode"), "rows": len(res.get("data", [])), "error": str(res.get("error", ""))[:180]}
     return {"success": True, **state(), "checks": checks}
@@ -44,7 +44,7 @@ async def seed():
     company = {"id": DEFAULT_COMPANY_ID, "name": "CommerceHub Demo", "document": "00000000000000", "plan": "enterprise", "status": "active"}
     user = {"id": str(uuid.uuid4()), "company_id": DEFAULT_COMPANY_ID, "name": "Admin", "email": "admin@commercehub.local", "role": "admin", "password_hash": hashlib.sha256("admin123".encode()).hexdigest(), "status": "active"}
     a = await store.upsert("companies", company)
-    b = await store.upsert("users", user, "email")
+    b = await store.upsert("users_app", user, "email")
     return {"success": True, "company": a, "user": b, "login": {"email": "admin@commercehub.local", "password": "admin123"}}
 
 @app.get("/login", response_class=HTMLResponse)
@@ -57,7 +57,7 @@ async def login(request: Request):
     form = await request.form()
     email = str(form.get("email") or "")
     password = str(form.get("password") or "")
-    users = await store.select("users", f"select=*&email=eq.{email}&limit=1")
+    users = await store.select("users_app", f"select=*&email=eq.{email}&limit=1")
     rows = users.get("data") or []
     expected = hashlib.sha256(password.encode()).hexdigest()
     ok = bool(rows and rows[0].get("password_hash") == expected)
@@ -129,7 +129,7 @@ def audit_env():
 @app.get("/api/audit/tables")
 async def audit_tables():
     result = {}
-    for table in ["companies", "users", "oauth_tokens", "logs"]:
+    for table in ["companies", "users_app", "oauth_tokens", "logs"]:
         res = await store.select(table, "select=*&limit=1")
         result[table] = {"success": bool(res.get("success")), "mode": res.get("mode"), "status_code": res.get("status_code"), "rows": len(res.get("data", []) if isinstance(res.get("data"), list) else []), "error": str(res.get("error", ""))[:300], "raw": str(res.get("raw", ""))[:300]}
     return {"success": True, "version": APP_VERSION, "tables": result}
@@ -430,3 +430,11 @@ async def infra_full():
         diagnosis = "Infraestrutura Supabase OK."
 
     return {"success": True, "version": APP_VERSION, "summary": summary, "diagnosis": diagnosis, "steps": steps}
+
+
+@app.get("/supabase-audit-sql", response_class=HTMLResponse)
+async def supabase_audit_sql_page():
+    sql = open("supabase_audit_and_fix.sql", "r", encoding="utf-8").read()
+    safe_sql = sql.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    content = f"<div class='card'><h2>SQL Auditoria e Correção Supabase</h2><p>Copie este SQL e rode no Supabase SQL Editor.</p><pre>{safe_sql}</pre></div>"
+    return HTMLResponse(shell("SQL Supabase Audit", content))
