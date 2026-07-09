@@ -1,14 +1,22 @@
-# CommerceHub Enterprise V4 - Sprint 2 Supabase HTTPX
+# CommerceHub Enterprise V4 - Sprint 3 Infra Audit
 
-Troca conexão Supabase de urllib para httpx.
+Auditoria profunda de infraestrutura:
+- variáveis
+- DNS
+- HTTPS
+- REST Supabase
+- Auth Supabase
+- SELECT companies
 
 Teste:
 - /api/health
-- /supabase-test
-- /api/test/supabase
-- /api/test/supabase-insert
-- /api/test/supabase-crud
-- /api/audit/safe-full
+- /infra-audit
+- /api/infra/env
+- /api/infra/dns
+- /api/infra/https
+- /api/infra/rest-root
+- /api/infra/auth-root
+- /api/infra/full
 
 Health esperado:
-enterprise-v4-sprint2-supabase-httpx
+enterprise-v4-sprint3-infra-audit

@@ -250,3 +250,183 @@ async def test_supabase_crud():
     delete = await store.delete("logs", f"id=eq.{log_id}")
     read3 = await store.select("logs", f"select=*&id=eq.{log_id}&limit=1")
     return {"success": bool(create.get("success") and read1.get("success") and update.get("success") and read2.get("success") and delete.get("success") and read3.get("success")), "version": APP_VERSION, "transport": "httpx-async", "create": {"success": create.get("success"), "status_code": create.get("status_code"), "error": str(create.get("error", ""))[:400]}, "read_after_create": {"success": read1.get("success"), "rows": len(read1.get("data", []) if isinstance(read1.get("data"), list) else [])}, "update": {"success": update.get("success"), "status_code": update.get("status_code"), "error": str(update.get("error", ""))[:400]}, "read_after_update": {"success": read2.get("success"), "rows": len(read2.get("data", []) if isinstance(read2.get("data"), list) else [])}, "delete": {"success": delete.get("success"), "status_code": delete.get("status_code"), "error": str(delete.get("error", ""))[:400]}, "read_after_delete": {"success": read3.get("success"), "rows": len(read3.get("data", []) if isinstance(read3.get("data"), list) else [])}}
+
+
+
+
+# =========================
+# SPRINT 3 - INFRA AUDIT
+# =========================
+
+def _mask_value(value):
+    if not value:
+        return {"present": False, "length": 0, "preview": ""}
+    value = str(value)
+    if len(value) <= 12:
+        preview = value[:3] + "..."
+    else:
+        preview = value[:12] + "..." + value[-6:]
+    return {"present": True, "length": len(value), "preview": preview}
+
+@app.get("/infra-audit", response_class=HTMLResponse)
+async def infra_audit_page():
+    content = """
+<div class='card'>
+<h2>Auditoria de Infraestrutura</h2>
+<p>Verifica URL, chave, DNS, HTTPS, REST, Auth e Supabase.</p>
+<a class='btn' href='/api/infra/env'>Variáveis mascaradas</a>
+<a class='btn' href='/api/infra/dns'>DNS</a>
+<a class='btn' href='/api/infra/https'>HTTPS</a>
+<a class='btn' href='/api/infra/rest-root'>REST Root</a>
+<a class='btn' href='/api/infra/auth-root'>Auth Root</a>
+<a class='btn' href='/api/infra/full'>Auditoria completa</a>
+</div>
+"""
+    return HTMLResponse(shell("Infra Audit", content))
+
+@app.get("/api/infra/env")
+def infra_env():
+    from api.core.config import SUPABASE_URL, SUPABASE_KEY, SUPABASE_ANON_KEY, ML_CLIENT_ID, ML_CLIENT_SECRET, ML_REDIRECT_URI
+    url = str(SUPABASE_URL or "").strip()
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "supabase_url": _mask_value(url),
+        "supabase_url_checks": {
+            "starts_with_https": url.startswith("https://"),
+            "ends_with_supabase_co": url.endswith(".supabase.co"),
+            "contains_spaces": (" " in url),
+            "contains_line_break": ("\n" in url or "\r" in url),
+        },
+        "service_role_or_key": _mask_value(SUPABASE_KEY),
+        "anon_key": _mask_value(SUPABASE_ANON_KEY),
+        "ml_client_id": _mask_value(ML_CLIENT_ID),
+        "ml_client_secret": _mask_value(ML_CLIENT_SECRET),
+        "ml_redirect_uri": ML_REDIRECT_URI,
+        "note": "Chaves e URL estão mascaradas por segurança."
+    }
+
+@app.get("/api/infra/dns")
+def infra_dns():
+    from api.core.config import SUPABASE_URL
+    import socket
+    from urllib.parse import urlparse
+
+    url = str(SUPABASE_URL or "").strip()
+    host = urlparse(url).hostname if url else ""
+    if not host:
+        return {"success": False, "version": APP_VERSION, "error": "SUPABASE_URL sem hostname válido", "url": _mask_value(url)}
+
+    try:
+        infos = socket.getaddrinfo(host, 443)
+        addresses = sorted(list(set([i[4][0] for i in infos])))
+        return {"success": True, "version": APP_VERSION, "host": host, "addresses": addresses[:10], "count": len(addresses)}
+    except Exception as exc:
+        return {"success": False, "version": APP_VERSION, "host": host, "error_type": exc.__class__.__name__, "error": str(exc)}
+
+@app.get("/api/infra/https")
+async def infra_https():
+    from api.core.config import SUPABASE_URL
+    from api.core.http_client import async_request_json
+    url = str(SUPABASE_URL or "").strip().rstrip("/")
+    if not url:
+        return {"success": False, "version": APP_VERSION, "error": "SUPABASE_URL ausente"}
+
+    result = await async_request_json("GET", url, {}, None, 15)
+    return {
+        "success": result.get("status_code") is not None and result.get("status_code") != 0,
+        "version": APP_VERSION,
+        "target": _mask_value(url),
+        "transport": result.get("transport"),
+        "status_code": result.get("status_code"),
+        "error": str(result.get("error", ""))[:800],
+        "raw": str(result.get("raw", ""))[:800],
+    }
+
+@app.get("/api/infra/rest-root")
+async def infra_rest_root():
+    from api.core.config import SUPABASE_URL, SUPABASE_KEY
+    from api.core.http_client import async_request_json
+    url = str(SUPABASE_URL or "").strip().rstrip("/")
+    if not url:
+        return {"success": False, "version": APP_VERSION, "error": "SUPABASE_URL ausente"}
+    headers = {"apikey": SUPABASE_KEY or "", "Authorization": f"Bearer {SUPABASE_KEY or ''}"}
+    result = await async_request_json("GET", f"{url}/rest/v1/", headers, None, 15)
+    return {
+        "success": bool(result.get("success")),
+        "version": APP_VERSION,
+        "target": "/rest/v1/",
+        "transport": result.get("transport"),
+        "status_code": result.get("status_code"),
+        "error": str(result.get("error", ""))[:800],
+        "raw": str(result.get("raw", ""))[:800],
+    }
+
+@app.get("/api/infra/auth-root")
+async def infra_auth_root():
+    from api.core.config import SUPABASE_URL, SUPABASE_KEY
+    from api.core.http_client import async_request_json
+    url = str(SUPABASE_URL or "").strip().rstrip("/")
+    if not url:
+        return {"success": False, "version": APP_VERSION, "error": "SUPABASE_URL ausente"}
+    headers = {"apikey": SUPABASE_KEY or "", "Authorization": f"Bearer {SUPABASE_KEY or ''}"}
+    result = await async_request_json("GET", f"{url}/auth/v1/settings", headers, None, 15)
+    return {
+        "success": bool(result.get("success")),
+        "version": APP_VERSION,
+        "target": "/auth/v1/settings",
+        "transport": result.get("transport"),
+        "status_code": result.get("status_code"),
+        "error": str(result.get("error", ""))[:800],
+        "raw": str(result.get("raw", ""))[:800],
+    }
+
+@app.get("/api/infra/full")
+async def infra_full():
+    steps = {}
+    try:
+        steps["env"] = infra_env()
+    except Exception as exc:
+        steps["env"] = {"success": False, "error": str(exc)}
+    try:
+        steps["dns"] = infra_dns()
+    except Exception as exc:
+        steps["dns"] = {"success": False, "error": str(exc)}
+    try:
+        steps["https"] = await infra_https()
+    except Exception as exc:
+        steps["https"] = {"success": False, "error": str(exc)}
+    try:
+        steps["rest_root"] = await infra_rest_root()
+    except Exception as exc:
+        steps["rest_root"] = {"success": False, "error": str(exc)}
+    try:
+        steps["auth_root"] = await infra_auth_root()
+    except Exception as exc:
+        steps["auth_root"] = {"success": False, "error": str(exc)}
+    try:
+        steps["select_companies"] = await test_supabase_minimal()
+    except Exception as exc:
+        steps["select_companies"] = {"success": False, "error": str(exc)}
+
+    summary = {
+        "env_ok": bool(steps.get("env", {}).get("supabase_url", {}).get("present") and steps.get("env", {}).get("service_role_or_key", {}).get("present")),
+        "dns_ok": bool(steps.get("dns", {}).get("success")),
+        "https_reached": bool(steps.get("https", {}).get("status_code", 0) != 0),
+        "rest_reached": bool(steps.get("rest_root", {}).get("status_code", 0) != 0),
+        "auth_reached": bool(steps.get("auth_root", {}).get("status_code", 0) != 0),
+        "select_ok": bool(steps.get("select_companies", {}).get("success")),
+    }
+
+    if not summary["dns_ok"]:
+        diagnosis = "Falha em DNS/hostname da SUPABASE_URL."
+    elif not summary["https_reached"]:
+        diagnosis = "DNS resolveu, mas HTTPS não abriu a conexão."
+    elif not summary["rest_reached"]:
+        diagnosis = "HTTPS respondeu, mas REST do Supabase não respondeu corretamente."
+    elif not summary["select_ok"]:
+        diagnosis = "REST respondeu, mas SELECT falhou. Verifique tabela, schema, RLS/policies ou chave."
+    else:
+        diagnosis = "Infraestrutura Supabase OK."
+
+    return {"success": True, "version": APP_VERSION, "summary": summary, "diagnosis": diagnosis, "steps": steps}
