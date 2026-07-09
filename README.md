@@ -1,15 +1,15 @@
-# CommerceHub Enterprise V4 - Sprint 8 Raw HTTP Diagnostic
+# CommerceHub Enterprise V5 - Environment Manager
 
-Diagnóstico HTTP bruto do Supabase.
+Versão final de validação de ambiente.
 
 Teste:
 - /api/health
-- /raw-http
-- /api/raw/supabase-url
-- /api/raw/rest-open
-- /api/raw/rest-auth
-- /api/raw/select-companies
+- /environment
+- /api/environment/full
+- /api/environment/required
 - /api/raw/full
+- /api/test/supabase
+- /api/test/supabase-insert
 
 Health esperado:
-enterprise-v4-sprint8-raw-http-diagnostic
+enterprise-v5-environment-manager

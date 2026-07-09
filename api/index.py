@@ -1123,3 +1123,78 @@ async def raw_full():
         "diagnosis": diagnosis,
         "steps": steps
     }
+
+
+# =========================
+# V5 - ENVIRONMENT MANAGER
+# =========================
+
+@app.get("/environment", response_class=HTMLResponse)
+async def environment_page():
+    content = """
+<div class='card'>
+<h2>CommerceHub Environment Manager</h2>
+<p>Validação final de variáveis, Supabase, REST, Auth, leitura, escrita e diagnóstico claro.</p>
+<a class='btn' href='/api/environment/full'>Diagnóstico completo</a>
+<a class='btn' href='/api/environment/required'>Variáveis obrigatórias</a>
+<a class='btn' href='/api/raw/full'>Raw HTTP</a>
+<a class='btn' href='/api/test/supabase'>Teste SELECT</a>
+<a class='btn' href='/api/test/supabase-insert'>Teste INSERT</a>
+</div>
+"""
+    return HTMLResponse(shell("Environment Manager", content))
+
+@app.get("/api/environment/required")
+def environment_required():
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "vercel_path": "Vercel > Project > Settings > Environment Variables",
+        "supabase_path": "Supabase > Project Settings > API",
+        "required": {
+            "SUPABASE_URL": "Project URL real. Exemplo correto: https://xxxxxxxxxxxxxxxxxxxx.supabase.co",
+            "SUPABASE_SERVICE_ROLE_KEY": "service_role secret key real. Backend only.",
+            "SUPABASE_ANON_KEY": "anon public key real.",
+            "ML_CLIENT_ID": "Client ID do app Mercado Livre.",
+            "ML_CLIENT_SECRET": "Client Secret do app Mercado Livre.",
+            "ML_REDIRECT_URI": "https://commercehub-vercel-mvp.vercel.app/mercadolivre/callback"
+        },
+        "rules": [
+            "Não use placeholders como https://SEU-PROJETO.supabase.co.",
+            "Não coloque aspas nas variáveis.",
+            "Não deixe espaço no começo/fim.",
+            "Service Role e Anon Key normalmente começam com eyJ e têm 3 partes separadas por ponto.",
+            "Depois de salvar as variáveis, faça Redeploy."
+        ]
+    }
+
+@app.get("/api/environment/full")
+async def environment_full():
+    from api.core.env_manager import full_env_report
+    env_report = full_env_report()
+    if env_report.get("production_ready_supabase"):
+        try:
+            raw_report = await raw_full()
+        except Exception as exc:
+            raw_report = {"success": False, "error": str(exc)}
+        try:
+            select_report = await test_supabase_minimal()
+        except Exception as exc:
+            select_report = {"success": False, "error": str(exc)}
+        try:
+            insert_report = await test_supabase_insert()
+        except Exception as exc:
+            insert_report = {"success": False, "error": str(exc)}
+    else:
+        raw_report = {"skipped": True, "reason": "Variáveis Supabase ainda inválidas."}
+        select_report = {"skipped": True, "reason": "Variáveis Supabase ainda inválidas."}
+        insert_report = {"skipped": True, "reason": "Variáveis Supabase ainda inválidas."}
+    if not env_report.get("production_ready_supabase"):
+        diagnosis = "Corrigir variáveis Supabase na Vercel antes de testar banco."
+    elif select_report and select_report.get("success") and insert_report and insert_report.get("success"):
+        diagnosis = "Ambiente Supabase pronto para operação."
+    elif raw_report and raw_report.get("diagnosis"):
+        diagnosis = raw_report.get("diagnosis")
+    else:
+        diagnosis = "Variáveis parecem corretas, mas os testes de banco ainda falharam. Veja raw_report/select_report."
+    return {"success": True, "version": APP_VERSION, "diagnosis": diagnosis, "environment": env_report, "raw_report": raw_report, "select_report": select_report, "insert_report": insert_report}
