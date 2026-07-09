@@ -1198,3 +1198,41 @@ async def environment_full():
     else:
         diagnosis = "Variáveis parecem corretas, mas os testes de banco ainda falharam. Veja raw_report/select_report."
     return {"success": True, "version": APP_VERSION, "diagnosis": diagnosis, "environment": env_report, "raw_report": raw_report, "select_report": select_report, "insert_report": insert_report}
+
+@app.get("/database", response_class=HTMLResponse)
+async def database_page():
+    content = """
+<div class='card'>
+<h2>Database Foundation</h2>
+<p>Schema definitivo do CommerceHub Enterprise para Supabase.</p>
+<a class='btn' href='/database-sql'>Ver SQL do banco</a>
+<a class='btn' href='/api/database/schema-check'>Checar schema</a>
+<a class='btn' href='/api/test/supabase'>Teste SELECT</a>
+<a class='btn' href='/api/test/supabase-insert'>Teste INSERT</a>
+<a class='btn' href='/api/test/supabase-crud'>Teste CRUD</a>
+</div>
+"""
+    return HTMLResponse(shell("Database Foundation", content))
+
+@app.get("/database-sql", response_class=HTMLResponse)
+async def database_sql_page():
+    sql = open("commercehub_enterprise_schema.sql", "r", encoding="utf-8").read()
+    safe_sql = sql.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    content = f"<div class='card'><h2>CommerceHub Enterprise Schema SQL</h2><p>Copie e execute no Supabase > SQL Editor.</p><pre>{safe_sql}</pre></div>"
+    return HTMLResponse(shell("Database SQL", content))
+
+@app.get("/api/database/schema-check")
+async def database_schema_check():
+    expected_tables = ["companies","users_app","settings","suppliers","categories","brands","products","product_images","inventory","inventory_movements","marketplace_accounts","oauth_tokens","listings","orders","order_items","queue","sync_jobs","sync_logs","webhooks","ai_history","logs","audit_logs","notifications"]
+    results = {}
+    ok_count = 0
+    for table in expected_tables:
+        try:
+            res = await db_select(table, "select=*&limit=1")
+            success = bool(res.get("success"))
+            if success:
+                ok_count += 1
+            results[table] = {"ok": success, "status_code": res.get("status_code"), "rows": res.get("rows", 0), "error": str(res.get("error", ""))[:500]}
+        except Exception as exc:
+            results[table] = {"ok": False, "error": str(exc)[:500]}
+    return {"success": ok_count == len(expected_tables), "version": APP_VERSION, "ok_count": ok_count, "total": len(expected_tables), "missing_or_error": [t for t, r in results.items() if not r.get("ok")], "results": results}
