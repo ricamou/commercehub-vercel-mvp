@@ -1,6 +1,5 @@
 import json
-import urllib.request
-import urllib.error
+import httpx
 
 def parse_json(raw, default):
     try:
@@ -10,15 +9,48 @@ def parse_json(raw, default):
     except Exception:
         return default
 
-def request_json(method, url, headers=None, payload=None, timeout=12):
-    data = None if payload is None else json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(url, data=data, method=method.upper(), headers=headers or {})
+async def async_request_json(method, url, headers=None, payload=None, timeout=15):
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            raw = resp.read().decode("utf-8", errors="ignore")
-            return {"success": 200 <= resp.status < 400, "status_code": resp.status, "data": parse_json(raw, {}), "raw": raw, "error": ""}
-    except urllib.error.HTTPError as exc:
-        raw = exc.read().decode("utf-8", errors="ignore")
-        return {"success": False, "status_code": exc.code, "data": parse_json(raw, {}), "raw": raw, "error": raw or str(exc)}
+        async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+            response = await client.request(method.upper(), url, headers=headers or {}, json=payload)
+            raw = response.text
+            return {
+                "success": 200 <= response.status_code < 400,
+                "status_code": response.status_code,
+                "data": parse_json(raw, {}),
+                "raw": raw,
+                "error": "" if 200 <= response.status_code < 400 else raw,
+                "transport": "httpx-async"
+            }
     except Exception as exc:
-        return {"success": False, "status_code": 0, "data": {}, "raw": "", "error": str(exc)}
+        return {
+            "success": False,
+            "status_code": 0,
+            "data": {},
+            "raw": "",
+            "error": str(exc),
+            "transport": "httpx-async"
+        }
+
+def request_json(method, url, headers=None, payload=None, timeout=15):
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+            response = client.request(method.upper(), url, headers=headers or {}, json=payload)
+            raw = response.text
+            return {
+                "success": 200 <= response.status_code < 400,
+                "status_code": response.status_code,
+                "data": parse_json(raw, {}),
+                "raw": raw,
+                "error": "" if 200 <= response.status_code < 400 else raw,
+                "transport": "httpx-sync"
+            }
+    except Exception as exc:
+        return {
+            "success": False,
+            "status_code": 0,
+            "data": {},
+            "raw": "",
+            "error": str(exc),
+            "transport": "httpx-sync"
+        }

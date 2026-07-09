@@ -1,16 +1,14 @@
-# CommerceHub Enterprise V4 - Sprint 1 Audit Fix
+# CommerceHub Enterprise V4 - Sprint 2 Supabase HTTPX
 
-Corrige auditoria para não gerar Internal Server Error.
+Troca conexão Supabase de urllib para httpx.
 
 Teste:
 - /api/health
-- /audit
-- /audit-safe
-- /api/audit/ping
+- /supabase-test
+- /api/test/supabase
+- /api/test/supabase-insert
+- /api/test/supabase-crud
 - /api/audit/safe-full
-- /api/audit/env
-- /api/audit/tables
-- /api/audit/write-test
 
 Health esperado:
-enterprise-v4-sprint1-audit-fix
+enterprise-v4-sprint2-supabase-httpx

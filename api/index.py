@@ -207,3 +207,46 @@ async def audit_safe_page():
 @app.get("/api/audit/ping")
 def audit_ping():
     return {"success": True, "version": APP_VERSION, "message": "Audit module loaded"}
+
+
+
+@app.get("/supabase-test", response_class=HTMLResponse)
+async def supabase_test_page():
+    content = "<div class='card'><h2>Teste Supabase HTTPX</h2><p>Esta Sprint troca urllib por httpx e testa SELECT, INSERT, UPSERT e DELETE.</p><a class='btn' href='/api/test/supabase'>Teste SELECT</a><a class='btn' href='/api/test/supabase-insert'>Teste INSERT</a><a class='btn' href='/api/test/supabase-crud'>Teste CRUD completo</a><a class='btn' href='/api/audit/safe-full'>Auditoria segura</a></div>"
+    return HTMLResponse(shell("Supabase Test", content))
+
+@app.get("/api/test/supabase")
+async def test_supabase_minimal():
+    try:
+        res = await store.select("companies", "select=*&limit=1")
+        return {"success": bool(res.get("success")), "version": APP_VERSION, "mode": store.mode(), "supabase_configured": store.configured(), "table": "companies", "operation": "select", "transport": res.get("transport"), "status_code": res.get("status_code"), "rows": len(res.get("data", []) if isinstance(res.get("data"), list) else []), "data": res.get("data"), "error": str(res.get("error", ""))[:600], "raw": str(res.get("raw", ""))[:600]}
+    except Exception as exc:
+        return {"success": False, "version": APP_VERSION, "exception": exc.__class__.__name__, "error": str(exc)[:800]}
+
+@app.get("/api/test/supabase-insert")
+async def test_supabase_insert():
+    import uuid
+    from datetime import datetime
+    item = {"id": str(uuid.uuid4()), "company_id": DEFAULT_COMPANY_ID, "event_type": "supabase_httpx_insert_test", "message": "Teste INSERT via httpx", "payload": {"version": APP_VERSION, "source": "sprint2"}, "created_at": datetime.utcnow().isoformat()}
+    try:
+        write = await store.insert("logs", item)
+        read = await store.select("logs", f"select=*&id=eq.{item['id']}&limit=1")
+        return {"success": bool(write.get("success") and read.get("success") and len(read.get("data", [])) > 0), "version": APP_VERSION, "write": {"success": write.get("success"), "transport": write.get("transport"), "status_code": write.get("status_code"), "error": str(write.get("error", ""))[:600], "raw": str(write.get("raw", ""))[:600]}, "read_after_write": {"success": read.get("success"), "rows": len(read.get("data", []) if isinstance(read.get("data"), list) else []), "error": str(read.get("error", ""))[:600]}}
+    except Exception as exc:
+        return {"success": False, "version": APP_VERSION, "exception": exc.__class__.__name__, "error": str(exc)[:800]}
+
+@app.get("/api/test/supabase-crud")
+async def test_supabase_crud():
+    import uuid
+    from datetime import datetime
+    log_id = str(uuid.uuid4())
+    payload = {"id": log_id, "company_id": DEFAULT_COMPANY_ID, "event_type": "supabase_httpx_crud_test", "message": "Teste CRUD inicial", "payload": {"step": "create", "version": APP_VERSION}, "created_at": datetime.utcnow().isoformat()}
+    create = await store.upsert("logs", payload, "id")
+    read1 = await store.select("logs", f"select=*&id=eq.{log_id}&limit=1")
+    payload["message"] = "Teste CRUD atualizado"
+    payload["payload"] = {"step": "update", "version": APP_VERSION}
+    update = await store.upsert("logs", payload, "id")
+    read2 = await store.select("logs", f"select=*&id=eq.{log_id}&limit=1")
+    delete = await store.delete("logs", f"id=eq.{log_id}")
+    read3 = await store.select("logs", f"select=*&id=eq.{log_id}&limit=1")
+    return {"success": bool(create.get("success") and read1.get("success") and update.get("success") and read2.get("success") and delete.get("success") and read3.get("success")), "version": APP_VERSION, "transport": "httpx-async", "create": {"success": create.get("success"), "status_code": create.get("status_code"), "error": str(create.get("error", ""))[:400]}, "read_after_create": {"success": read1.get("success"), "rows": len(read1.get("data", []) if isinstance(read1.get("data"), list) else [])}, "update": {"success": update.get("success"), "status_code": update.get("status_code"), "error": str(update.get("error", ""))[:400]}, "read_after_update": {"success": read2.get("success"), "rows": len(read2.get("data", []) if isinstance(read2.get("data"), list) else [])}, "delete": {"success": delete.get("success"), "status_code": delete.get("status_code"), "error": str(delete.get("error", ""))[:400]}, "read_after_delete": {"success": read3.get("success"), "rows": len(read3.get("data", []) if isinstance(read3.get("data"), list) else [])}}
