@@ -438,3 +438,165 @@ async def supabase_audit_sql_page():
     safe_sql = sql.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     content = f"<div class='card'><h2>SQL Auditoria e Correção Supabase</h2><p>Copie este SQL e rode no Supabase SQL Editor.</p><pre>{safe_sql}</pre></div>"
     return HTMLResponse(shell("SQL Supabase Audit", content))
+
+
+
+
+# =========================
+# SPRINT 5 - CONNECTIVITY ANALYZER
+# =========================
+
+@app.get("/connectivity", response_class=HTMLResponse)
+async def connectivity_page():
+    content = """
+<div class='card'>
+<h2>Supabase Connectivity Analyzer</h2>
+<p>Diagnóstico isolado de conexão: variáveis, URL, DNS, porta, HTTPS, REST e Auth.</p>
+<a class='btn' href='/api/connectivity/full'>Executar análise completa</a>
+<a class='btn' href='/api/connectivity/env'>Variáveis</a>
+<a class='btn' href='/api/connectivity/dns'>DNS</a>
+<a class='btn' href='/api/connectivity/socket'>Socket 443</a>
+<a class='btn' href='/api/connectivity/https'>HTTPS</a>
+<a class='btn' href='/api/connectivity/rest'>REST</a>
+<a class='btn' href='/api/connectivity/auth'>AUTH</a>
+</div>
+"""
+    return HTMLResponse(shell("Connectivity Analyzer", content))
+
+def mask_secret(v):
+    if not v:
+        return {"present": False, "length": 0, "preview": ""}
+    v = str(v).strip()
+    return {"present": True, "length": len(v), "preview": (v[:10] + "..." + v[-6:]) if len(v) > 18 else v[:4] + "..."}
+
+def get_supabase_host():
+    from urllib.parse import urlparse
+    from api.core.config import SUPABASE_URL
+    url = str(SUPABASE_URL or "").strip()
+    parsed = urlparse(url)
+    return url, parsed.hostname or ""
+
+@app.get("/api/connectivity/env")
+def connectivity_env():
+    from api.core.config import SUPABASE_URL, SUPABASE_KEY, SUPABASE_ANON_KEY
+    url = str(SUPABASE_URL or "").strip()
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "supabase_url": mask_secret(url),
+        "url_validation": {
+            "starts_with_https": url.startswith("https://"),
+            "ends_with_supabase_co": url.endswith(".supabase.co"),
+            "has_space": " " in url,
+            "has_line_break": "\\n" in url or "\\r" in url,
+            "looks_like_placeholder": "seuprojeto" in url.lower() or "xxxx" in url.lower(),
+        },
+        "service_role_key": mask_secret(SUPABASE_KEY),
+        "anon_key": mask_secret(SUPABASE_ANON_KEY),
+    }
+
+@app.get("/api/connectivity/dns")
+def connectivity_dns():
+    import socket
+    url, host = get_supabase_host()
+    if not host:
+        return {"success": False, "version": APP_VERSION, "error": "Hostname ausente na SUPABASE_URL", "url": mask_secret(url)}
+    try:
+        info = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
+        ips = sorted(set([item[4][0] for item in info]))
+        return {"success": True, "version": APP_VERSION, "host": host, "ips": ips[:20], "count": len(ips)}
+    except Exception as exc:
+        return {"success": False, "version": APP_VERSION, "host": host, "error_type": exc.__class__.__name__, "error": str(exc)}
+
+@app.get("/api/connectivity/socket")
+def connectivity_socket():
+    import socket, time
+    url, host = get_supabase_host()
+    if not host:
+        return {"success": False, "version": APP_VERSION, "error": "Hostname ausente"}
+    start = time.time()
+    try:
+        with socket.create_connection((host, 443), timeout=8) as s:
+            elapsed = round((time.time() - start) * 1000, 2)
+            return {"success": True, "version": APP_VERSION, "host": host, "port": 443, "elapsed_ms": elapsed, "message": "Socket TCP 443 abriu"}
+    except Exception as exc:
+        elapsed = round((time.time() - start) * 1000, 2)
+        return {"success": False, "version": APP_VERSION, "host": host, "port": 443, "elapsed_ms": elapsed, "error_type": exc.__class__.__name__, "error": str(exc)}
+
+@app.get("/api/connectivity/https")
+async def connectivity_https():
+    from api.core.config import SUPABASE_URL
+    from api.core.http_client import async_request_json
+    url = str(SUPABASE_URL or "").strip().rstrip("/")
+    if not url:
+        return {"success": False, "version": APP_VERSION, "error": "SUPABASE_URL ausente"}
+    res = await async_request_json("GET", url, headers={"User-Agent": "CommerceHubConnectivity/1.0"}, payload=None, timeout=20)
+    return {"success": res.get("status_code", 0) != 0, "version": APP_VERSION, "transport": res.get("transport"), "status_code": res.get("status_code"), "error": str(res.get("error", ""))[:1000], "raw": str(res.get("raw", ""))[:1000]}
+
+@app.get("/api/connectivity/rest")
+async def connectivity_rest():
+    from api.core.config import SUPABASE_URL, SUPABASE_KEY
+    from api.core.http_client import async_request_json
+    url = str(SUPABASE_URL or "").strip().rstrip("/")
+    headers = {"apikey": SUPABASE_KEY or "", "Authorization": f"Bearer {SUPABASE_KEY or ''}", "User-Agent": "CommerceHubConnectivity/1.0"}
+    res = await async_request_json("GET", f"{url}/rest/v1/?select=*", headers=headers, payload=None, timeout=20)
+    return {"success": bool(res.get("success")), "version": APP_VERSION, "transport": res.get("transport"), "status_code": res.get("status_code"), "error": str(res.get("error", ""))[:1000], "raw": str(res.get("raw", ""))[:1000]}
+
+@app.get("/api/connectivity/auth")
+async def connectivity_auth():
+    from api.core.config import SUPABASE_URL, SUPABASE_KEY
+    from api.core.http_client import async_request_json
+    url = str(SUPABASE_URL or "").strip().rstrip("/")
+    headers = {"apikey": SUPABASE_KEY or "", "Authorization": f"Bearer {SUPABASE_KEY or ''}", "User-Agent": "CommerceHubConnectivity/1.0"}
+    res = await async_request_json("GET", f"{url}/auth/v1/settings", headers=headers, payload=None, timeout=20)
+    return {"success": bool(res.get("success")), "version": APP_VERSION, "transport": res.get("transport"), "status_code": res.get("status_code"), "error": str(res.get("error", ""))[:1000], "raw": str(res.get("raw", ""))[:1000]}
+
+@app.get("/api/connectivity/full")
+async def connectivity_full():
+    steps = {}
+    for name, fn in [
+        ("env", connectivity_env),
+        ("dns", connectivity_dns),
+        ("socket", connectivity_socket),
+    ]:
+        try:
+            steps[name] = fn()
+        except Exception as exc:
+            steps[name] = {"success": False, "error_type": exc.__class__.__name__, "error": str(exc)}
+    for name, fn in [
+        ("https", connectivity_https),
+        ("rest", connectivity_rest),
+        ("auth", connectivity_auth),
+        ("select_companies", test_supabase_minimal),
+    ]:
+        try:
+            steps[name] = await fn()
+        except Exception as exc:
+            steps[name] = {"success": False, "error_type": exc.__class__.__name__, "error": str(exc)}
+
+    summary = {
+        "env_ok": bool(steps.get("env", {}).get("supabase_url", {}).get("present") and steps.get("env", {}).get("service_role_key", {}).get("present")),
+        "dns_ok": bool(steps.get("dns", {}).get("success")),
+        "socket_ok": bool(steps.get("socket", {}).get("success")),
+        "https_reached": bool(steps.get("https", {}).get("status_code", 0) != 0),
+        "rest_ok": bool(steps.get("rest", {}).get("success")),
+        "auth_ok": bool(steps.get("auth", {}).get("success")),
+        "select_ok": bool(steps.get("select_companies", {}).get("success")),
+    }
+
+    if not summary["env_ok"]:
+        diagnosis = "Variáveis ausentes ou inválidas na Vercel."
+    elif not summary["dns_ok"]:
+        diagnosis = "DNS não resolve o host do Supabase. Verifique SUPABASE_URL."
+    elif not summary["socket_ok"]:
+        diagnosis = "O ambiente Vercel não consegue abrir TCP 443 para o Supabase."
+    elif not summary["https_reached"]:
+        diagnosis = "Socket abriu, mas HTTPS falhou."
+    elif not summary["rest_ok"]:
+        diagnosis = "HTTPS chegou, mas REST/PostgREST falhou. Verifique key/schema/permissões."
+    elif not summary["select_ok"]:
+        diagnosis = "REST respondeu, mas SELECT falhou. Verifique tabelas/RLS/policies."
+    else:
+        diagnosis = "Conectividade Supabase OK."
+
+    return {"success": True, "version": APP_VERSION, "summary": summary, "diagnosis": diagnosis, "steps": steps}

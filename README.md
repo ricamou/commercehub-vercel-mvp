@@ -1,16 +1,15 @@
-# CommerceHub Enterprise V4 - Sprint 4 Supabase Audit
+# CommerceHub Enterprise V4 - Sprint 5 Connectivity Analyzer
 
-Inclui auditoria e correção Supabase.
-
-Teste:
+Testes:
 - /api/health
-- /infra-audit
-- /api/infra/full
-- /supabase-audit-sql
-- /api/foundation/seed
-- /api/test/supabase
-- /api/test/supabase-insert
-- /api/test/supabase-crud
+- /connectivity
+- /api/connectivity/full
+- /api/connectivity/env
+- /api/connectivity/dns
+- /api/connectivity/socket
+- /api/connectivity/https
+- /api/connectivity/rest
+- /api/connectivity/auth
 
 Health esperado:
-enterprise-v4-sprint4-supabase-audit
+enterprise-v4-sprint5-connectivity-analyzer
