@@ -109,3 +109,45 @@ def routes():
 @app.get("/favicon.ico")
 def favicon():
     return {"ok": True}
+
+
+
+@app.get("/audit", response_class=HTMLResponse)
+async def audit_page():
+    content = "<div class='card'><h2>Auditoria Supabase</h2><p>Verifica variáveis, tabelas, REST API, leitura e gravação.</p><a class='btn' href='/api/audit/full'>Executar auditoria completa</a><a class='btn' href='/api/audit/env'>Variáveis</a><a class='btn' href='/api/audit/tables'>Tabelas</a><a class='btn' href='/api/audit/write-test'>Teste gravação</a></div>"
+    return HTMLResponse(shell("Auditoria Supabase", content))
+
+@app.get("/api/audit/env")
+def audit_env():
+    from api.core.config import SUPABASE_URL, SUPABASE_KEY, SUPABASE_ANON_KEY, ML_CLIENT_ID, ML_CLIENT_SECRET, ML_REDIRECT_URI
+    def mask(v):
+        if not v:
+            return {"present": False, "length": 0, "preview": ""}
+        return {"present": True, "length": len(v), "preview": v[:8] + "..." + v[-4:]}
+    return {"success": True, "version": APP_VERSION, "supabase_url": mask(SUPABASE_URL), "service_role_or_key": mask(SUPABASE_KEY), "anon_key": mask(SUPABASE_ANON_KEY), "ml_client_id": mask(ML_CLIENT_ID), "ml_client_secret": mask(ML_CLIENT_SECRET), "ml_redirect_uri": ML_REDIRECT_URI}
+
+@app.get("/api/audit/tables")
+async def audit_tables():
+    result = {}
+    for table in ["companies", "users", "oauth_tokens", "logs"]:
+        res = await store.select(table, "select=*&limit=1")
+        result[table] = {"success": bool(res.get("success")), "mode": res.get("mode"), "status_code": res.get("status_code"), "rows": len(res.get("data", []) if isinstance(res.get("data"), list) else []), "error": str(res.get("error", ""))[:300], "raw": str(res.get("raw", ""))[:300]}
+    return {"success": True, "version": APP_VERSION, "tables": result}
+
+@app.get("/api/audit/write-test")
+async def audit_write_test():
+    import uuid
+    from datetime import datetime
+    payload = {"id": str(uuid.uuid4()), "company_id": DEFAULT_COMPANY_ID, "event_type": "audit_write_test", "message": "Teste de gravação Supabase pelo CommerceHub", "payload": {"source": "audit", "version": APP_VERSION}, "created_at": datetime.utcnow().isoformat()}
+    write = await store.upsert("logs", payload, "id")
+    read = await store.select("logs", f"select=*&id=eq.{payload['id']}&limit=1")
+    ok = bool(write.get("success") and read.get("success") and len(read.get("data", [])) > 0)
+    return {"success": ok, "write": {"success": write.get("success"), "mode": write.get("mode"), "status_code": write.get("status_code"), "error": str(write.get("error", ""))[:400], "raw": str(write.get("raw", ""))[:400]}, "read_after_write": {"success": read.get("success"), "rows": len(read.get("data", []) if isinstance(read.get("data"), list) else []), "error": str(read.get("error", ""))[:400]}}
+
+@app.get("/api/audit/full")
+async def audit_full():
+    env_result = audit_env()
+    tables_result = await audit_tables()
+    write_result = await audit_write_test()
+    backend = await backend_health()
+    return {"success": True, "version": APP_VERSION, "summary": {"env_ok": bool(env_result["supabase_url"]["present"] and env_result["service_role_or_key"]["present"]), "write_ok": bool(write_result.get("success")), "mode": store.mode()}, "env": env_result, "backend": backend, "tables": tables_result, "write_test": write_result, "next_action": "Se write_ok=false e aparecer Errno 16, o problema é conectividade/REST Supabase no ambiente Vercel."}

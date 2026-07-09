@@ -1,11 +1,11 @@
-# CommerceHub Enterprise V4 - Sprint 1
+# CommerceHub Enterprise V4 - Sprint 1 Audit
 
-Testar:
+Teste:
 - /api/health
-- /
-- /setup
-- /api/foundation/seed
-- /login
-- /companies
-- /mercado-livre
-- /api/routes
+- /audit
+- /api/audit/env
+- /api/audit/tables
+- /api/audit/write-test
+- /api/audit/full
+
+Health esperado: enterprise-v4-sprint1-audit
