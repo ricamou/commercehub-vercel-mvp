@@ -1236,3 +1236,224 @@ async def database_schema_check():
         except Exception as exc:
             results[table] = {"ok": False, "error": str(exc)[:500]}
     return {"success": ok_count == len(expected_tables), "version": APP_VERSION, "ok_count": ok_count, "total": len(expected_tables), "missing_or_error": [t for t, r in results.items() if not r.get("ok")], "results": results}
+
+
+
+
+# =========================
+# SPRINT 10 - CORE OPERATION
+# =========================
+
+def _val(row, key, default=""):
+    if not isinstance(row, dict):
+        return default
+    return row.get(key, default)
+
+def _fmt_money(v):
+    try:
+        return f"R$ {float(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except Exception:
+        return "R$ 0,00"
+
+def _html_table(headers, rows):
+    th = "".join([f"<th>{h}</th>" for h in headers])
+    trs = []
+    for row in rows:
+        tds = "".join([f"<td>{c}</td>" for c in row])
+        trs.append(f"<tr>{tds}</tr>")
+    return f"<table><thead><tr>{th}</tr></thead><tbody>{''.join(trs) if trs else '<tr><td colspan=\"20\">Nenhum registro encontrado.</td></tr>'}</tbody></table>"
+
+@app.get("/core", response_class=HTMLResponse)
+async def core_page():
+    content = """
+<div class='card'>
+<h2>CommerceHub Core Operation</h2>
+<p>Primeiro painel operacional: empresa, usuário, fornecedores, produtos, estoque, logs e Mercado Livre.</p>
+<a class='btn' href='/api/core/status'>Status Core</a>
+<a class='btn' href='/companies'>Empresas</a>
+<a class='btn' href='/users'>Usuários</a>
+<a class='btn' href='/suppliers'>Fornecedores</a>
+<a class='btn' href='/products'>Produtos</a>
+<a class='btn' href='/inventory'>Estoque</a>
+<a class='btn' href='/logs'>Logs</a>
+</div>
+"""
+    return HTMLResponse(shell("Core Operation", content))
+
+@app.get("/api/core/status")
+async def core_status():
+    tables = ["companies", "users_app", "suppliers", "products", "inventory", "logs", "marketplace_accounts", "oauth_tokens", "listings", "orders"]
+    counts = {}
+    ok = True
+    for table in tables:
+        res = await db_select(table, "select=*&limit=1000")
+        counts[table] = {
+            "success": res.get("success", False),
+            "rows": res.get("rows", 0),
+            "error": res.get("error", "")[:300]
+        }
+        if not res.get("success"):
+            ok = False
+    return {
+        "success": ok,
+        "version": APP_VERSION,
+        "core_ready": ok,
+        "counts": counts,
+        "next": "/dashboard" if ok else "/database-sql"
+    }
+
+@app.get("/companies", response_class=HTMLResponse)
+async def companies_page():
+    res = await db_select("companies", "select=*&order=created_at.desc")
+    rows = res.get("data", []) if res.get("success") else []
+    table = _html_table(
+        ["Nome", "Documento", "Email", "Plano", "Status"],
+        [[_val(r,"name"), _val(r,"document"), _val(r,"email"), _val(r,"plan"), _val(r,"status")] for r in rows]
+    )
+    content = f"""
+<div class='card'>
+<h2>Empresas</h2>
+<p>Multiempresa ativa por company_id.</p>
+{table}
+<a class='btn' href='/api/core/status'>Status JSON</a>
+</div>
+"""
+    return HTMLResponse(shell("Empresas", content))
+
+@app.get("/users", response_class=HTMLResponse)
+async def users_page():
+    res = await db_select("users_app", "select=*&order=created_at.desc")
+    rows = res.get("data", []) if res.get("success") else []
+    table = _html_table(
+        ["Nome", "Email", "Perfil", "Status"],
+        [[_val(r,"name"), _val(r,"email"), _val(r,"role"), _val(r,"status")] for r in rows]
+    )
+    content = f"<div class='card'><h2>Usuários</h2>{table}<p>Login inicial: admin@commercehub.local / admin123</p></div>"
+    return HTMLResponse(shell("Usuários", content))
+
+@app.get("/suppliers", response_class=HTMLResponse)
+async def suppliers_page():
+    res = await db_select("suppliers", "select=*&order=created_at.desc")
+    rows = res.get("data", []) if res.get("success") else []
+    table = _html_table(
+        ["Nome", "Tipo", "Status", "Email"],
+        [[_val(r,"name"), _val(r,"type"), _val(r,"status"), _val(r,"email")] for r in rows]
+    )
+    content = f"""
+<div class='card'>
+<h2>Fornecedores</h2>
+{table}
+<a class='btn' href='/api/foundation/seed'>Seed inicial</a>
+</div>
+"""
+    return HTMLResponse(shell("Fornecedores", content))
+
+@app.get("/products", response_class=HTMLResponse)
+async def products_page():
+    res = await db_select("products", "select=*&order=created_at.desc")
+    rows = res.get("data", []) if res.get("success") else []
+    table = _html_table(
+        ["SKU", "Produto", "Marca", "Custo", "Venda", "Status"],
+        [[_val(r,"sku"), _val(r,"name"), _val(r,"brand"), _fmt_money(_val(r,"cost_price",0)), _fmt_money(_val(r,"sale_price",0)), _val(r,"status")] for r in rows]
+    )
+    content = f"""
+<div class='card'>
+<h2>Produtos</h2>
+{table}
+<a class='btn' href='/api/test/supabase'>Teste SELECT</a>
+<a class='btn' href='/api/core/create-test-product'>Criar produto teste</a>
+</div>
+"""
+    return HTMLResponse(shell("Produtos", content))
+
+@app.get("/inventory", response_class=HTMLResponse)
+async def inventory_page():
+    res = await db_select("inventory", "select=*&order=created_at.desc")
+    rows = res.get("data", []) if res.get("success") else []
+    table = _html_table(
+        ["SKU", "Qtd", "Reservado", "Disponível", "Status"],
+        [[_val(r,"sku"), _val(r,"quantity"), _val(r,"reserved"), _val(r,"available"), _val(r,"status")] for r in rows]
+    )
+    content = f"<div class='card'><h2>Estoque</h2>{table}</div>"
+    return HTMLResponse(shell("Estoque", content))
+
+@app.get("/logs", response_class=HTMLResponse)
+async def logs_page():
+    res = await db_select("logs", "select=*&order=created_at.desc&limit=50")
+    rows = res.get("data", []) if res.get("success") else []
+    table = _html_table(
+        ["Data", "Tipo", "Nível", "Mensagem"],
+        [[_val(r,"created_at"), _val(r,"event_type"), _val(r,"level"), _val(r,"message")] for r in rows]
+    )
+    content = f"<div class='card'><h2>Logs</h2>{table}</div>"
+    return HTMLResponse(shell("Logs", content))
+
+@app.get("/api/core/create-test-product")
+async def core_create_test_product():
+    import time
+    sku = f"CH-AUTO-{int(time.time())}"
+    product = {
+        "company_id": DEFAULT_COMPANY_ID,
+        "sku": sku,
+        "name": f"Produto Automático {sku}",
+        "brand": "CommerceHub",
+        "description": "Produto criado pelo Core Operation para validar gravação real.",
+        "cost_price": 35.50,
+        "sale_price": 89.90,
+        "status": "active",
+        "raw_data": {"source": "core_create_test_product", "version": APP_VERSION}
+    }
+    created = await db_insert("products", product)
+    if created.get("success") and created.get("data"):
+        product_id = created["data"][0].get("id")
+        await db_insert("inventory", {
+            "company_id": DEFAULT_COMPANY_ID,
+            "product_id": product_id,
+            "sku": sku,
+            "quantity": 5,
+            "reserved": 0,
+            "status": "available"
+        })
+        await db_insert("logs", {
+            "company_id": DEFAULT_COMPANY_ID,
+            "event_type": "product_created",
+            "level": "info",
+            "message": f"Produto {sku} criado com sucesso",
+            "payload": {"sku": sku}
+        })
+    return {
+        "success": created.get("success", False),
+        "version": APP_VERSION,
+        "sku": sku,
+        "created": created,
+        "next": "/products"
+    }
+
+@app.get("/api/core/sell-readiness")
+async def sell_readiness():
+    checks = {}
+    for table in ["companies","users_app","suppliers","products","inventory","marketplace_accounts"]:
+        res = await db_select(table, "select=*&limit=1")
+        checks[table] = res.get("success") and res.get("rows",0) >= 1
+
+    ml = {
+        "has_client_id": bool(ML_CLIENT_ID),
+        "has_client_secret": bool(ML_CLIENT_SECRET),
+        "has_redirect_uri": bool(ML_REDIRECT_URI),
+        "has_access_token": bool(ML_ACCESS_TOKEN),
+        "has_refresh_token": bool(ML_REFRESH_TOKEN),
+    }
+
+    ready_base = all(checks.values())
+    ready_ml = ml["has_client_id"] and ml["has_client_secret"] and ml["has_redirect_uri"]
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "base_operational": ready_base,
+        "mercado_livre_app_configured": ready_ml,
+        "mercado_livre_token_available": ml["has_access_token"],
+        "checks": checks,
+        "ml": ml,
+        "next_step": "Conectar OAuth Mercado Livre" if ready_base and ready_ml and not ml["has_access_token"] else "Executar schema/seed primeiro"
+    }
