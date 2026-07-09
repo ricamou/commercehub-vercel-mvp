@@ -114,7 +114,7 @@ def favicon():
 
 @app.get("/audit", response_class=HTMLResponse)
 async def audit_page():
-    content = "<div class='card'><h2>Auditoria Supabase</h2><p>Verifica variáveis, tabelas, REST API, leitura e gravação.</p><a class='btn' href='/api/audit/full'>Executar auditoria completa</a><a class='btn' href='/api/audit/env'>Variáveis</a><a class='btn' href='/api/audit/tables'>Tabelas</a><a class='btn' href='/api/audit/write-test'>Teste gravação</a></div>"
+    content = "<div class='card'><h2>Auditoria Supabase</h2><p>Verifica variáveis, tabelas, REST API, leitura e gravação.</p><a class='btn' href='/api/audit/safe-full'>Executar auditoria segura</a><a class='btn' href='/api/audit/env'>Variáveis</a><a class='btn' href='/api/audit/tables'>Tabelas</a><a class='btn' href='/api/audit/write-test'>Teste gravação</a></div>"
     return HTMLResponse(shell("Auditoria Supabase", content))
 
 @app.get("/api/audit/env")
@@ -151,3 +151,59 @@ async def audit_full():
     write_result = await audit_write_test()
     backend = await backend_health()
     return {"success": True, "version": APP_VERSION, "summary": {"env_ok": bool(env_result["supabase_url"]["present"] and env_result["service_role_or_key"]["present"]), "write_ok": bool(write_result.get("success")), "mode": store.mode()}, "env": env_result, "backend": backend, "tables": tables_result, "write_test": write_result, "next_action": "Se write_ok=false e aparecer Errno 16, o problema é conectividade/REST Supabase no ambiente Vercel."}
+
+
+
+def _safe_error(exc):
+    return {"type": exc.__class__.__name__, "message": str(exc)[:800]}
+
+@app.get("/api/audit/safe-full")
+async def audit_safe_full():
+    result = {"success": True, "version": APP_VERSION, "steps": {}, "summary": {}}
+
+    try:
+        result["steps"]["env"] = audit_env()
+    except Exception as exc:
+        result["steps"]["env"] = {"success": False, "error": _safe_error(exc)}
+
+    try:
+        result["steps"]["tables"] = await audit_tables()
+    except Exception as exc:
+        result["steps"]["tables"] = {"success": False, "error": _safe_error(exc)}
+
+    try:
+        result["steps"]["write_test"] = await audit_write_test()
+    except Exception as exc:
+        result["steps"]["write_test"] = {"success": False, "error": _safe_error(exc)}
+
+    try:
+        result["steps"]["backend_health"] = await backend_health()
+    except Exception as exc:
+        result["steps"]["backend_health"] = {"success": False, "error": _safe_error(exc)}
+
+    env_data = result["steps"].get("env", {})
+    write_data = result["steps"].get("write_test", {})
+
+    result["summary"] = {
+        "env_ok": bool(env_data.get("supabase_url", {}).get("present") and env_data.get("service_role_or_key", {}).get("present")),
+        "write_ok": bool(write_data.get("success")),
+        "mode": store.mode(),
+        "supabase_configured": store.configured(),
+        "internal_server_error_fixed": True
+    }
+
+    if not result["summary"]["write_ok"]:
+        result["diagnosis"] = "A aplicação está viva, mas a gravação/leitura no Supabase falhou. Verifique steps.write_test."
+    else:
+        result["diagnosis"] = "Supabase gravou e leu corretamente."
+
+    return result
+
+@app.get("/audit-safe", response_class=HTMLResponse)
+async def audit_safe_page():
+    content = "<div class='card'><h2>Auditoria Supabase Segura</h2><p>Esta versão captura cada erro separadamente.</p><a class='btn' href='/api/audit/safe-full'>Executar auditoria segura</a><a class='btn' href='/api/audit/env'>Variáveis</a><a class='btn' href='/api/audit/tables'>Tabelas</a><a class='btn' href='/api/audit/write-test'>Teste gravação</a><a class='btn' href='/api/backend/health'>Backend Health</a></div>"
+    return HTMLResponse(shell("Auditoria Segura", content))
+
+@app.get("/api/audit/ping")
+def audit_ping():
+    return {"success": True, "version": APP_VERSION, "message": "Audit module loaded"}
