@@ -1,15 +1,11 @@
-# CommerceHub Enterprise V4 - Sprint 5 Connectivity Analyzer
+# CommerceHub Enterprise V4 - Sprint 6 Vercel Env Audit
 
 Testes:
 - /api/health
-- /connectivity
+- /vercel-env
+- /api/vercel/env-audit
+- /api/vercel/env-required
 - /api/connectivity/full
-- /api/connectivity/env
-- /api/connectivity/dns
-- /api/connectivity/socket
-- /api/connectivity/https
-- /api/connectivity/rest
-- /api/connectivity/auth
 
 Health esperado:
-enterprise-v4-sprint5-connectivity-analyzer
+enterprise-v4-sprint6-vercel-env-audit

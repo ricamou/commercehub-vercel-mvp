@@ -600,3 +600,156 @@ async def connectivity_full():
         diagnosis = "Conectividade Supabase OK."
 
     return {"success": True, "version": APP_VERSION, "summary": summary, "diagnosis": diagnosis, "steps": steps}
+
+
+
+
+# =========================
+# SPRINT 6 - VERCEL ENV AUDIT
+# =========================
+
+@app.get("/vercel-env", response_class=HTMLResponse)
+async def vercel_env_page():
+    content = """
+<div class='card'>
+<h2>Auditoria Variáveis Vercel</h2>
+<p>Verifica nomes, presença, tamanho, padrão da URL, possíveis valores de exemplo e chaves Supabase.</p>
+<a class='btn' href='/api/vercel/env-audit'>Executar auditoria</a>
+<a class='btn' href='/api/vercel/env-required'>Variáveis obrigatórias</a>
+<a class='btn' href='/api/connectivity/full'>Connectivity Full</a>
+</div>
+"""
+    return HTMLResponse(shell("Vercel Env Audit", content))
+
+def _env_value(name):
+    import os
+    v = os.getenv(name)
+    if v is None:
+        return ""
+    v = str(v).strip()
+    if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+        v = v[1:-1].strip()
+    return v
+
+def _mask_env(v):
+    if not v:
+        return {"present": False, "length": 0, "preview": ""}
+    return {"present": True, "length": len(v), "preview": (v[:12] + "..." + v[-6:]) if len(v) > 24 else v[:6] + "..."}
+
+def _classify_supabase_url(url):
+    import re
+    issues = []
+    ok = True
+    if not url:
+        return {"ok": False, "issues": ["SUPABASE_URL ausente"]}
+    if not url.startswith("https://"):
+        ok = False; issues.append("URL precisa começar com https://")
+    if "seu-projeto" in url.lower() or "example" in url.lower() or "xxxx" in url.lower():
+        ok = False; issues.append("URL parece placeholder/exemplo")
+    if " " in url or "\n" in url or "\r" in url:
+        ok = False; issues.append("URL contém espaço ou quebra de linha")
+    if not url.endswith(".supabase.co"):
+        ok = False; issues.append("URL normalmente deve terminar com .supabase.co")
+    host_part = url.replace("https://", "").replace(".supabase.co", "")
+    if len(host_part) < 10:
+        ok = False; issues.append("Project ref parece curto demais")
+    if not re.match(r"^https://[a-z0-9]+\.supabase\.co$", url):
+        issues.append("Formato esperado: https://PROJECTREF.supabase.co")
+    return {"ok": ok, "issues": issues, "project_ref_preview": host_part[:6] + "..." if host_part else ""}
+
+def _classify_jwt_key(key):
+    issues = []
+    ok = True
+    if not key:
+        return {"ok": False, "issues": ["chave ausente"]}
+    if " " in key or "\n" in key or "\r" in key:
+        ok = False; issues.append("chave contém espaço ou quebra de linha")
+    if key.lower().startswith("eyj") is False:
+        issues.append("chave Supabase normalmente começa com eyJ")
+    if len(key) < 100:
+        ok = False; issues.append("chave parece curta demais")
+    if "seu" in key.lower() or "xxxx" in key.lower() or "example" in key.lower():
+        ok = False; issues.append("chave parece placeholder/exemplo")
+    return {"ok": ok, "issues": issues}
+
+@app.get("/api/vercel/env-required")
+def vercel_env_required():
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "required": [
+            "SUPABASE_URL",
+            "SUPABASE_SERVICE_ROLE_KEY",
+            "SUPABASE_ANON_KEY",
+            "ML_CLIENT_ID",
+            "ML_CLIENT_SECRET",
+            "ML_REDIRECT_URI"
+        ],
+        "accepted_fallbacks": {
+            "SUPABASE_URL": ["NEXT_PUBLIC_SUPABASE_URL"],
+            "SUPABASE_SERVICE_ROLE_KEY": ["SUPABASE_KEY", "SUPABASE_ANON_KEY"],
+            "SUPABASE_ANON_KEY": ["NEXT_PUBLIC_SUPABASE_ANON_KEY"]
+        },
+        "important": "Para produção, use SUPABASE_SERVICE_ROLE_KEY no backend. Não use placeholder como https://seu-projeto.supabase.co."
+    }
+
+@app.get("/api/vercel/env-audit")
+def vercel_env_audit():
+    names = [
+        "SUPABASE_URL",
+        "NEXT_PUBLIC_SUPABASE_URL",
+        "SUPABASE_SERVICE_ROLE_KEY",
+        "SUPABASE_KEY",
+        "SUPABASE_ANON_KEY",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY",
+        "ML_CLIENT_ID",
+        "ML_CLIENT_SECRET",
+        "ML_REDIRECT_URI",
+        "APP_URL"
+    ]
+
+    values = {name: _env_value(name) for name in names}
+    loaded_url = _env_value("SUPABASE_URL") or _env_value("NEXT_PUBLIC_SUPABASE_URL")
+    loaded_key = _env_value("SUPABASE_SERVICE_ROLE_KEY") or _env_value("SUPABASE_KEY") or _env_value("SUPABASE_ANON_KEY")
+    loaded_anon = _env_value("SUPABASE_ANON_KEY") or _env_value("NEXT_PUBLIC_SUPABASE_ANON_KEY")
+
+    report = {name: _mask_env(value) for name, value in values.items()}
+
+    url_check = _classify_supabase_url(loaded_url)
+    service_key_check = _classify_jwt_key(loaded_key)
+    anon_key_check = _classify_jwt_key(loaded_anon)
+
+    diagnosis = []
+    if not url_check["ok"]:
+        diagnosis.append("Corrigir SUPABASE_URL na Vercel.")
+    if "placeholder" in " ".join(url_check.get("issues", [])).lower():
+        diagnosis.append("A URL carregada parece ser exemplo/placeholder.")
+    if not service_key_check["ok"]:
+        diagnosis.append("Corrigir SUPABASE_SERVICE_ROLE_KEY.")
+    if not anon_key_check["ok"]:
+        diagnosis.append("Adicionar/corrigir SUPABASE_ANON_KEY.")
+    if not diagnosis:
+        diagnosis.append("Variáveis parecem válidas pelo formato. Próximo teste: connectivity/full.")
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "loaded": {
+            "supabase_url": _mask_env(loaded_url),
+            "service_role_or_key": _mask_env(loaded_key),
+            "anon_key": _mask_env(loaded_anon)
+        },
+        "checks": {
+            "supabase_url": url_check,
+            "service_role_or_key": service_key_check,
+            "anon_key": anon_key_check
+        },
+        "all_variables_masked": report,
+        "diagnosis": diagnosis,
+        "next_steps": [
+            "Na Vercel > Project > Environment Variables, corrija SUPABASE_URL com a URL real do Supabase.",
+            "Corrija SUPABASE_SERVICE_ROLE_KEY com a service_role key real do Supabase.",
+            "Corrija SUPABASE_ANON_KEY com a anon public key real.",
+            "Depois faça Redeploy e teste /api/connectivity/full."
+        ]
+    }
