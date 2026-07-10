@@ -1,22 +1,27 @@
-# CommerceHub Enterprise V5 - Sprint 11 Enterprise Debug Mode
+# CommerceHub Enterprise V6 - Clean Architecture
 
-Adiciona:
-- Global exception handler
-- JSON detalhado para erros 500
-- /debug
-- /api/debug/ping
-- /api/debug/core-status-safe
-- /api/debug/schema-check-safe
-- /api/debug/route-test
-- /api/debug/force-error
+Arquitetura reconstruída para GitHub Web/Vercel com menos de 100 arquivos.
 
-Testes:
+## Arquivos
+- api/index.py
+- requirements.txt
+- vercel.json
+- README.md
+
+## Testes após deploy
 - /api/health
-- /debug
-- /api/debug/ping
-- /api/debug/core-status-safe
-- /api/debug/schema-check-safe
-- /api/debug/force-error
+- /
+- /setup
+- /database-sql
+- /system-check
+- /api/system/status
+- /api/setup/seed
+- /products
+- /api/products/create-test
+- /mercado-livre
+- /api/routes
 
-Health esperado:
-enterprise-v5-sprint11-enterprise-debug-mode
+## Health esperado
+enterprise-v6-clean-architecture
+
+Se as tabelas ainda não existirem, copie o SQL de `/database-sql` e execute no Supabase > SQL Editor.
