@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint20-1-image-manager-enterprise"
+S13_VERSION = "enterprise-v5-sprint20-1-1-image-manager-hotfix"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -4566,9 +4566,11 @@ S20_ALLOWED_MIME = {
 
 
 def s20_safe_filename(filename):
+    import re as _re
+
     filename = os.path.basename(str(filename or "image"))
     stem, ext = os.path.splitext(filename)
-    safe_stem = re.sub(r"[^a-zA-Z0-9_-]+", "-", stem).strip("-") or "image"
+    safe_stem = _re.sub(r"[^a-zA-Z0-9_-]+", "-", stem).strip("-") or "image"
     return safe_stem[:80], ext.lower()
 
 

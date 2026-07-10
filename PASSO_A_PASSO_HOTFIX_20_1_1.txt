@@ -1,0 +1,12 @@
+HOTFIX 20.1.1 — IMAGE MANAGER
+
+1. Envie todos os arquivos deste pacote pelo GitHub Web.
+2. Aguarde o deploy ficar Ready.
+3. Abra /api/health.
+4. Confirme a versão:
+   enterprise-v5-sprint20-1-1-image-manager-hotfix
+5. Não execute novo SQL.
+6. Abra Product Master > Produto > Imagens.
+7. Faça upload de uma imagem JPG, PNG ou WEBP.
+8. Marque Imagem principal.
+9. Clique em Enviar imagem.

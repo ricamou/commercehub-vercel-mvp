@@ -36,3 +36,11 @@ Em caso de falha no upload, o endpoint agora devolve JSON com:
 - `product_id`
 
 Isso evita a tela genérica `Internal Server Error`.
+
+
+## Hotfix 20.1.1
+
+- Corrigido `NameError: name 're' is not defined`.
+- Adicionado import defensivo em `s20_safe_filename`.
+- Nenhum novo SQL é necessário.
+- Versão esperada: `enterprise-v5-sprint20-1-1-image-manager-hotfix`.
