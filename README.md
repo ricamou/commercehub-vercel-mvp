@@ -44,3 +44,15 @@ Isso evita a tela genérica `Internal Server Error`.
 - Adicionado import defensivo em `s20_safe_filename`.
 - Nenhum novo SQL é necessário.
 - Versão esperada: `enterprise-v5-sprint20-1-1-image-manager-hotfix`.
+
+
+## Hotfix 20.1.2 — Family Name
+
+Correção aplicada ao payload de publicação do Mercado Livre:
+
+- Adicionado o campo obrigatório `family_name`.
+- O valor usa `seo_name`, depois `name`, e por último o título do anúncio.
+- Limite automático de 60 caracteres.
+- A URL pública da imagem permanece inalterada.
+- Não é necessário executar novo SQL.
+- Versão esperada: `enterprise-v5-sprint20-1-2-family-name-hotfix`.

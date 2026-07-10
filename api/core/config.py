@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint20-1-1-image-manager-hotfix"
+APP_VERSION = "enterprise-v5-sprint20-1-2-family-name-hotfix"
 
 def env(name, default=""):
     value = os.getenv(name, default)

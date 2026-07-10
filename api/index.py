@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint20-1-1-image-manager-hotfix"
+S13_VERSION = "enterprise-v5-sprint20-1-2-family-name-hotfix"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -4119,8 +4119,16 @@ def s19_build_ml_payload(context, listing):
                 "value_name": attr_value
             })
 
+    family_name = str(
+        product.get("seo_name")
+        or product.get("name")
+        or listing.get("title")
+        or ""
+    ).strip()[:60]
+
     return {
         "title": str(listing.get("title") or product.get("name") or "")[:60],
+        "family_name": family_name,
         "category_id": listing.get("category_id"),
         "price": s19float(listing.get("price") or product.get("sale_price"), 0),
         "currency_id": listing.get("currency_id") or "BRL",

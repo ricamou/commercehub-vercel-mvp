@@ -1,0 +1,15 @@
+HOTFIX 20.1.2 — FAMILY NAME
+
+1. Envie todos os arquivos deste pacote pelo GitHub Web.
+2. Aguarde o deploy ficar Ready.
+3. Abra /api/health.
+4. Confirme:
+   enterprise-v5-sprint20-1-2-family-name-hotfix
+5. Não execute novo SQL.
+6. Abra o Listing Engine.
+7. Abra o mesmo rascunho.
+8. Revise categoria, preço, estoque e imagem.
+9. Digite PUBLICAR novamente.
+
+Correção:
+O payload agora envia o campo obrigatório family_name ao Mercado Livre.
