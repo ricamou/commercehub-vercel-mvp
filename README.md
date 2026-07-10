@@ -1,40 +1,32 @@
-# CommerceHub Enterprise V5 — Sprint 24 Marketplace Metadata Preflight
+# CommerceHub Enterprise V5 — Sprint 25 Marketplace Intelligence Engine
 
-## Pesquisa aplicada
+## Incluído
 
-A implementação foi orientada por documentação oficial do Mercado Livre:
-
-- validações por atributos da categoria;
-- `conditional_required`;
-- User Products com `family_name`;
-- validação e uso de identificadores GTIN.
-
-Também foi considerada a recomendação da GS1 de validar se o GTIN está realmente vinculado ao produto, e não apenas se possui dígito verificador válido.
-
-## O que foi corrigido
-
-- `CATEGORY_RULE_GTIN_REQUIRED` e qualquer outro atributo interno nunca mais serão enviados ao Mercado Livre;
-- somente IDs existentes nos metadados oficiais da categoria entram no payload;
-- a regra aprendida de GTIN agora é consultada corretamente por produto e categoria;
-- o sistema tenta consultar a validação condicional antes do `POST /items`;
-- o anúncio é bloqueado localmente quando uma regra oficial ou aprendida não é atendida;
-- nova tela `Metadata Preflight`;
-- novo JSON técnico de diagnóstico.
+- base de conhecimento persistente por categoria e marca;
+- armazenamento de erros reais do Mercado Livre;
+- aprendizado automático das regras:
+  - GTIN obrigatório;
+  - GTIN inválido;
+  - fluxo User Products com `family_name`;
+- contador de ocorrências;
+- nível de confiança;
+- aplicação das regras antes da publicação;
+- integração com Metadata Preflight;
+- tela Marketplace Intelligence;
+- histórico técnico de erros e payloads.
 
 ## Instalação
 
-1. Envie todos os arquivos pelo GitHub Web.
+1. Envie os arquivos pelo GitHub Web.
 2. Aguarde o deploy.
 3. Abra `/api/health`.
 4. Confirme:
-   `enterprise-v5-sprint24-marketplace-metadata-preflight`
-5. Não execute novo SQL.
-6. Abra o anúncio.
-7. Clique em `Metadata Preflight`.
-8. Corrija os bloqueios apresentados.
-9. Só então publique.
+   `enterprise-v5-sprint25-marketplace-intelligence-engine`
+5. Execute `Sprint25_Marketplace_Intelligence.sql` em uma nova query no Supabase.
+6. Abra `/api/marketplace-intelligence/category/MLB1714`.
+7. Abra o anúncio e clique em `Marketplace Intelligence`.
+8. Faça uma nova tentativa somente depois de corrigir os bloqueios.
 
-## Rotas novas
+## Observação
 
-- `/metadata-preflight/listing/{listing_id}`
-- `/api/metadata-preflight/listing/{listing_id}`
+O sistema não cria GTIN e não substitui dados reais do fabricante. Ele aprende quando uma categoria ou combinação categoria/marca exige um GTIN verdadeiro.

@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint24-marketplace-metadata-preflight"
+APP_VERSION = "enterprise-v5-sprint25-marketplace-intelligence-engine"
 
 def env(name, default=""):
     value = os.getenv(name, default)

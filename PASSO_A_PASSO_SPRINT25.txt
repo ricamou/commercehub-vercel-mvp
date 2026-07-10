@@ -1,0 +1,16 @@
+SPRINT 25 — MARKETPLACE INTELLIGENCE ENGINE
+
+1. Envie todos os arquivos pelo GitHub Web.
+2. Aguarde o deploy da Vercel.
+3. Abra /api/health.
+4. Confirme:
+   enterprise-v5-sprint25-marketplace-intelligence-engine
+5. No Supabase, abra SQL Editor > New query.
+6. Cole todo o conteúdo de Sprint25_Marketplace_Intelligence.sql.
+7. Clique em Run.
+8. O resultado esperado é:
+   marketplace_intelligence_ready
+9. Abra o anúncio.
+10. Clique em Marketplace Intelligence.
+11. Confira bloqueios e recomendações.
+12. O sistema aprenderá com novas respostas do Mercado Livre.

@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint24-marketplace-metadata-preflight"
+S13_VERSION = "enterprise-v5-sprint25-marketplace-intelligence-engine"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -4597,7 +4597,7 @@ async def listing_details_page(listing_id: str):
 <p><b>Imagens:</b> {len(context['images'])}</p>
 <p><b>Descrição:</b><br>{s19e(listing.get('description') or '-')}</p>
 <a class='btn' href='/product-master/{product.get("id")}/listing'>Editar rascunho</a>
-<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a><a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a>
+<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a><a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a><a class='btn' href='/marketplace-intelligence/listing/{listing_id}'>Marketplace Intelligence</a>
 </div>
 <div class='card'><h2>Erros</h2><ul>{errors_html}</ul><h2>Alertas</h2><ul>{warnings_html}</ul></div>
 {publish_box}
@@ -4643,6 +4643,16 @@ async def listing_publish(listing_id: str, request: Request):
     payload = publish_attempt.get("payload") or {}
     result = publish_attempt.get("result") or {}
     if not publish_attempt.get("success"):
+        try:
+            await s25_record_error(
+                context,
+                listing,
+                result,
+                payload,
+            )
+        except Exception:
+            pass
+
         try:
             await s23_record_ml_rule_feedback(
                 context["product"].get("id"),
@@ -6827,6 +6837,14 @@ async def s24_metadata_preflight(context, listing):
     blockers = []
     warnings = []
 
+    intelligence = await s25_intelligence_assessment(context, listing)
+    for item in intelligence.get("blockers") or []:
+        blockers.append({
+            "code": item.get("code"),
+            "message": item.get("message"),
+            "rule": item.get("rule"),
+        })
+
     if filtered_ids:
         blockers.append({
             "code": "non_official_attributes",
@@ -6885,6 +6903,7 @@ async def s24_metadata_preflight(context, listing):
         "conditional_validation": conditional,
         "blockers": blockers,
         "warnings": warnings,
+        "intelligence": intelligence,
     }
 
 
@@ -6969,3 +6988,400 @@ async def metadata_preflight_page(listing_id: str):
 </div>
 """
     return HTMLResponse(shell("Marketplace Metadata Preflight", content))
+
+
+# ==========================================================
+# SPRINT 25 - MARKETPLACE INTELLIGENCE ENGINE
+# Aprende regras por categoria, marca e erro real do marketplace.
+# ==========================================================
+
+def s25_json_safe(value):
+    try:
+        json.dumps(value, ensure_ascii=False, default=str)
+        return value
+    except Exception:
+        return {"raw": str(value)}
+
+
+def s25_ml_causes(result):
+    data = result.get("data") if isinstance(result, dict) else {}
+    causes = data.get("cause") if isinstance(data, dict) else None
+    if isinstance(causes, list):
+        return causes
+    return []
+
+
+async def s25_upsert_rule(
+    category_id,
+    rule_key,
+    rule_value,
+    brand=None,
+    domain_id=None,
+    source="api_feedback",
+    confidence=100,
+    error_code=None,
+    error_message=None,
+):
+    query = (
+        "select=*&marketplace=eq.mercado_livre"
+        + "&category_id=eq." + quote(str(category_id), safe="-_")
+        + "&rule_key=eq." + quote(str(rule_key), safe="-_")
+        + "&limit=1"
+    )
+
+    if brand:
+        query += "&brand=eq." + quote(str(brand), safe="-_ ")
+    else:
+        query += "&brand=is.null"
+
+    if domain_id:
+        query += "&domain_id=eq." + quote(str(domain_id), safe="-_")
+    else:
+        query += "&domain_id=is.null"
+
+    existing_result = await store.select("marketplace_rule_knowledge", query)
+    existing_rows = existing_result.get("data") or []
+    existing = existing_rows[0] if existing_rows else None
+
+    now_value = __import__("datetime").datetime.utcnow().isoformat()
+
+    if existing:
+        update_payload = {
+            "rule_value": s25_json_safe(rule_value),
+            "source": source,
+            "confidence": confidence,
+            "hit_count": int(existing.get("hit_count") or 0) + 1,
+            "last_error_code": error_code,
+            "last_error_message": error_message,
+            "last_seen_at": now_value,
+            "active": True,
+        }
+        return await store.update(
+            "marketplace_rule_knowledge",
+            "id=eq." + quote(str(existing.get("id")), safe="-"),
+            update_payload,
+        )
+
+    insert_payload = {
+        "company_id": DEFAULT_COMPANY_ID,
+        "marketplace": "mercado_livre",
+        "category_id": category_id,
+        "domain_id": domain_id,
+        "brand": brand,
+        "rule_key": rule_key,
+        "rule_value": s25_json_safe(rule_value),
+        "source": source,
+        "confidence": confidence,
+        "hit_count": 1,
+        "last_error_code": error_code,
+        "last_error_message": error_message,
+        "active": True,
+        "first_seen_at": now_value,
+        "last_seen_at": now_value,
+    }
+    return await store.insert("marketplace_rule_knowledge", insert_payload)
+
+
+async def s25_get_rules(category_id, brand=None):
+    query = (
+        "select=*&marketplace=eq.mercado_livre"
+        + "&category_id=eq." + quote(str(category_id), safe="-_")
+        + "&active=eq.true"
+        + "&order=confidence.desc,last_seen_at.desc"
+    )
+    result = await store.select("marketplace_rule_knowledge", query)
+    rows = result.get("data") or []
+
+    filtered = []
+    for row in rows:
+        row_brand = str(row.get("brand") or "").strip()
+        if row_brand and brand and row_brand.lower() != str(brand).strip().lower():
+            continue
+        if row_brand and not brand:
+            continue
+        filtered.append(row)
+
+    return filtered
+
+
+async def s25_record_error(
+    context,
+    listing,
+    result,
+    payload,
+):
+    product = context.get("product") or {}
+    causes = s25_ml_causes(result)
+
+    if not causes:
+        causes = [{
+            "code": (result.get("data") or {}).get("message") if isinstance(result.get("data"), dict) else None,
+            "cause_id": None,
+            "department": None,
+            "message": result.get("error") or result.get("raw"),
+        }]
+
+    saved = 0
+    learned = []
+
+    for cause in causes:
+        code_value = str(cause.get("code") or "").strip()
+        cause_id = str(cause.get("cause_id") or "").strip()
+        message = str(cause.get("message") or "").strip()
+        department = str(cause.get("department") or "").strip()
+
+        row = {
+            "company_id": DEFAULT_COMPANY_ID,
+            "marketplace": "mercado_livre",
+            "product_id": product.get("id"),
+            "listing_id": listing.get("id"),
+            "category_id": listing.get("category_id"),
+            "brand": product.get("brand"),
+            "error_code": code_value or None,
+            "cause_id": cause_id or None,
+            "department": department or None,
+            "message": message or None,
+            "payload_snapshot": s25_json_safe(payload or {}),
+            "response_snapshot": s25_json_safe(result or {}),
+            "resolution_key": None,
+            "resolved": False,
+        }
+        insert_result = await store.insert("marketplace_error_knowledge", row)
+        if insert_result.get("success"):
+            saved += 1
+
+        text = f"{code_value} {message}".lower()
+
+        if (
+            "missing_conditional_required" in text
+            and "gtin" in text
+        ):
+            rule = await s25_upsert_rule(
+                listing.get("category_id"),
+                "GTIN_REQUIRED",
+                {
+                    "required": True,
+                    "empty_gtin_reason_substitutes": False,
+                    "evidence": "conditional_required",
+                },
+                brand=product.get("brand"),
+                source="mercado_livre_error",
+                confidence=100,
+                error_code=code_value,
+                error_message=message,
+            )
+            learned.append({
+                "rule_key": "GTIN_REQUIRED",
+                "success": bool(rule.get("success")),
+            })
+
+        if "product_identifier.invalid_format" in text and "gtin" in text:
+            rule = await s25_upsert_rule(
+                listing.get("category_id"),
+                "GTIN_FORMAT_VALIDATION",
+                {
+                    "validate_structure": True,
+                    "requires_real_product_identifier": True,
+                },
+                brand=product.get("brand"),
+                source="mercado_livre_error",
+                confidence=100,
+                error_code=code_value,
+                error_message=message,
+            )
+            learned.append({
+                "rule_key": "GTIN_FORMAT_VALIDATION",
+                "success": bool(rule.get("success")),
+            })
+
+        if "body.invalid_fields" in text and "title" in text:
+            rule = await s25_upsert_rule(
+                listing.get("category_id"),
+                "USER_PRODUCT_FAMILY_NAME_FLOW",
+                {
+                    "use_family_name": True,
+                    "send_title": False,
+                },
+                brand=product.get("brand"),
+                source="mercado_livre_error",
+                confidence=95,
+                error_code=code_value,
+                error_message=message,
+            )
+            learned.append({
+                "rule_key": "USER_PRODUCT_FAMILY_NAME_FLOW",
+                "success": bool(rule.get("success")),
+            })
+
+    return {
+        "success": True,
+        "errors_saved": saved,
+        "rules_learned": learned,
+    }
+
+
+async def s25_intelligence_assessment(context, listing):
+    product = context.get("product") or {}
+    category_id = listing.get("category_id")
+    brand = product.get("brand")
+
+    rules = await s25_get_rules(category_id, brand)
+    by_key = {
+        str(row.get("rule_key") or "").upper(): row
+        for row in rules
+    }
+
+    values = await s21_product_values(product.get("id"), category_id)
+    gtin_row = values.get("GTIN") or values.get("gtin") or {}
+    reason_row = values.get("EMPTY_GTIN_REASON") or values.get("empty_gtin_reason") or {}
+
+    gtin_value = gtin_row.get("value_name") or gtin_row.get("value_id")
+    has_valid_gtin = s212_valid_gtin(gtin_value)
+    has_reason = bool(reason_row.get("value_id") or reason_row.get("value_name"))
+
+    blockers = []
+    recommendations = []
+
+    gtin_rule = by_key.get("GTIN_REQUIRED")
+    if gtin_rule and not has_valid_gtin:
+        blockers.append({
+            "code": "learned_gtin_required",
+            "message": (
+                "A base de inteligência confirmou que esta categoria/marca "
+                "exige GTIN válido."
+            ),
+            "rule": gtin_rule.get("rule_value"),
+        })
+        recommendations.append({
+            "action": "provide_real_gtin",
+            "message": "Informe o GTIN real da embalagem ou do fabricante.",
+        })
+
+    if has_reason and gtin_rule:
+        recommendations.append({
+            "action": "do_not_use_empty_gtin_reason",
+            "message": (
+                "EMPTY_GTIN_REASON já foi recusado para esta combinação "
+                "de categoria e marca."
+            ),
+        })
+
+    return {
+        "success": len(blockers) == 0,
+        "category_id": category_id,
+        "brand": brand,
+        "rules_count": len(rules),
+        "rules": rules,
+        "blockers": blockers,
+        "recommendations": recommendations,
+        "current": {
+            "has_valid_gtin": has_valid_gtin,
+            "has_empty_gtin_reason": has_reason,
+        },
+    }
+
+
+@app.get("/api/marketplace-intelligence/category/{category_id}")
+async def marketplace_intelligence_category(category_id: str, brand: str = ""):
+    rules = await s25_get_rules(category_id, brand or None)
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "category_id": category_id,
+        "brand": brand or None,
+        "rules_count": len(rules),
+        "rules": rules,
+    }
+
+
+@app.get("/api/marketplace-intelligence/listing/{listing_id}")
+async def marketplace_intelligence_listing(listing_id: str):
+    listing = await s19_get_listing(listing_id)
+    if not listing:
+        return JSONResponse(status_code=404, content={
+            "success": False,
+            "error": "Anúncio não encontrado.",
+        })
+
+    context = await s19_product_context(listing.get("product_id"))
+    if not context:
+        return JSONResponse(status_code=404, content={
+            "success": False,
+            "error": "Produto não encontrado.",
+        })
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "assessment": await s25_intelligence_assessment(context, listing),
+    }
+
+
+@app.get("/marketplace-intelligence/listing/{listing_id}", response_class=HTMLResponse)
+async def marketplace_intelligence_page(listing_id: str):
+    listing = await s19_get_listing(listing_id)
+    if not listing:
+        return HTMLResponse(
+            shell("Marketplace Intelligence", "<div class='card'>Anúncio não encontrado.</div>"),
+            status_code=404,
+        )
+
+    context = await s19_product_context(listing.get("product_id"))
+    assessment = await s25_intelligence_assessment(context, listing)
+
+    blockers = assessment.get("blockers") or []
+    recommendations = assessment.get("recommendations") or []
+    rules = assessment.get("rules") or []
+
+    blockers_html = "".join(
+        f"<li><b>{s19e(item.get('code'))}</b>: {s19e(item.get('message'))}</li>"
+        for item in blockers
+    ) or "<li>Nenhum bloqueio aprendido.</li>"
+
+    recommendations_html = "".join(
+        f"<li><b>{s19e(item.get('action'))}</b>: {s19e(item.get('message'))}</li>"
+        for item in recommendations
+    ) or "<li>Nenhuma recomendação adicional.</li>"
+
+    rows = "".join(
+        f"""<tr>
+<td>{s19e(row.get('rule_key'))}</td>
+<td>{s19e(row.get('brand') or 'Todas')}</td>
+<td>{s19e(row.get('source'))}</td>
+<td>{s19e(row.get('confidence'))}</td>
+<td>{s19e(row.get('hit_count'))}</td>
+<td>{s19e(row.get('last_error_code') or '-')}</td>
+</tr>"""
+        for row in rules
+    ) or "<tr><td colspan='6'>Nenhuma regra aprendida.</td></tr>"
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Status</span><strong>{'LIBERADO' if assessment.get('success') else 'BLOQUEADO'}</strong></div>
+  <div class='metric'><span>Categoria</span><strong>{s19e(assessment.get('category_id'))}</strong></div>
+  <div class='metric'><span>Marca</span><strong>{s19e(assessment.get('brand') or '-')}</strong></div>
+  <div class='metric'><span>Regras aprendidas</span><strong>{assessment.get('rules_count')}</strong></div>
+</div>
+
+<div class='card'>
+<h2>Bloqueios aprendidos</h2>
+<ul>{blockers_html}</ul>
+<h2>Recomendações</h2>
+<ul>{recommendations_html}</ul>
+</div>
+
+<div class='card'>
+<h2>Base de conhecimento aplicada</h2>
+<table>
+<thead><tr><th>Regra</th><th>Marca</th><th>Fonte</th><th>Confiança</th><th>Ocorrências</th><th>Último erro</th></tr></thead>
+<tbody>{rows}</tbody>
+</table>
+</div>
+
+<div class='card'>
+<a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a>
+<a class='btn' href='/product-master/{listing.get("product_id")}/listing'>Voltar ao anúncio</a>
+<a class='btn' href='/api/marketplace-intelligence/listing/{listing_id}'>Ver JSON técnico</a>
+</div>
+"""
+    return HTMLResponse(shell("Marketplace Intelligence Engine", content))
