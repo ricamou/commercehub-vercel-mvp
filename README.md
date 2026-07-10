@@ -1,18 +1,19 @@
-# CommerceHub Enterprise V5 - Sprint 14 Database Installer
+# CommerceHub Enterprise V5 - Sprint 15 Core Routes Fix
 
-Continuação direta da Sprint 13.
+Correções desta versão:
+- Substituição das chamadas inexistentes `db_select` por `store.select`.
+- Substituição das chamadas inexistentes `db_insert` por `store.insert`.
+- Correção do upsert de estoque usando a constraint composta `company_id,product_id`.
+- Nova rota `/api/core/routes-check`.
 
-## Objetivo
-Resolver o bloqueio atual: o Supabase está conectado, porém as tabelas ainda não foram criadas.
+Após o deploy, teste:
+1. `/api/health`
+2. `/api/install/verify`
+3. `/api/core/routes-check`
+4. `/products`
+5. `/suppliers`
+6. `/inventory`
+7. `/logs`
 
-## Rotas
-- /api/health
-- /install
-- /install/sql
-- /api/install/status
-- /api/install/seed
-- /api/install/verify
-- /continuity
-
-## Health esperado
-enterprise-v5-sprint14-database-installer
+Versão esperada:
+`enterprise-v5-sprint15-core-routes-fix`

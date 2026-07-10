@@ -1228,7 +1228,7 @@ async def database_schema_check():
     ok_count = 0
     for table in expected_tables:
         try:
-            res = await db_select(table, "select=*&limit=1")
+            res = await store.select(table, "select=*&limit=1")
             success = bool(res.get("success"))
             if success:
                 ok_count += 1
@@ -1286,7 +1286,7 @@ async def core_status():
     counts = {}
     ok = True
     for table in tables:
-        res = await db_select(table, "select=*&limit=1000")
+        res = await store.select(table, "select=*&limit=1000")
         counts[table] = {
             "success": res.get("success", False),
             "rows": res.get("rows", 0),
@@ -1304,7 +1304,7 @@ async def core_status():
 
 @app.get("/companies", response_class=HTMLResponse)
 async def companies_page():
-    res = await db_select("companies", "select=*&order=created_at.desc")
+    res = await store.select("companies", "select=*&order=created_at.desc")
     rows = res.get("data", []) if res.get("success") else []
     table = _html_table(
         ["Nome", "Documento", "Email", "Plano", "Status"],
@@ -1322,7 +1322,7 @@ async def companies_page():
 
 @app.get("/users", response_class=HTMLResponse)
 async def users_page():
-    res = await db_select("users_app", "select=*&order=created_at.desc")
+    res = await store.select("users_app", "select=*&order=created_at.desc")
     rows = res.get("data", []) if res.get("success") else []
     table = _html_table(
         ["Nome", "Email", "Perfil", "Status"],
@@ -1333,7 +1333,7 @@ async def users_page():
 
 @app.get("/suppliers", response_class=HTMLResponse)
 async def suppliers_page():
-    res = await db_select("suppliers", "select=*&order=created_at.desc")
+    res = await store.select("suppliers", "select=*&order=created_at.desc")
     rows = res.get("data", []) if res.get("success") else []
     table = _html_table(
         ["Nome", "Tipo", "Status", "Email"],
@@ -1350,7 +1350,7 @@ async def suppliers_page():
 
 @app.get("/products", response_class=HTMLResponse)
 async def products_page():
-    res = await db_select("products", "select=*&order=created_at.desc")
+    res = await store.select("products", "select=*&order=created_at.desc")
     rows = res.get("data", []) if res.get("success") else []
     table = _html_table(
         ["SKU", "Produto", "Marca", "Custo", "Venda", "Status"],
@@ -1368,7 +1368,7 @@ async def products_page():
 
 @app.get("/inventory", response_class=HTMLResponse)
 async def inventory_page():
-    res = await db_select("inventory", "select=*&order=created_at.desc")
+    res = await store.select("inventory", "select=*&order=created_at.desc")
     rows = res.get("data", []) if res.get("success") else []
     table = _html_table(
         ["SKU", "Qtd", "Reservado", "Disponível", "Status"],
@@ -1379,7 +1379,7 @@ async def inventory_page():
 
 @app.get("/logs", response_class=HTMLResponse)
 async def logs_page():
-    res = await db_select("logs", "select=*&order=created_at.desc&limit=50")
+    res = await store.select("logs", "select=*&order=created_at.desc&limit=50")
     rows = res.get("data", []) if res.get("success") else []
     table = _html_table(
         ["Data", "Tipo", "Nível", "Mensagem"],
@@ -1403,10 +1403,10 @@ async def core_create_test_product():
         "status": "active",
         "raw_data": {"source": "core_create_test_product", "version": APP_VERSION}
     }
-    created = await db_insert("products", product)
+    created = await store.insert("products", product)
     if created.get("success") and created.get("data"):
         product_id = created["data"][0].get("id")
-        await db_insert("inventory", {
+        await store.insert("inventory", {
             "company_id": DEFAULT_COMPANY_ID,
             "product_id": product_id,
             "sku": sku,
@@ -1414,7 +1414,7 @@ async def core_create_test_product():
             "reserved": 0,
             "status": "available"
         })
-        await db_insert("logs", {
+        await store.insert("logs", {
             "company_id": DEFAULT_COMPANY_ID,
             "event_type": "product_created",
             "level": "info",
@@ -1433,7 +1433,7 @@ async def core_create_test_product():
 async def sell_readiness():
     checks = {}
     for table in ["companies","users_app","suppliers","products","inventory","marketplace_accounts"]:
-        res = await db_select(table, "select=*&limit=1")
+        res = await store.select(table, "select=*&limit=1")
         checks[table] = res.get("success") and res.get("rows",0) >= 1
 
     ml = {
@@ -1517,7 +1517,7 @@ async def debug_core_status_safe():
         counts = {}
         ok = True
         for table in tables:
-            res = await db_select(table, "select=*&limit=1000")
+            res = await store.select(table, "select=*&limit=1000")
             counts[table] = {
                 "success": res.get("success", False),
                 "rows": res.get("rows", 0),
@@ -1547,7 +1547,7 @@ async def debug_schema_check_safe():
         results = {}
         ok_count = 0
         for table in expected_tables:
-            res = await db_select(table, "select=*&limit=1")
+            res = await store.select(table, "select=*&limit=1")
             success = bool(res.get("success"))
             if success:
                 ok_count += 1
@@ -1721,7 +1721,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint14-database-installer"
+S13_VERSION = "enterprise-v5-sprint15-core-routes-fix"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -2220,7 +2220,7 @@ async def install_seed():
         "brand": await store.upsert("brands", brand),
         "category": await store.upsert("categories", category),
         "product": await store.upsert("products", product),
-        "inventory": await store.upsert("inventory", inventory, "product_id"),
+        "inventory": await store.upsert("inventory", inventory, "company_id,product_id"),
         "log": await store.insert("logs", {
             "company_id": DEFAULT_COMPANY_ID,
             "event_type": "database_installed",
@@ -2259,4 +2259,35 @@ async def install_verify():
         "stage": "complete" if ready else "seed",
         "checks": checks,
         "next_step": "/" if ready else "/api/install/seed"
+    }
+
+
+# =========================
+# SPRINT 15 - CORE ROUTES FIX
+# =========================
+
+@app.get("/api/core/routes-check")
+async def core_routes_check():
+    tables = ["companies", "users_app", "suppliers", "products", "inventory", "logs"]
+    results = {}
+    all_ok = True
+
+    for table in tables:
+        result = await store.select(table, "select=*&limit=5")
+        item = {
+            "success": bool(result.get("success")),
+            "status_code": result.get("status_code"),
+            "rows": len(result.get("data") or []),
+            "error": str(result.get("error") or "")[:500],
+        }
+        results[table] = item
+        if not item["success"]:
+            all_ok = False
+
+    return {
+        "success": all_ok,
+        "version": APP_VERSION,
+        "diagnosis": "Rotas principais e Supabase operacionais." if all_ok else "Existe falha em uma ou mais tabelas.",
+        "results": results,
+        "pages": ["/companies", "/users", "/suppliers", "/products", "/inventory", "/logs"]
     }

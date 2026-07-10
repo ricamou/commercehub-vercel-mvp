@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint14-database-installer"
+APP_VERSION = "enterprise-v5-sprint15-core-routes-fix"
 
 def env(name, default=""):
     value = os.getenv(name, default)
