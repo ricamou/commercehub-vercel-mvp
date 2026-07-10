@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint21-smart-category-engine"
+APP_VERSION = "enterprise-v5-sprint21-1-product-editor"
 
 def env(name, default=""):
     value = os.getenv(name, default)

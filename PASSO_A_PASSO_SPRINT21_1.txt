@@ -1,0 +1,22 @@
+SPRINT 21.1 — PRODUCT EDITOR
+
+1. Suba todos os arquivos no GitHub Web.
+2. Aguarde a Vercel concluir o deploy.
+3. Abra /api/health.
+4. Confirme:
+   enterprise-v5-sprint21-1-product-editor
+5. No Supabase, crie uma NOVA QUERY.
+6. Cole o conteúdo de Sprint21_1_Product_Editor.sql.
+7. Clique em Run.
+8. Abra /product-master.
+9. Entre no produto.
+10. Clique em Editar.
+11. Preencha:
+    - EAN/GTIN verdadeiro
+    - Modelo
+    - Categoria ML (ex.: MLB1648)
+    - Marca
+12. Mude o status para ready.
+13. Salve.
+14. Volte ao anúncio > Atributos inteligentes.
+15. Valide e publique.

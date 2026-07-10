@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint21-smart-category-engine"
+S13_VERSION = "enterprise-v5-sprint21-1-product-editor"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -3538,6 +3538,8 @@ async def product_master_create(request: Request):
         "name": name,
         "seo_name": str(form.get("seo_name") or "").strip() or name,
         "brand": str(form.get("brand") or "").strip() or None,
+        "model": str(form.get("model") or "").strip() or None,
+        "ml_category_id": str(form.get("ml_category_id") or "").strip() or None,
         "short_description": str(form.get("short_description") or "").strip() or None,
         "description": str(form.get("description") or "").strip() or None,
         "cost_price": s18_decimal(form.get("cost_price"), 0),
@@ -3612,6 +3614,8 @@ async def product_master_details_page(product_id: str):
 <div class='card'>
 <h2>{s18_escape(product.get('name'))}</h2>
 <p><b>Marca:</b> {s18_escape(product.get('brand') or '-')}</p>
+<p><b>Modelo:</b> {s18_escape(product.get('model') or '-')}</p>
+<p><b>Categoria ML:</b> {s18_escape(product.get('ml_category_id') or '-')}</p>
 <p><b>EAN:</b> {s18_escape(product.get('ean') or '-')}</p>
 <p><b>SEO:</b> {s18_escape(product.get('seo_name') or '-')}</p>
 <p><b>NCM:</b> {s18_escape(product.get('ncm') or '-')}</p>
@@ -3657,6 +3661,8 @@ async def product_master_edit_page(product_id: str):
 <label>Nome</label><input name='name' value='{val("name")}' required>
 <label>Nome SEO</label><input name='seo_name' value='{val("seo_name")}'>
 <label>Marca</label><input name='brand' value='{val("brand")}'>
+<label>Modelo</label><input name='model' value='{val("model")}' placeholder='Ex.: GM-01'>
+<label>Categoria Mercado Livre</label><input name='ml_category_id' value='{val("ml_category_id")}' placeholder='Ex.: MLB1648'>
 <label>Descrição curta</label><input name='short_description' value='{val("short_description")}'>
 <label>Descrição longa</label><textarea name='description' style='width:100%;min-height:120px;padding:10px;border:1px solid #cbd5e1;border-radius:8px'>{val("description")}</textarea>
 <label>Custo</label><input name='cost_price' value='{val("cost_price")}'>
@@ -3695,6 +3701,8 @@ async def product_master_update(product_id: str, request: Request):
         "name": str(form.get("name") or "").strip(),
         "seo_name": str(form.get("seo_name") or "").strip() or None,
         "brand": str(form.get("brand") or "").strip() or None,
+        "model": str(form.get("model") or "").strip() or None,
+        "ml_category_id": str(form.get("ml_category_id") or "").strip() or None,
         "short_description": str(form.get("short_description") or "").strip() or None,
         "description": str(form.get("description") or "").strip() or None,
         "cost_price": s18_decimal(form.get("cost_price"), 0),
@@ -4354,6 +4362,12 @@ async def listing_save_draft(request: Request):
     }
 
     saved = await store.upsert("listings", payload, "company_id,product_id,marketplace")
+    if saved.get("success") and payload.get("category_id"):
+        await store.update(
+            "products",
+            f"id=eq.{quote(product_id, safe='-')}",
+            {"ml_category_id": payload.get("category_id"), "sync_status": "pending"}
+        )
     if not saved.get("success"):
         return JSONResponse(status_code=400, content={"success": False, "error": saved.get("error") or saved.get("raw")})
 
@@ -5542,7 +5556,7 @@ async def smart_category_product_page(product_id:str, category_id:str):
     for a in attrs:
         aid=str(a.get('attribute_id')); cur=vals.get(aid) or {}
         rows+=f"<tr><td>{s19e(aid)}</td><td>{s19e(a.get('name'))}</td><td>{'Obrigatório' if a.get('required') or a.get('catalog_required') else 'Opcional'}</td><td><form method='post' action='/api/smart-category/product/{product_id}/attribute'><input type='hidden' name='category_id' value='{s19e(category_id)}'><input type='hidden' name='attribute_id' value='{s19e(aid)}'><input name='value_name' value='{s19e(cur.get('value_name') or '')}'><button type='submit'>Salvar</button></form></td><td>{s19e(cur.get('source') or '-')}</td></tr>"
-    return HTMLResponse(shell('Atributos inteligentes', f"<div class='grid'><div class='metric'><span>Obrigatórios</span><strong>{v['required_count']}</strong></div><div class='metric'><span>Faltando</span><strong>{v['missing_count']}</strong></div></div><div class='card'><a class='btn' href='/api/smart-category/product/{product_id}/category/{category_id}/validate'>Validar requisitos</a><a class='btn' href='/product-master/{product_id}/listing'>Voltar ao anúncio</a></div><div class='card'><table><thead><tr><th>ID</th><th>Atributo</th><th>Exigência</th><th>Valor</th><th>Origem</th></tr></thead><tbody>{rows}</tbody></table></div>"))
+    return HTMLResponse(shell('Atributos inteligentes', f"<div class='grid'><div class='metric'><span>Obrigatórios</span><strong>{v['required_count']}</strong></div><div class='metric'><span>Faltando</span><strong>{v['missing_count']}</strong></div></div><div class='card'><a class='btn' href='/api/smart-category/product/{product_id}/category/{category_id}/validate'>Validar requisitos</a><a class='btn' href='/product-master/{product_id}/listing'>Voltar ao anúncio</a><a class='btn' href='/product-master/{product_id}/edit'>Editar produto</a></div><div class='card'><table><thead><tr><th>ID</th><th>Atributo</th><th>Exigência</th><th>Valor</th><th>Origem</th></tr></thead><tbody>{rows}</tbody></table></div>"))
 
 @app.post('/api/smart-category/product/{product_id}/attribute')
 async def smart_category_save_attribute(product_id:str, request:Request):
