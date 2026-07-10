@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint22-2-gtin-readiness-hotfix"
+S13_VERSION = "enterprise-v5-sprint23-intelligent-category-rules"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -4239,6 +4239,38 @@ def s202_ml_error_text(result):
 
 
 async def s202_publish_with_fallback(context, listing):
+    category_rule = await s23_product_category_rule(
+        context["product"].get("id"),
+        listing.get("category_id")
+    )
+    feedback_rule = await s23_product_feedback_rule(context["product"].get("id"))
+
+    if feedback_rule and category_rule.get("mode") == "empty_gtin_reason":
+        category_rule["allowed_to_publish"] = False
+        category_rule["mode"] = "blocked_by_ml_feedback"
+        category_rule["blocking_reason"] = (
+            "O Mercado Livre já confirmou que esta categoria exige GTIN válido."
+        )
+
+    if not category_rule.get("allowed_to_publish"):
+        return {
+            "success": False,
+            "mode": "category_rule_validation",
+            "payload": {},
+            "result": {
+                "success": False,
+                "status_code": 422,
+                "data": {
+                    "message": "category_rule_validation_failed",
+                    "error": category_rule.get("blocking_reason"),
+                    "category_rule": category_rule,
+                },
+                "error": "Validação inteligente de categoria falhou.",
+                "transport": "commercehub-local",
+            },
+            "attempts": 0,
+        }
+
     attribute_validation = await s212_attribute_validation(
         context["product"].get("id"),
         listing.get("category_id")
@@ -4545,7 +4577,7 @@ async def listing_details_page(listing_id: str):
 <p><b>Imagens:</b> {len(context['images'])}</p>
 <p><b>Descrição:</b><br>{s19e(listing.get('description') or '-')}</p>
 <a class='btn' href='/product-master/{product.get("id")}/listing'>Editar rascunho</a>
-<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a>
+<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a>
 </div>
 <div class='card'><h2>Erros</h2><ul>{errors_html}</ul><h2>Alertas</h2><ul>{warnings_html}</ul></div>
 {publish_box}
@@ -4591,6 +4623,14 @@ async def listing_publish(listing_id: str, request: Request):
     payload = publish_attempt.get("payload") or {}
     result = publish_attempt.get("result") or {}
     if not publish_attempt.get("success"):
+        try:
+            await s23_record_ml_rule_feedback(
+                context["product"].get("id"),
+                listing.get("category_id"),
+                result,
+            )
+        except Exception:
+            pass
         error_text = str(result.get("error") or result.get("raw") or result.get("data") or "")[:3000]
         await store.update(
             "listings",
@@ -6407,3 +6447,222 @@ document.addEventListener('DOMContentLoaded', toggleGtinMode);
 </script>
 """
     return HTMLResponse(shell("Resolvedor de GTIN", content))
+
+
+# ==========================================================
+# SPRINT 23 - INTELLIGENT CATEGORY RULES
+# Aprende com os metadados e com os erros reais do Mercado Livre.
+# ==========================================================
+
+def s23_text(value):
+    return str(value or "").strip()
+
+
+async def s23_category_rule_snapshot(category_id):
+    attrs = await s21_category_attrs(category_id)
+    by_id = {
+        s23_text(attr.get("attribute_id")).upper(): attr
+        for attr in attrs
+        if attr.get("attribute_id")
+    }
+
+    gtin_meta = by_id.get("GTIN") or {}
+    empty_meta = by_id.get("EMPTY_GTIN_REASON") or {}
+
+    gtin_required = bool(
+        gtin_meta.get("required")
+        or gtin_meta.get("catalog_required")
+        or (gtin_meta.get("tags") or {}).get("required")
+        or (gtin_meta.get("tags") or {}).get("catalog_required")
+    )
+
+    empty_reason_supported = bool(empty_meta)
+    empty_reason_values = s22_allowed_reasons(empty_meta)
+
+    return {
+        "category_id": category_id,
+        "gtin_required": gtin_required,
+        "empty_gtin_reason_supported": empty_reason_supported,
+        "empty_gtin_reason_values": empty_reason_values,
+        "attributes_cached": len(attrs),
+        "source": "mercado_livre_category_metadata",
+    }
+
+
+async def s23_product_category_rule(product_id, category_id):
+    values = await s21_product_values(product_id, category_id)
+    snapshot = await s23_category_rule_snapshot(category_id)
+
+    gtin_row = values.get("GTIN") or values.get("gtin") or {}
+    reason_row = (
+        values.get("EMPTY_GTIN_REASON")
+        or values.get("empty_gtin_reason")
+        or {}
+    )
+
+    gtin_value = gtin_row.get("value_name") or gtin_row.get("value_id")
+    has_valid_gtin = s212_valid_gtin(gtin_value)
+    has_empty_reason = bool(
+        reason_row.get("value_id") or reason_row.get("value_name")
+    )
+
+    if has_valid_gtin:
+        mode = "gtin"
+        allowed = True
+        blocking_reason = None
+    elif has_empty_reason and snapshot.get("empty_gtin_reason_supported") and not snapshot.get("gtin_required"):
+        mode = "empty_gtin_reason"
+        allowed = True
+        blocking_reason = None
+    elif has_empty_reason and snapshot.get("gtin_required"):
+        mode = "blocked_category_requires_gtin"
+        allowed = False
+        blocking_reason = "Esta categoria exige GTIN válido e não aceita somente EMPTY_GTIN_REASON."
+    elif not has_valid_gtin and not has_empty_reason:
+        mode = "missing_gtin_decision"
+        allowed = False
+        blocking_reason = "Informe um GTIN válido ou selecione um motivo de ausência permitido."
+    else:
+        mode = "blocked"
+        allowed = False
+        blocking_reason = "A regra de GTIN desta categoria não foi atendida."
+
+    return {
+        "success": True,
+        "product_id": product_id,
+        "category_id": category_id,
+        "allowed_to_publish": allowed,
+        "mode": mode,
+        "blocking_reason": blocking_reason,
+        "has_valid_gtin": has_valid_gtin,
+        "has_empty_gtin_reason": has_empty_reason,
+        "category_rules": snapshot,
+        "current_values": {
+            "gtin": gtin_row,
+            "empty_gtin_reason": reason_row,
+        },
+    }
+
+
+async def s23_record_ml_rule_feedback(product_id, category_id, result):
+    error_text = s202_ml_error_text(result)
+    detected_rule = None
+
+    if "attributes [gtin] are required" in error_text or "missing_conditional_required" in error_text:
+        detected_rule = "gtin_required_even_with_empty_reason"
+
+    if not detected_rule:
+        return {"success": True, "recorded": False}
+
+    payload = {
+        "company_id": DEFAULT_COMPANY_ID,
+        "product_id": product_id,
+        "marketplace": "mercado_livre",
+        "category_id": category_id,
+        "attribute_id": "CATEGORY_RULE_GTIN_REQUIRED",
+        "value_name": "true",
+        "source": "mercado_livre_error_feedback",
+        "confidence": 100,
+        "status": "active",
+        "raw_data": {
+            "rule": detected_rule,
+            "error": result.get("data") or result.get("raw") or result.get("error"),
+        },
+    }
+
+    saved = await store.upsert(
+        "product_marketplace_attributes",
+        payload,
+        "product_id,marketplace,attribute_id"
+    )
+
+    return {
+        "success": bool(saved.get("success")),
+        "recorded": bool(saved.get("success")),
+        "rule": detected_rule,
+        "result": saved,
+    }
+
+
+async def s23_product_feedback_rule(product_id):
+    values = await s21_product_values(product_id, None)
+    row = (
+        values.get("CATEGORY_RULE_GTIN_REQUIRED")
+        or values.get("category_rule_gtin_required")
+        or {}
+    )
+    return bool(
+        s23_text(row.get("value_name")).lower() == "true"
+        or s23_text(row.get("value_id")).lower() == "true"
+    )
+
+
+@app.get("/api/category-rules/category/{category_id}")
+async def category_rules_category(category_id: str):
+    snapshot = await s23_category_rule_snapshot(category_id)
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        **snapshot,
+    }
+
+
+@app.get("/api/category-rules/product/{product_id}/category/{category_id}")
+async def category_rules_product(product_id: str, category_id: str):
+    rule = await s23_product_category_rule(product_id, category_id)
+    feedback_rule = await s23_product_feedback_rule(product_id)
+
+    if feedback_rule and rule.get("mode") == "empty_gtin_reason":
+        rule["allowed_to_publish"] = False
+        rule["mode"] = "blocked_by_ml_feedback"
+        rule["blocking_reason"] = (
+            "O Mercado Livre já confirmou que esta categoria exige GTIN válido "
+            "para este fluxo de publicação."
+        )
+
+    rule["feedback_gtin_required"] = feedback_rule
+    rule["version"] = APP_VERSION
+    return rule
+
+
+@app.get("/category-rules/product/{product_id}/category/{category_id}", response_class=HTMLResponse)
+async def category_rules_page(product_id: str, category_id: str):
+    rule = await category_rules_product(product_id, category_id)
+
+    status = "LIBERADO" if rule.get("allowed_to_publish") else "BLOQUEADO"
+    reason = rule.get("blocking_reason") or "Nenhum bloqueio identificado."
+    category_rules = rule.get("category_rules") or {}
+    reasons = category_rules.get("empty_gtin_reason_values") or []
+
+    reasons_html = "".join(
+        f"<li>{s19e(item.get('name'))} <small>({s19e(item.get('id'))})</small></li>"
+        for item in reasons
+    ) or "<li>Nenhuma opção de ausência de GTIN disponível.</li>"
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Status</span><strong>{status}</strong></div>
+  <div class='metric'><span>Categoria</span><strong>{s19e(category_id)}</strong></div>
+  <div class='metric'><span>GTIN obrigatório</span><strong>{'SIM' if category_rules.get('gtin_required') else 'NÃO'}</strong></div>
+  <div class='metric'><span>Motivo sem GTIN</span><strong>{'ACEITO' if category_rules.get('empty_gtin_reason_supported') else 'NÃO SUPORTADO'}</strong></div>
+</div>
+
+<div class='card'>
+<h2>Regra inteligente da categoria</h2>
+<p><b>Resultado:</b> {status}</p>
+<p><b>Modo identificado:</b> {s19e(rule.get('mode'))}</p>
+<p><b>Motivo:</b> {s19e(reason)}</p>
+</div>
+
+<div class='card'>
+<h2>Motivos de ausência de GTIN disponíveis</h2>
+<ul>{reasons_html}</ul>
+</div>
+
+<div class='card'>
+<a class='btn' href='/gtin-resolver/product/{product_id}/category/{category_id}'>Resolver GTIN</a>
+<a class='btn' href='/smart-category-engine/product/{product_id}/category/{category_id}'>Atributos inteligentes</a>
+<a class='btn' href='/product-master/{product_id}/listing'>Voltar ao anúncio</a>
+</div>
+"""
+    return HTMLResponse(shell("Regras da Categoria", content))

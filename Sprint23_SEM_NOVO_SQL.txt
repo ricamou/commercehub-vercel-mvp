@@ -1,0 +1,4 @@
+A Sprint 23 não cria novas tabelas nem colunas.
+
+Não é necessário executar nova query no Supabase.
+Apenas envie os arquivos pelo GitHub Web e aguarde o deploy.

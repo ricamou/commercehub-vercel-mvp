@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint22-2-gtin-readiness-hotfix"
+APP_VERSION = "enterprise-v5-sprint23-intelligent-category-rules"
 
 def env(name, default=""):
     value = os.getenv(name, default)

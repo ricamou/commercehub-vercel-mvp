@@ -1,0 +1,18 @@
+SPRINT 23 — INTELLIGENT CATEGORY RULES
+
+1. Envie todos os arquivos pelo GitHub Web.
+2. Aguarde a Vercel concluir o deploy.
+3. Abra /api/health.
+4. Confirme:
+   enterprise-v5-sprint23-intelligent-category-rules
+5. Não execute nova query.
+6. Abra o anúncio.
+7. Clique em Regras da categoria.
+8. Confira:
+   - Status
+   - GTIN obrigatório
+   - Aceita motivo sem GTIN
+9. Se estiver BLOQUEADO:
+   - informe um GTIN verdadeiro; ou
+   - altere para uma categoria correta que permita produto sem GTIN.
+10. Volte ao anúncio e publique novamente.
