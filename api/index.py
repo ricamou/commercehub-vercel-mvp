@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint21-1-product-editor"
+S13_VERSION = "enterprise-v5-sprint21-2-intelligent-attribute-payload"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -4167,6 +4167,29 @@ def s202_ml_error_text(result):
 
 
 async def s202_publish_with_fallback(context, listing):
+    attribute_validation = await s212_attribute_validation(
+        context["product"].get("id"),
+        listing.get("category_id")
+    )
+    if not attribute_validation.get("valid"):
+        return {
+            "success": False,
+            "mode": "local_attribute_validation",
+            "payload": {},
+            "result": {
+                "success": False,
+                "status_code": 422,
+                "data": {
+                    "message": "attribute_validation_failed",
+                    "error": "Corrija os atributos obrigatórios ou inválidos antes de publicar.",
+                    "validation": attribute_validation,
+                },
+                "error": "Validação local de atributos falhou.",
+                "transport": "commercehub-local",
+            },
+            "attempts": 0,
+        }
+
     # Primeira tentativa: User Products.
     first_payload = s19_build_ml_payload(context, listing, mode="user_product")
     first_payload["attributes"] = await s21_payload_attributes(context["product"].get("id"), listing.get("category_id"), first_payload.get("attributes"))
@@ -5521,23 +5544,10 @@ async def s21_prepare(product_id, category_id):
     return {"success":True,"product_id":product_id,"category_id":category_id,"attributes":result}
 
 async def s21_validation(product_id, category_id):
-    attrs=await s21_category_attrs(category_id); values=await s21_product_values(product_id,category_id)
-    missing=[]; filled=[]
-    for a in attrs:
-        if not (a.get('required') or a.get('catalog_required')): continue
-        aid=str(a.get('attribute_id')); v=values.get(aid)
-        if v and v.get('value_name'): filled.append({"attribute_id":aid,"name":a.get('name'),"value_name":v.get('value_name')})
-        else: missing.append({"attribute_id":aid,"name":a.get('name')})
-    return {"valid":not missing,"required_count":len(filled)+len(missing),"filled_count":len(filled),"missing_count":len(missing),"filled":filled,"missing":missing}
+    return await s212_attribute_validation(product_id, category_id)
 
 async def s21_payload_attributes(product_id, category_id, base):
-    values=await s21_product_values(product_id,category_id); merged={str(x.get('id')):x for x in (base or []) if x.get('id')}
-    for aid,row in values.items():
-        p={"id":aid}
-        if row.get('value_id'): p['value_id']=row.get('value_id')
-        if row.get('value_name'): p['value_name']=row.get('value_name')
-        merged[aid]=p
-    return list(merged.values())
+    return await s212_payload_attributes(product_id, category_id, base)
 
 @app.get('/smart-category-engine', response_class=HTMLResponse)
 async def smart_category_engine_page():
@@ -5551,12 +5561,105 @@ async def smart_category_category_page(category_id:str):
 
 @app.get('/smart-category-engine/product/{product_id}/category/{category_id}', response_class=HTMLResponse)
 async def smart_category_product_page(product_id:str, category_id:str):
-    await s21_prepare(product_id,category_id); attrs=await s21_category_attrs(category_id); vals=await s21_product_values(product_id,category_id); v=await s21_validation(product_id,category_id)
-    rows=''
-    for a in attrs:
-        aid=str(a.get('attribute_id')); cur=vals.get(aid) or {}
-        rows+=f"<tr><td>{s19e(aid)}</td><td>{s19e(a.get('name'))}</td><td>{'Obrigatório' if a.get('required') or a.get('catalog_required') else 'Opcional'}</td><td><form method='post' action='/api/smart-category/product/{product_id}/attribute'><input type='hidden' name='category_id' value='{s19e(category_id)}'><input type='hidden' name='attribute_id' value='{s19e(aid)}'><input name='value_name' value='{s19e(cur.get('value_name') or '')}'><button type='submit'>Salvar</button></form></td><td>{s19e(cur.get('source') or '-')}</td></tr>"
-    return HTMLResponse(shell('Atributos inteligentes', f"<div class='grid'><div class='metric'><span>Obrigatórios</span><strong>{v['required_count']}</strong></div><div class='metric'><span>Faltando</span><strong>{v['missing_count']}</strong></div></div><div class='card'><a class='btn' href='/api/smart-category/product/{product_id}/category/{category_id}/validate'>Validar requisitos</a><a class='btn' href='/product-master/{product_id}/listing'>Voltar ao anúncio</a><a class='btn' href='/product-master/{product_id}/edit'>Editar produto</a></div><div class='card'><table><thead><tr><th>ID</th><th>Atributo</th><th>Exigência</th><th>Valor</th><th>Origem</th></tr></thead><tbody>{rows}</tbody></table></div>"))
+    await s21_prepare(product_id, category_id)
+    attrs = await s21_category_attrs(category_id)
+    vals = await s21_product_values(product_id, category_id)
+    validation = await s21_validation(product_id, category_id)
+
+    rows = ''
+    for attr in attrs:
+        aid = str(attr.get('attribute_id') or '').upper()
+        current = vals.get(aid) or vals.get(aid.lower()) or {}
+        current_value = current.get('value_name') or ''
+        current_value_id = current.get('value_id') or ''
+        required = bool(attr.get('required') or attr.get('catalog_required'))
+        allowed = attr.get('values') or []
+
+        field_html = ''
+        if allowed:
+            options = ["<option value=''>Selecione...</option>"]
+            for option in allowed:
+                option_id = str(option.get('id') or '')
+                option_name = str(option.get('name') or option_id)
+                selected = (
+                    current_value_id == option_id
+                    or current_value.lower() == option_name.lower()
+                    or current_value.lower() == option_id.lower()
+                )
+                options.append(
+                    f"<option value='{s19e(option_name)}' data-value-id='{s19e(option_id)}' {'selected' if selected else ''}>{s19e(option_name)}</option>"
+                )
+            field_html = f"<select name='value_name' style='width:100%;padding:9px'>{''.join(options)}</select>"
+        else:
+            field_html = f"<input name='value_name' value='{s19e(current_value)}' style='width:100%'>"
+
+        hint = ''
+        if aid == 'GTIN':
+            hint = "<small>Use GTIN real de 8, 12, 13 ou 14 dígitos. Não escreva EMPTY_GTIN_REASON aqui.</small>"
+        elif aid == 'EMPTY_GTIN_REASON':
+            hint = "<small>Preencha somente quando o produto realmente não possuir GTIN.</small>"
+
+        status = 'OK'
+        if aid == 'GTIN' and current_value and not s212_valid_gtin(current_value):
+            status = 'INVÁLIDO'
+        elif required and not current_value and not current_value_id:
+            status = 'PENDENTE'
+
+        rows += f"""
+<tr>
+<td>{s19e(aid)}</td>
+<td>{s19e(attr.get('name'))}</td>
+<td>{'Obrigatório' if required else 'Opcional'}</td>
+<td>
+<form method='post' action='/api/smart-category/product/{product_id}/attribute'>
+<input type='hidden' name='category_id' value='{s19e(category_id)}'>
+<input type='hidden' name='attribute_id' value='{s19e(aid)}'>
+{field_html}
+{hint}
+<button type='submit'>Salvar</button>
+</form>
+</td>
+<td>{s19e(current.get('source') or '-')}</td>
+<td>{status}</td>
+</tr>
+"""
+
+    missing_html = ''.join(
+        f"<li>{s19e(item.get('attribute_id'))}: {s19e(item.get('message') or item.get('name') or 'Campo obrigatório')}</li>"
+        for item in validation.get('missing', [])
+    ) or "<li>Nenhum atributo obrigatório faltando.</li>"
+
+    invalid_html = ''.join(
+        f"<li>{s19e(item.get('attribute_id'))}: {s19e(item.get('message'))}</li>"
+        for item in validation.get('invalid', [])
+    ) or "<li>Nenhum atributo inválido.</li>"
+
+    content = f"""
+<div class='grid'>
+<div class='metric'><span>Obrigatórios</span><strong>{validation.get('required_count')}</strong></div>
+<div class='metric'><span>Faltando</span><strong>{validation.get('missing_count')}</strong></div>
+<div class='metric'><span>Inválidos</span><strong>{validation.get('invalid_count')}</strong></div>
+<div class='metric'><span>Pronto</span><strong>{'SIM' if validation.get('valid') else 'NÃO'}</strong></div>
+</div>
+<div class='card'>
+<a class='btn' href='/api/smart-category/product/{product_id}/category/{category_id}/validate'>Validar requisitos</a>
+<a class='btn' href='/product-master/{product_id}/listing'>Voltar ao anúncio</a>
+<a class='btn' href='/product-master/{product_id}/edit'>Editar produto</a>
+</div>
+<div class='card'>
+<h2>Pendências</h2>
+<ul>{missing_html}</ul>
+<h2>Valores inválidos</h2>
+<ul>{invalid_html}</ul>
+</div>
+<div class='card'>
+<table>
+<thead><tr><th>ID</th><th>Atributo</th><th>Exigência</th><th>Valor</th><th>Origem</th><th>Status</th></tr></thead>
+<tbody>{rows}</tbody>
+</table>
+</div>
+"""
+    return HTMLResponse(shell('Atributos inteligentes', content))
 
 @app.post('/api/smart-category/product/{product_id}/attribute')
 async def smart_category_save_attribute(product_id:str, request:Request):
@@ -5577,3 +5680,225 @@ async def smart_category_status():
     for table in ['ml_categories','ml_category_attributes','product_marketplace_attributes']:
         r=await store.select(table,'select=*&limit=1'); checks[table]={"success":bool(r.get('success')),"status_code":r.get('status_code'),"rows":len(r.get('data') or []),"error":str(r.get('error') or r.get('raw') or '')[:300]}
     return {"success":all(x['success'] for x in checks.values()),"version":APP_VERSION,"module":"smart_category_engine","checks":checks}
+
+
+# ==========================================================
+# SPRINT 21.2 - INTELLIGENT ATTRIBUTE PAYLOAD
+# Valida GTIN, separa EMPTY_GTIN_REASON e usa value_id/value_name.
+# ==========================================================
+
+def s212_digits(value):
+    return "".join(ch for ch in str(value or "") if ch.isdigit())
+
+
+def s212_valid_gtin(value):
+    digits = s212_digits(value)
+    if len(digits) not in (8, 12, 13, 14):
+        return False
+
+    body = digits[:-1]
+    check_digit = int(digits[-1])
+    total = 0
+    reverse_body = list(reversed(body))
+    for index, char in enumerate(reverse_body):
+        weight = 3 if index % 2 == 0 else 1
+        total += int(char) * weight
+
+    expected = (10 - (total % 10)) % 10
+    return expected == check_digit
+
+
+def s212_value_payload(attribute_id, value_id=None, value_name=None, metadata=None):
+    attribute_id = str(attribute_id or "").strip().upper()
+    value_id = str(value_id or "").strip() or None
+    value_name = str(value_name or "").strip() or None
+    metadata = metadata or {}
+
+    # Nunca use o nome do atributo como se fosse seu valor.
+    if value_name and value_name.upper() == attribute_id:
+        value_name = None
+
+    allowed_values = metadata.get("values") or []
+    if not value_id and value_name and allowed_values:
+        for option in allowed_values:
+            option_id = str(option.get("id") or "").strip()
+            option_name = str(option.get("name") or "").strip()
+            if value_name.lower() in {option_id.lower(), option_name.lower()}:
+                if option_id:
+                    value_id = option_id
+                value_name = option_name or value_name
+                break
+
+    payload = {"id": attribute_id}
+    if value_id:
+        payload["value_id"] = value_id
+    elif value_name:
+        payload["value_name"] = value_name
+    else:
+        return None
+    return payload
+
+
+async def s212_attribute_metadata(category_id):
+    attrs = await s21_category_attrs(category_id)
+    return {
+        str(attr.get("attribute_id") or "").upper(): attr
+        for attr in attrs
+        if attr.get("attribute_id")
+    }
+
+
+async def s212_payload_attributes(product_id, category_id, base):
+    values = await s21_product_values(product_id, category_id)
+    metadata = await s212_attribute_metadata(category_id)
+
+    merged = {}
+    valid_gtin = None
+
+    # Primeiro lê os atributos automáticos do Product Master.
+    for item in base or []:
+        aid = str(item.get("id") or "").strip().upper()
+        if not aid:
+            continue
+
+        if aid == "GTIN":
+            candidate = item.get("value_name") or item.get("value_id")
+            if s212_valid_gtin(candidate):
+                valid_gtin = s212_digits(candidate)
+                merged["GTIN"] = {"id": "GTIN", "value_name": valid_gtin}
+            continue
+
+        payload = s212_value_payload(
+            aid,
+            item.get("value_id"),
+            item.get("value_name"),
+            metadata.get(aid)
+        )
+        if payload:
+            merged[aid] = payload
+
+    # Depois sobrepõe com os valores salvos no Smart Category Engine.
+    for aid, row in values.items():
+        aid = str(aid or "").strip().upper()
+        if not aid:
+            continue
+
+        if aid == "GTIN":
+            candidate = row.get("value_name") or row.get("value_id")
+            if s212_valid_gtin(candidate):
+                valid_gtin = s212_digits(candidate)
+                merged["GTIN"] = {"id": "GTIN", "value_name": valid_gtin}
+            else:
+                merged.pop("GTIN", None)
+            continue
+
+        payload = s212_value_payload(
+            aid,
+            row.get("value_id"),
+            row.get("value_name"),
+            metadata.get(aid)
+        )
+        if payload:
+            merged[aid] = payload
+        else:
+            merged.pop(aid, None)
+
+    # GTIN e motivo de ausência são mutuamente exclusivos.
+    if valid_gtin:
+        merged.pop("EMPTY_GTIN_REASON", None)
+    else:
+        merged.pop("GTIN", None)
+
+    return list(merged.values())
+
+
+async def s212_attribute_validation(product_id, category_id):
+    attrs = await s21_category_attrs(category_id)
+    metadata = {
+        str(attr.get("attribute_id") or "").upper(): attr
+        for attr in attrs
+        if attr.get("attribute_id")
+    }
+    values = await s21_product_values(product_id, category_id)
+
+    gtin_row = values.get("GTIN") or values.get("gtin") or {}
+    gtin_value = gtin_row.get("value_name") or gtin_row.get("value_id")
+    gtin_valid = s212_valid_gtin(gtin_value)
+
+    reason_row = values.get("EMPTY_GTIN_REASON") or values.get("empty_gtin_reason") or {}
+    reason_value = reason_row.get("value_id") or reason_row.get("value_name")
+    reason_valid = bool(
+        s212_value_payload(
+            "EMPTY_GTIN_REASON",
+            reason_row.get("value_id"),
+            reason_row.get("value_name"),
+            metadata.get("EMPTY_GTIN_REASON")
+        )
+    )
+
+    missing = []
+    invalid = []
+    filled = []
+
+    for attr in attrs:
+        aid = str(attr.get("attribute_id") or "").upper()
+        required = bool(attr.get("required") or attr.get("catalog_required"))
+
+        if aid == "GTIN":
+            if gtin_value and not gtin_valid:
+                invalid.append({
+                    "attribute_id": "GTIN",
+                    "name": attr.get("name"),
+                    "message": "GTIN inválido. Use um código real de 8, 12, 13 ou 14 dígitos, ou deixe vazio e informe EMPTY_GTIN_REASON."
+                })
+            elif gtin_valid:
+                filled.append({"attribute_id": "GTIN", "value_name": s212_digits(gtin_value)})
+            elif required and "EMPTY_GTIN_REASON" not in metadata:
+                missing.append({"attribute_id": "GTIN", "name": attr.get("name")})
+            continue
+
+        if aid == "EMPTY_GTIN_REASON":
+            if gtin_valid:
+                continue
+            if reason_valid:
+                filled.append({"attribute_id": aid, "value_name": reason_value})
+            elif required or "EMPTY_GTIN_REASON" in metadata:
+                missing.append({
+                    "attribute_id": aid,
+                    "name": attr.get("name"),
+                    "message": "Informe o motivo permitido pelo Mercado Livre para o produto não possuir GTIN."
+                })
+            continue
+
+        if not required:
+            continue
+
+        row = values.get(aid) or values.get(aid.lower()) or {}
+        payload = s212_value_payload(
+            aid,
+            row.get("value_id"),
+            row.get("value_name"),
+            metadata.get(aid)
+        )
+        if payload:
+            filled.append({
+                "attribute_id": aid,
+                "value_id": payload.get("value_id"),
+                "value_name": payload.get("value_name")
+            })
+        else:
+            missing.append({"attribute_id": aid, "name": attr.get("name")})
+
+    return {
+        "valid": not missing and not invalid,
+        "gtin_valid": gtin_valid,
+        "gtin": s212_digits(gtin_value) if gtin_valid else None,
+        "empty_gtin_reason_valid": reason_valid if not gtin_valid else False,
+        "required_count": len(filled) + len(missing),
+        "filled_count": len(filled),
+        "missing_count": len(missing),
+        "invalid_count": len(invalid),
+        "filled": filled,
+        "missing": missing,
+        "invalid": invalid,
+    }

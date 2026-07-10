@@ -1,0 +1,21 @@
+SPRINT 21.2 — INTELLIGENT ATTRIBUTE PAYLOAD
+
+1. Suba os arquivos no GitHub Web.
+2. Aguarde a Vercel concluir o deploy.
+3. Abra /api/health.
+4. Confirme:
+   enterprise-v5-sprint21-2-intelligent-attribute-payload
+5. Não execute novo SQL.
+6. Abra o anúncio > Atributos inteligentes.
+7. Apague EMPTY_GTIN_REASON do campo GTIN.
+8. Se possuir GTIN verdadeiro, informe-o no campo GTIN.
+9. Se não possuir GTIN:
+   - deixe GTIN vazio;
+   - preencha o atributo EMPTY_GTIN_REASON.
+10. Clique em Salvar.
+11. Clique em Validar requisitos.
+12. Confirme:
+    valid=true
+    missing_count=0
+    invalid_count=0
+13. Volte ao anúncio e publique.
