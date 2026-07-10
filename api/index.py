@@ -1838,7 +1838,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint17-universal-supplier-connector"
+S13_VERSION = "enterprise-v5-sprint19-order-manager"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -3326,4 +3326,568 @@ async def supplier_connector_status():
         "reference_supplier": "Hayamax",
         "checks": checks,
         "next": "/supplier-connector"
+    }
+
+
+# ==========================================================
+# SPRINT 19 - ORDER MANAGER
+# Importa, normaliza, armazena e acompanha pedidos.
+# ==========================================================
+
+S19_DEMO_ORDER = {
+    "id": 200000000001,
+    "status": "paid",
+    "date_created": "2026-07-10T12:00:00.000-03:00",
+    "date_closed": "2026-07-10T12:03:00.000-03:00",
+    "total_amount": 175.90,
+    "currency_id": "BRL",
+    "buyer": {
+        "id": 123456789,
+        "nickname": "COMPRADOR_DEMO",
+        "first_name": "Cliente",
+        "last_name": "Demonstração",
+        "email": "cliente.demo@example.com"
+    },
+    "shipping": {"id": 300000000001},
+    "payments": [{"status": "approved", "transaction_amount": 175.90}],
+    "order_items": [
+        {
+            "item": {
+                "id": "MLB-DEMO-1001",
+                "title": "Mouse Gamer RGB USB",
+                "seller_sku": "HAYA-1001",
+                "variation_id": None
+            },
+            "quantity": 1,
+            "unit_price": 57.91
+        },
+        {
+            "item": {
+                "id": "MLB-DEMO-1003",
+                "title": "Headset Gamer USB 7.1",
+                "seller_sku": "HAYA-1003",
+                "variation_id": None
+            },
+            "quantity": 1,
+            "unit_price": 117.99
+        }
+    ]
+}
+
+
+def s19_escape(value):
+    value = str(value if value is not None else "")
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
+    )
+
+
+def s19_money(value):
+    try:
+        return f"R$ {float(value or 0):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except Exception:
+        return "R$ 0,00"
+
+
+def s19_order_status_label(status):
+    labels = {
+        "created": "Criado",
+        "confirmed": "Confirmado",
+        "payment_required": "Aguardando pagamento",
+        "payment_in_process": "Pagamento em processamento",
+        "paid": "Pago",
+        "partially_paid": "Parcialmente pago",
+        "cancelled": "Cancelado",
+        "invalid": "Inválido",
+        "delivered": "Entregue",
+        "shipped": "Enviado",
+    }
+    return labels.get(str(status or "").lower(), str(status or "-"))
+
+
+def s19_payment_status(order):
+    payments = order.get("payments") or []
+    statuses = [str(p.get("status") or "").lower() for p in payments if isinstance(p, dict)]
+    if "approved" in statuses:
+        return "approved"
+    if "in_process" in statuses or "pending" in statuses:
+        return "pending"
+    if "rejected" in statuses:
+        return "rejected"
+    return statuses[0] if statuses else "unknown"
+
+
+async def s19_find_product_by_sku(sku):
+    if not sku:
+        return None
+    result = await store.select(
+        "products",
+        f"select=*&company_id=eq.{DEFAULT_COMPANY_ID}&sku=eq.{quote(str(sku), safe='-_.')}&limit=1"
+    )
+    rows = result.get("data") or []
+    return rows[0] if rows else None
+
+
+async def s19_get_order_by_external(external_id, marketplace="mercado_livre"):
+    result = await store.select(
+        "orders",
+        "select=*&company_id=eq."
+        + quote(DEFAULT_COMPANY_ID, safe="-")
+        + "&marketplace=eq."
+        + quote(marketplace, safe="_-")
+        + "&external_order_id=eq."
+        + quote(str(external_id), safe="-_")
+        + "&limit=1"
+    )
+    rows = result.get("data") or []
+    return rows[0] if rows else None
+
+
+async def s19_reserve_inventory(product_id, quantity, order_id, sku):
+    if not product_id:
+        return {"success": True, "skipped": True, "reason": "Produto não localizado"}
+
+    result = await store.select(
+        "inventory",
+        f"select=*&company_id=eq.{DEFAULT_COMPANY_ID}&product_id=eq.{quote(str(product_id), safe='-')}&limit=1"
+    )
+    rows = result.get("data") or []
+    if not rows:
+        return {"success": True, "skipped": True, "reason": "Estoque não localizado"}
+
+    inventory = rows[0]
+    current_reserved = int(inventory.get("reserved") or 0)
+    new_reserved = current_reserved + int(quantity or 0)
+    update_result = await store.update(
+        "inventory",
+        f"id=eq.{quote(str(inventory.get('id')), safe='-')}",
+        {
+            "reserved": new_reserved,
+            "status": "reserved" if new_reserved > 0 else inventory.get("status", "available")
+        }
+    )
+
+    if update_result.get("success"):
+        await store.insert("inventory_movements", {
+            "company_id": DEFAULT_COMPANY_ID,
+            "product_id": product_id,
+            "type": "reservation",
+            "quantity": int(quantity or 0),
+            "previous_quantity": int(inventory.get("quantity") or 0),
+            "new_quantity": int(inventory.get("quantity") or 0),
+            "reference_type": "order",
+            "reference_id": str(order_id),
+            "notes": f"Reserva automática do pedido {order_id} - SKU {sku}",
+            "payload": {"order_id": str(order_id), "sku": sku}
+        })
+
+    return update_result
+
+
+async def s19_record_history(order_id, old_status, new_status, source, message, payload=None):
+    if old_status == new_status and old_status is not None:
+        return {"success": True, "skipped": True}
+    return await store.insert("order_status_history", {
+        "company_id": DEFAULT_COMPANY_ID,
+        "order_id": order_id,
+        "old_status": old_status,
+        "new_status": new_status,
+        "source": source,
+        "message": message,
+        "payload": payload or {}
+    })
+
+
+async def s19_import_order(raw_order, source="mercado_livre"):
+    external_id = str(raw_order.get("id") or raw_order.get("external_order_id") or "").strip()
+    if not external_id:
+        return {"success": False, "error": "Pedido sem ID externo"}
+
+    current = await s19_get_order_by_external(external_id, source)
+    old_status = current.get("status") if current else None
+    buyer = raw_order.get("buyer") or {}
+    shipping = raw_order.get("shipping") or {}
+    shipping_id = shipping.get("id") if isinstance(shipping, dict) else shipping
+    status = str(raw_order.get("status") or "created")
+    payment_status = s19_payment_status(raw_order)
+
+    buyer_name = " ".join([
+        str(buyer.get("first_name") or "").strip(),
+        str(buyer.get("last_name") or "").strip()
+    ]).strip() or str(buyer.get("nickname") or "")
+
+    deterministic_id = str(uuid.uuid5(
+        uuid.UUID("00000000-0000-0000-0000-000000000019"),
+        f"{DEFAULT_COMPANY_ID}:{source}:{external_id}"
+    ))
+
+    payload = {
+        "id": current.get("id") if current else deterministic_id,
+        "company_id": DEFAULT_COMPANY_ID,
+        "marketplace": source,
+        "external_order_id": external_id,
+        "buyer_name": buyer_name or None,
+        "buyer_email": buyer.get("email"),
+        "buyer_id": str(buyer.get("id") or "") or None,
+        "buyer_nickname": buyer.get("nickname"),
+        "status": status,
+        "payment_status": payment_status,
+        "shipping_status": str(raw_order.get("shipping_status") or "pending"),
+        "shipping_id": str(shipping_id or "") or None,
+        "currency_id": raw_order.get("currency_id") or "BRL",
+        "total_amount": float(raw_order.get("total_amount") or 0),
+        "shipping_amount": float(raw_order.get("shipping_amount") or 0),
+        "paid_at": raw_order.get("date_closed") if payment_status == "approved" else None,
+        "date_closed": raw_order.get("date_closed"),
+        "last_synced_at": __import__("datetime").datetime.utcnow().isoformat(),
+        "raw_data": raw_order
+    }
+
+    saved = await store.upsert(
+        "orders",
+        payload,
+        "company_id,marketplace,external_order_id"
+    )
+    if not saved.get("success"):
+        return {
+            "success": False,
+            "external_order_id": external_id,
+            "error": saved.get("error") or saved.get("raw"),
+            "saved": saved
+        }
+
+    saved_rows = saved.get("data") or []
+    order_id = saved_rows[0].get("id") if saved_rows else payload["id"]
+
+    await s19_record_history(
+        order_id,
+        old_status,
+        status,
+        source,
+        f"Pedido {external_id} sincronizado com status {status}",
+        {"payment_status": payment_status}
+    )
+
+    items_stats = {"received": 0, "saved": 0, "reserved": 0, "unmatched": 0, "errors": []}
+    for order_item in raw_order.get("order_items") or []:
+        items_stats["received"] += 1
+        try:
+            item_data = order_item.get("item") or {}
+            sku = (
+                item_data.get("seller_sku")
+                or order_item.get("seller_sku")
+                or item_data.get("seller_custom_field")
+                or ""
+            )
+            product = await s19_find_product_by_sku(sku)
+            product_id = product.get("id") if product else None
+            quantity = int(order_item.get("quantity") or 1)
+            unit_price = float(order_item.get("unit_price") or 0)
+            external_item_id = str(item_data.get("id") or "")
+            variation_id = str(item_data.get("variation_id") or "") or None
+
+            item_uuid = str(uuid.uuid5(
+                uuid.UUID("00000000-0000-0000-0000-000000001919"),
+                f"{order_id}:{external_item_id}:{variation_id}:{sku}"
+            ))
+
+            item_payload = {
+                "id": item_uuid,
+                "company_id": DEFAULT_COMPANY_ID,
+                "order_id": order_id,
+                "product_id": product_id,
+                "external_item_id": external_item_id or None,
+                "variation_id": variation_id,
+                "seller_sku": sku or None,
+                "sku": sku or None,
+                "title": item_data.get("title") or order_item.get("title"),
+                "quantity": quantity,
+                "unit_price": unit_price,
+                "total_price": round(quantity * unit_price, 2),
+                "raw_data": order_item
+            }
+            item_saved = await store.upsert("order_items", item_payload, "id")
+            if not item_saved.get("success"):
+                raise RuntimeError(str(item_saved.get("error") or item_saved.get("raw")))
+            items_stats["saved"] += 1
+
+            if product_id:
+                reservation = await s19_reserve_inventory(product_id, quantity, order_id, sku)
+                if reservation.get("success") and not reservation.get("skipped"):
+                    items_stats["reserved"] += 1
+            else:
+                items_stats["unmatched"] += 1
+        except Exception as exc:
+            items_stats["errors"].append(str(exc)[:500])
+
+    await store.insert("logs", {
+        "company_id": DEFAULT_COMPANY_ID,
+        "event_type": "order_import",
+        "level": "info" if not items_stats["errors"] else "warning",
+        "message": f"Pedido {external_id} importado do {source}",
+        "payload": {
+            "order_id": order_id,
+            "external_order_id": external_id,
+            "status": status,
+            "items": items_stats
+        }
+    })
+
+    return {
+        "success": len(items_stats["errors"]) == 0,
+        "external_order_id": external_id,
+        "order_id": order_id,
+        "status": status,
+        "payment_status": payment_status,
+        "items": items_stats
+    }
+
+
+@app.get("/orders", response_class=HTMLResponse)
+async def orders_page(request: Request):
+    status_filter = str(request.query_params.get("status") or "").strip()
+    query = "select=*&company_id=eq." + quote(DEFAULT_COMPANY_ID, safe="-")
+    if status_filter:
+        query += "&status=eq." + quote(status_filter, safe="_-")
+    query += "&order=created_at.desc&limit=100"
+
+    result = await store.select("orders", query)
+    orders = result.get("data") or []
+
+    rows = ""
+    total_amount = 0.0
+    for order in orders:
+        total_amount += float(order.get("total_amount") or 0)
+        rows += f"""
+<tr>
+<td>{s19_escape(order.get('external_order_id'))}</td>
+<td>{s19_escape(order.get('marketplace'))}</td>
+<td>{s19_escape(order.get('buyer_name') or '-')}</td>
+<td>{s19_escape(s19_order_status_label(order.get('status')))}</td>
+<td>{s19_escape(order.get('payment_status') or '-')}</td>
+<td>{s19_money(order.get('total_amount'))}</td>
+<td>{s19_escape(order.get('created_at'))}</td>
+<td><a class='btn' href='/orders/{order.get("id")}'>Abrir</a></td>
+</tr>
+"""
+
+    if not rows:
+        rows = "<tr><td colspan='8'>Nenhum pedido encontrado.</td></tr>"
+
+    content = f"""
+<div class='grid'>
+<div class='metric'><span>Pedidos listados</span><strong>{len(orders)}</strong></div>
+<div class='metric'><span>Valor total</span><strong>{s19_money(total_amount)}</strong></div>
+<div class='metric'><span>Fonte</span><strong>Mercado Livre</strong></div>
+<div class='metric'><span>Módulo</span><strong>Order Manager</strong></div>
+</div>
+<div class='card'>
+<h2>Gestão de Pedidos</h2>
+<a class='btn' href='/api/orders/demo-import'>Importar pedido demonstrativo</a>
+<a class='btn' href='/api/orders/sync-mercadolivre'>Sincronizar Mercado Livre</a>
+<a class='btn' href='/orders/sql'>SQL Sprint 19</a>
+<a class='btn' href='/api/orders/status'>Status do módulo</a>
+</div>
+<div class='card'>
+<table>
+<thead><tr><th>Pedido</th><th>Canal</th><th>Comprador</th><th>Status</th><th>Pagamento</th><th>Total</th><th>Data</th><th>Ação</th></tr></thead>
+<tbody>{rows}</tbody>
+</table>
+</div>
+"""
+    return HTMLResponse(shell("Pedidos", content))
+
+
+@app.get("/orders/sql", response_class=HTMLResponse)
+async def orders_sql_page():
+    sql_text = open("sprint19_order_manager.sql", "r", encoding="utf-8").read()
+    return HTMLResponse(shell(
+        "SQL Sprint 19",
+        f"<div class='card'><h2>Migration Order Manager</h2><p>Copie e execute no Supabase SQL Editor.</p><pre>{s19_escape(sql_text)}</pre></div>"
+    ))
+
+
+@app.get("/orders/{order_id}", response_class=HTMLResponse)
+async def order_details_page(order_id: str):
+    order_result = await store.select(
+        "orders",
+        f"select=*&id=eq.{quote(order_id, safe='-')}&limit=1"
+    )
+    orders = order_result.get("data") or []
+    if not orders:
+        return HTMLResponse(shell("Pedido", "<div class='card'><h2>Pedido não encontrado.</h2></div>"), status_code=404)
+
+    order = orders[0]
+    items_result = await store.select(
+        "order_items",
+        f"select=*&order_id=eq.{quote(order_id, safe='-')}&order=created_at.asc"
+    )
+    history_result = await store.select(
+        "order_status_history",
+        f"select=*&order_id=eq.{quote(order_id, safe='-')}&order=created_at.desc"
+    )
+
+    item_rows = ""
+    for item in items_result.get("data") or []:
+        item_rows += f"""
+<tr>
+<td>{s19_escape(item.get('seller_sku') or item.get('sku'))}</td>
+<td>{s19_escape(item.get('title'))}</td>
+<td>{s19_escape(item.get('quantity'))}</td>
+<td>{s19_money(item.get('unit_price'))}</td>
+<td>{s19_money(item.get('total_price'))}</td>
+<td>{'Vinculado' if item.get('product_id') else 'Não localizado'}</td>
+</tr>
+"""
+    if not item_rows:
+        item_rows = "<tr><td colspan='6'>Nenhum item.</td></tr>"
+
+    history_rows = ""
+    for history in history_result.get("data") or []:
+        history_rows += f"""
+<tr>
+<td>{s19_escape(history.get('created_at'))}</td>
+<td>{s19_escape(history.get('old_status') or '-')}</td>
+<td>{s19_escape(history.get('new_status'))}</td>
+<td>{s19_escape(history.get('source'))}</td>
+<td>{s19_escape(history.get('message'))}</td>
+</tr>
+"""
+    if not history_rows:
+        history_rows = "<tr><td colspan='5'>Sem histórico.</td></tr>"
+
+    content = f"""
+<div class='grid'>
+<div class='metric'><span>Pedido</span><strong>{s19_escape(order.get('external_order_id'))}</strong></div>
+<div class='metric'><span>Status</span><strong>{s19_escape(s19_order_status_label(order.get('status')))}</strong></div>
+<div class='metric'><span>Pagamento</span><strong>{s19_escape(order.get('payment_status'))}</strong></div>
+<div class='metric'><span>Total</span><strong>{s19_money(order.get('total_amount'))}</strong></div>
+</div>
+<div class='card'>
+<h2>Comprador</h2>
+<table>
+<tr><th>Nome</th><td>{s19_escape(order.get('buyer_name') or '-')}</td></tr>
+<tr><th>E-mail</th><td>{s19_escape(order.get('buyer_email') or '-')}</td></tr>
+<tr><th>Nickname</th><td>{s19_escape(order.get('buyer_nickname') or '-')}</td></tr>
+<tr><th>Envio</th><td>{s19_escape(order.get('shipping_id') or '-')}</td></tr>
+</table>
+</div>
+<div class='card'>
+<h2>Itens</h2>
+<table>
+<thead><tr><th>SKU</th><th>Produto</th><th>Qtd</th><th>Unitário</th><th>Total</th><th>Catálogo</th></tr></thead>
+<tbody>{item_rows}</tbody>
+</table>
+</div>
+<div class='card'>
+<h2>Histórico de Status</h2>
+<table>
+<thead><tr><th>Data</th><th>Anterior</th><th>Novo</th><th>Origem</th><th>Mensagem</th></tr></thead>
+<tbody>{history_rows}</tbody>
+</table>
+</div>
+"""
+    return HTMLResponse(shell(f"Pedido {order.get('external_order_id')}", content))
+
+
+@app.get("/api/orders/demo-import")
+async def orders_demo_import():
+    migration_check = await store.select("order_status_history", "select=id&limit=1")
+    if not migration_check.get("success"):
+        return JSONResponse(status_code=409, content={
+            "success": False,
+            "version": APP_VERSION,
+            "error": "A migration da Sprint 19 ainda não foi executada.",
+            "next": "/orders/sql"
+        })
+    result = await s19_import_order(S19_DEMO_ORDER, "mercado_livre")
+    return {
+        "success": result.get("success"),
+        "version": APP_VERSION,
+        "mode": "demo",
+        "result": result,
+        "next": "/orders"
+    }
+
+
+@app.get("/api/orders/sync-mercadolivre")
+async def orders_sync_mercadolivre():
+    me = await ml_request("/users/me")
+    user_id = (me.get("data") or {}).get("id")
+    if not user_id:
+        return {
+            "success": False,
+            "version": APP_VERSION,
+            "error": "Mercado Livre não conectado ou usuário não identificado.",
+            "me": me,
+            "next": "/mercado-livre"
+        }
+
+    search = await ml_request(
+        "/orders/search",
+        params={"seller": user_id, "sort": "date_desc", "limit": 50}
+    )
+    if not search.get("success"):
+        return {
+            "success": False,
+            "version": APP_VERSION,
+            "error": "Não foi possível consultar pedidos.",
+            "search": search
+        }
+
+    data = search.get("data") or {}
+    results = data.get("results") or []
+    imports = []
+    for order in results:
+        imports.append(await s19_import_order(order, "mercado_livre"))
+
+    summary = {
+        "received": len(results),
+        "imported": sum(1 for item in imports if item.get("success")),
+        "errors": sum(1 for item in imports if not item.get("success"))
+    }
+
+    await store.insert("logs", {
+        "company_id": DEFAULT_COMPANY_ID,
+        "event_type": "mercado_livre_orders_sync",
+        "level": "info" if summary["errors"] == 0 else "warning",
+        "message": f"Sincronização de pedidos ML: {summary['imported']}/{summary['received']}",
+        "payload": {"summary": summary}
+    })
+
+    return {
+        "success": summary["errors"] == 0,
+        "version": APP_VERSION,
+        "seller_id": user_id,
+        "summary": summary,
+        "imports": imports,
+        "next": "/orders"
+    }
+
+
+@app.get("/api/orders/status")
+async def orders_module_status():
+    checks = {}
+    for table in ["orders", "order_items", "order_status_history", "inventory", "inventory_movements", "oauth_tokens"]:
+        result = await store.select(table, "select=*&limit=1")
+        checks[table] = {
+            "success": bool(result.get("success")),
+            "status_code": result.get("status_code"),
+            "rows": len(result.get("data") or []),
+            "error": str(result.get("error") or result.get("raw") or "")[:500]
+        }
+
+    token = await get_token()
+    return {
+        "success": all(item["success"] for item in checks.values()),
+        "version": APP_VERSION,
+        "module": "order_manager",
+        "mercado_livre_connected": bool(token.get("access_token")),
+        "checks": checks,
+        "pages": ["/orders", "/mercado-livre"],
+        "actions": ["/api/orders/demo-import", "/api/orders/sync-mercadolivre"]
     }

@@ -1,0 +1,16 @@
+SPRINT 19 - ORDER MANAGER
+
+1. Envie todos os arquivos para o GitHub Web.
+2. Aguarde o deploy ficar Ready.
+3. Abra /api/health e confirme sprint19-order-manager.
+4. Faça login.
+5. Abra /orders/sql.
+6. Copie o SQL inteiro.
+7. Supabase > SQL Editor > New query > cole > Run.
+8. Abra /api/orders/status.
+9. Abra /api/orders/demo-import.
+10. Confira /orders.
+11. Abra o pedido demonstrativo.
+12. Confira /inventory para ver a reserva.
+13. Confira /logs.
+14. Quando o Mercado Livre estiver conectado, abra /api/orders/sync-mercadolivre.

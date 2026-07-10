@@ -1,46 +1,36 @@
-# CommerceHub Enterprise V5 - Sprint 17 Universal Supplier Connector
+# CommerceHub Enterprise V5 - Sprint 19 Order Manager
 
 ## Entregue
-- Conector universal para JSON, XML e CSV
-- Hayamax como fornecedor de referência
-- Cadastro e configuração da URL do catálogo
-- Header opcional de autenticação
-- Teste de conexão
-- Pré-visualização normalizada
-- Importação para `supplier_products`
-- Criação/atualização do Catálogo Mestre (`products`)
-- Atualização de estoque (`inventory`)
-- Histórico em `sync_jobs` e `sync_logs`
-- Importação demonstrativa Hayamax sem credenciais externas
-- Proteção pelo login da Sprint 16
-
-## Observação sobre Hayamax
-A Hayamax informa publicamente que disponibiliza catálogo de dropshipping com preços,
-imagens e descrições após ativação, e também possui histórico de integração por XML.
-A URL e as credenciais reais precisam ser fornecidas ao revendedor pela Hayamax ou
-parceiro de integração. Esta Sprint não inventa credenciais privadas.
+- Gestão de pedidos em `/orders`
+- Tela detalhada por pedido
+- Importação demonstrativa
+- Sincronização real com `/orders/search` do Mercado Livre
+- Normalização de comprador, pagamento, envio e itens
+- Vinculação de itens por SKU ao catálogo mestre
+- Reserva automática de estoque
+- Histórico de status
+- Logs de sincronização
+- Status técnico do módulo
+- Proteção pela autenticação Enterprise
 
 ## Instalação
-1. Faça o deploy.
-2. Confirme `/api/health`.
-3. Entre no sistema.
-4. Abra `/supplier-connector/sql`.
-5. Copie o SQL e execute no Supabase SQL Editor.
-6. Abra `/api/supplier-connector/status`.
-7. Abra `/api/suppliers/hayamax/setup`.
-8. Abra `/api/suppliers/hayamax/demo-import`.
-9. Confira `/products`, `/inventory` e `/supplier-imports`.
+1. Suba os arquivos no GitHub Web.
+2. Aguarde o deploy Vercel.
+3. Confirme `/api/health`.
+4. Faça login.
+5. Abra `/orders/sql`.
+6. Copie o SQL e execute em uma nova query no Supabase.
+7. Abra `/api/orders/status`.
+8. Abra `/api/orders/demo-import`.
+9. Confira `/orders`, `/inventory` e `/logs`.
+10. Com o Mercado Livre conectado, use `/api/orders/sync-mercadolivre`.
 
 ## Versão esperada
-`enterprise-v5-sprint17-universal-supplier-connector`
+`enterprise-v5-sprint19-order-manager`
 
-## Rotas principais
-- `/supplier-connector`
-- `/supplier-connector/sql`
-- `/supplier-imports`
-- `/api/supplier-connector/status`
-- `/api/suppliers/hayamax/setup`
-- `/api/suppliers/hayamax/demo-import`
+## Observação
+A sincronização real usa o vendedor autenticado e consulta os pedidos do Mercado Livre.
+A importação demonstrativa permite validar todo o módulo antes de existir uma venda real.
 
 ## Limite GitHub Web
 Pacote mantido abaixo de 100 arquivos.

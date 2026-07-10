@@ -62,3 +62,22 @@ async def delete(table, query):
     if not configured():
         return {"success": True, "mode": "memory", "data": [], "transport": "memory"}
     return await rest("DELETE", f"{table}?{query}", None, "return=representation")
+
+
+async def update(table, query, payload):
+    if not configured():
+        items = MEMORY.setdefault(table, [])
+        updated = []
+        for i, item in enumerate(items):
+            match = True
+            for part in str(query or "").split("&"):
+                if "=eq." in part:
+                    key, value = part.split("=eq.", 1)
+                    if str(item.get(key)) != str(value):
+                        match = False
+                        break
+            if match:
+                items[i] = {**item, **payload}
+                updated.append(items[i])
+        return {"success": True, "mode": "memory", "data": updated, "transport": "memory"}
+    return await rest("PATCH", f"{table}?{query}", payload)
