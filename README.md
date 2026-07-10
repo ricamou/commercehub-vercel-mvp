@@ -1,38 +1,40 @@
-# CommerceHub Enterprise V5 — Sprint 21.2 Intelligent Attribute Payload
+# CommerceHub Enterprise V5 — Sprint 22 Intelligent GTIN Resolver
 
-## Correção principal
+## Entregue
 
-O CommerceHub não envia mais:
-
-```json
-{"id":"GTIN","value_name":"EMPTY_GTIN_REASON"}
-```
-
-Agora:
-
-- valida o GTIN matematicamente;
-- aceita GTIN de 8, 12, 13 ou 14 dígitos;
-- remove GTIN inválido do payload;
-- trata `EMPTY_GTIN_REASON` como atributo separado;
-- usa `value_id` quando o Mercado Livre fornece valores permitidos;
-- impede o envio quando existem atributos obrigatórios ou inválidos;
-- mantém GTIN e EMPTY_GTIN_REASON mutuamente exclusivos.
+- Consulta automática das opções de `EMPTY_GTIN_REASON`
+- Dropdown com os valores permitidos pelo Mercado Livre
+- Gravação de `value_id` e `value_name`
+- Modo “produto possui GTIN”
+- Modo “produto não possui GTIN”
+- Exclusão automática do atributo conflitante
+- Ao escolher GTIN:
+  - salva GTIN válido
+  - remove `EMPTY_GTIN_REASON`
+- Ao escolher produto sem GTIN:
+  - salva `EMPTY_GTIN_REASON`
+  - remove GTIN
+  - limpa o EAN inválido do Product Master
+- O Smart Category não volta a sugerir o GTIN inválido
+- Endpoint de diagnóstico do resolvedor
 
 ## Instalação
 
 1. Envie todos os arquivos pelo GitHub Web.
 2. Aguarde o deploy.
-3. Confirme `/api/health`.
-4. Versão esperada: `enterprise-v5-sprint21-2-intelligent-attribute-payload`.
+3. Abra `/api/health`.
+4. Confirme a versão:
+   `enterprise-v5-sprint22-intelligent-gtin-resolver`
 5. Não é necessário executar novo SQL.
-6. Abra os Atributos Inteligentes.
-7. No campo GTIN:
-   - coloque um GTIN verdadeiro; ou
-   - deixe vazio.
-8. Se o produto não tiver GTIN, preencha `EMPTY_GTIN_REASON` com uma opção permitida.
-9. Valide.
-10. Publique somente quando `valid=true`.
+6. Abra o produto → anúncio → Atributos inteligentes.
+7. Use o painel “Resolvedor inteligente de GTIN”.
+8. Escolha:
+   - GTIN real; ou
+   - produto sem GTIN + motivo permitido.
+9. Valide os requisitos.
+10. Publique.
 
-## Observação
+## Endpoints
 
-Um código com dígito verificador correto ainda precisa pertencer realmente ao produto.
+- `/api/gtin-resolver/category/{category_id}/options`
+- `/api/gtin-resolver/product/{product_id}/category/{category_id}/status`

@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint21-2-intelligent-attribute-payload"
+S13_VERSION = "enterprise-v5-sprint22-intelligent-gtin-resolver"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -3435,7 +3435,58 @@ async def product_master_page(request: Request):
     if not rows:
         rows = "<tr><td colspan='9'>Nenhum produto encontrado.</td></tr>"
 
+
+    gtin_metadata = await s22_gtin_metadata(category_id)
+    reason_options = s22_allowed_reasons(gtin_metadata.get("empty_reason"))
+    gtin_row = vals.get("GTIN") or vals.get("gtin") or {}
+    reason_row = vals.get("EMPTY_GTIN_REASON") or vals.get("empty_gtin_reason") or {}
+
+    reason_options_html = "".join(
+        f"<option value='{s19e(option.get('id'))}' "
+        f"{'selected' if str(reason_row.get('value_id') or '').lower() == str(option.get('id') or '').lower() else ''}>"
+        f"{s19e(option.get('name'))}</option>"
+        for option in reason_options
+    )
+
+    resolver_html = f"""
+<div class='card'>
+<h2>Resolvedor inteligente de GTIN</h2>
+<p>Escolha somente uma das opções abaixo. O CommerceHub removerá automaticamente o atributo conflitante.</p>
+
+<div style='display:grid;grid-template-columns:1fr 1fr;gap:18px'>
+<div style='border:1px solid #dbe3ef;border-radius:12px;padding:16px'>
+<h3>Produto possui GTIN</h3>
+<form method='post' action='/api/gtin-resolver/product/{product_id}/category/{category_id}'>
+<input type='hidden' name='mode' value='with_gtin'>
+<label>GTIN real do produto</label>
+<input name='gtin' value='{s19e(gtin_row.get("value_name") or "")}' placeholder='8, 12, 13 ou 14 dígitos'>
+<button type='submit'>Usar este GTIN</button>
+</form>
+</div>
+
+<div style='border:1px solid #dbe3ef;border-radius:12px;padding:16px'>
+<h3>Produto não possui GTIN</h3>
+<form method='post' action='/api/gtin-resolver/product/{product_id}/category/{category_id}'>
+<input type='hidden' name='mode' value='without_gtin'>
+<label>Motivo permitido pelo Mercado Livre</label>
+<select name='reason' style='width:100%;padding:9px' required>
+<option value=''>Selecione...</option>
+{reason_options_html}
+</select>
+<button type='submit'>Confirmar produto sem GTIN</button>
+</form>
+</div>
+</div>
+
+<p style='margin-top:12px'>
+<a class='btn' href='/api/gtin-resolver/product/{product_id}/category/{category_id}/status'>Ver status do resolvedor</a>
+<a class='btn' href='/api/gtin-resolver/category/{category_id}/options'>Ver opções do Mercado Livre</a>
+</p>
+</div>
+"""
+
     content = f"""
+{resolver_html}
 <div class='grid'>
 <div class='metric'><span>Produtos nesta página</span><strong>{len(products)}</strong></div>
 <div class='metric'><span>Página</span><strong>{page}</strong></div>
@@ -5535,6 +5586,23 @@ async def s21_prepare(product_id, category_id):
     result=[]
     for a in await s21_category_attrs(category_id):
         aid=str(a.get('attribute_id')); current=values.get(aid)
+
+        # Se o usuário informou um motivo válido de ausência de GTIN,
+        # não volte a sugerir automaticamente o EAN inválido do fornecedor.
+        empty_reason = values.get('EMPTY_GTIN_REASON') or values.get('empty_gtin_reason') or {}
+        if str(aid).upper() == 'GTIN' and (
+            empty_reason.get('value_id') or empty_reason.get('value_name')
+        ):
+            result.append({
+                "attribute_id": aid,
+                "name": a.get('name'),
+                "required": a.get('required') or a.get('catalog_required'),
+                "value_name": None,
+                "source": "gtin_resolver",
+                "status": "not_applicable"
+            })
+            continue
+
         if current and current.get('value_name'):
             result.append({"attribute_id":aid,"name":a.get('name'),"required":a.get('required') or a.get('catalog_required'),"value_name":current.get('value_name'),"source":current.get('source'),"status":"filled"}); continue
         val,src,conf=s21_guess(aid,a.get('name'),context['product'],context['attributes'])
@@ -5664,8 +5732,49 @@ async def smart_category_product_page(product_id:str, category_id:str):
 @app.post('/api/smart-category/product/{product_id}/attribute')
 async def smart_category_save_attribute(product_id:str, request:Request):
     f=await request.form(); cid=str(f.get('category_id') or '').strip(); aid=str(f.get('attribute_id') or '').strip(); val=str(f.get('value_name') or '').strip()
-    r=await store.upsert('product_marketplace_attributes', {"company_id":DEFAULT_COMPANY_ID,"product_id":product_id,"marketplace":"mercado_livre","category_id":cid,"attribute_id":aid,"value_name":val or None,"source":"manual","confidence":100,"status":"active","raw_data":{}}, 'product_id,marketplace,attribute_id')
-    if not r.get('success'): return JSONResponse(status_code=400,content={"success":False,"error":r.get('error') or r.get('raw')})
+    metadata = await s22_gtin_metadata(cid)
+    attr_meta = (
+        metadata.get('empty_reason')
+        if aid.upper() == 'EMPTY_GTIN_REASON'
+        else metadata.get('gtin')
+        if aid.upper() == 'GTIN'
+        else None
+    )
+    normalized = s212_value_payload(aid, None, val or None, attr_meta)
+    value_id = normalized.get('value_id') if normalized else None
+    value_name = normalized.get('value_name') if normalized else None
+
+    r=await store.upsert('product_marketplace_attributes', {
+        "company_id":DEFAULT_COMPANY_ID,
+        "product_id":product_id,
+        "marketplace":"mercado_livre",
+        "category_id":cid,
+        "attribute_id":aid,
+        "value_id":value_id,
+        "value_name":value_name,
+        "source":"manual",
+        "confidence":100,
+        "status":"active",
+        "raw_data":{}
+    }, 'product_id,marketplace,attribute_id')
+
+    if not r.get('success'):
+        return JSONResponse(status_code=400,content={"success":False,"error":r.get('error') or r.get('raw')})
+
+    if aid.upper() == 'EMPTY_GTIN_REASON' and (value_id or value_name):
+        await s22_delete_attribute_value(product_id, 'GTIN')
+        await store.update(
+            'products',
+            f"id=eq.{quote(str(product_id), safe='-')}",
+            {"ean": None, "sync_status": "pending"}
+        )
+    elif aid.upper() == 'GTIN' and s212_valid_gtin(value_name):
+        await s22_delete_attribute_value(product_id, 'EMPTY_GTIN_REASON')
+        await store.update(
+            'products',
+            f"id=eq.{quote(str(product_id), safe='-')}",
+            {"ean": s212_digits(value_name), "sync_status": "pending"}
+        )
     return RedirectResponse(f'/smart-category-engine/product/{product_id}/category/{cid}',status_code=303)
 
 @app.get('/api/smart-category/category/{category_id}/sync')
@@ -5827,14 +5936,17 @@ async def s212_attribute_validation(product_id, category_id):
 
     reason_row = values.get("EMPTY_GTIN_REASON") or values.get("empty_gtin_reason") or {}
     reason_value = reason_row.get("value_id") or reason_row.get("value_name")
-    reason_valid = bool(
-        s212_value_payload(
-            "EMPTY_GTIN_REASON",
-            reason_row.get("value_id"),
-            reason_row.get("value_name"),
-            metadata.get("EMPTY_GTIN_REASON")
-        )
+    reason_payload = s212_value_payload(
+        "EMPTY_GTIN_REASON",
+        reason_row.get("value_id"),
+        reason_row.get("value_name"),
+        metadata.get("EMPTY_GTIN_REASON")
     )
+    reason_valid = bool(reason_payload)
+
+    # GTIN e EMPTY_GTIN_REASON são mutuamente exclusivos.
+    if gtin_valid:
+        reason_valid = False
 
     missing = []
     invalid = []
@@ -5901,4 +6013,266 @@ async def s212_attribute_validation(product_id, category_id):
         "filled": filled,
         "missing": missing,
         "invalid": invalid,
+    }
+
+
+# ==========================================================
+# SPRINT 22 - INTELLIGENT GTIN RESOLVER
+# Consulta as opções permitidas pelo ML, salva value_id e resolve
+# automaticamente o conflito GTIN x EMPTY_GTIN_REASON.
+# ==========================================================
+
+async def s22_gtin_metadata(category_id):
+    attrs = await s21_category_attrs(category_id)
+    metadata = {
+        str(attr.get("attribute_id") or "").upper(): attr
+        for attr in attrs
+        if attr.get("attribute_id")
+    }
+
+    # Atualiza o cache caso o atributo ainda não esteja disponível.
+    if "EMPTY_GTIN_REASON" not in metadata:
+        await s21_sync_category(category_id)
+        attrs = await s21_category_attrs(category_id)
+        metadata = {
+            str(attr.get("attribute_id") or "").upper(): attr
+            for attr in attrs
+            if attr.get("attribute_id")
+        }
+
+    return {
+        "gtin": metadata.get("GTIN"),
+        "empty_reason": metadata.get("EMPTY_GTIN_REASON"),
+    }
+
+
+def s22_allowed_reasons(metadata):
+    metadata = metadata or {}
+    options = []
+
+    for item in metadata.get("values") or []:
+        value_id = str(item.get("id") or "").strip()
+        value_name = str(item.get("name") or value_id).strip()
+        if value_id or value_name:
+            options.append({
+                "id": value_id or value_name,
+                "name": value_name or value_id,
+            })
+
+    return options
+
+
+async def s22_delete_attribute_value(product_id, attribute_id):
+    # Apaga somente o valor específico deste produto/marketplace.
+    return await store.delete(
+        "product_marketplace_attributes",
+        "product_id=eq."
+        + quote(str(product_id), safe="-")
+        + "&marketplace=eq.mercado_livre"
+        + "&attribute_id=eq."
+        + quote(str(attribute_id), safe="-_")
+    )
+
+
+async def s22_save_attribute_value(
+    product_id,
+    category_id,
+    attribute_id,
+    value_id=None,
+    value_name=None,
+    source="gtin_resolver",
+):
+    payload = {
+        "company_id": DEFAULT_COMPANY_ID,
+        "product_id": product_id,
+        "marketplace": "mercado_livre",
+        "category_id": category_id,
+        "attribute_id": attribute_id,
+        "value_id": value_id,
+        "value_name": value_name,
+        "source": source,
+        "confidence": 100,
+        "status": "active",
+        "raw_data": {"resolver": "sprint22"},
+    }
+    return await store.upsert(
+        "product_marketplace_attributes",
+        payload,
+        "product_id,marketplace,attribute_id"
+    )
+
+
+async def s22_resolve_gtin(product_id, category_id, mode, gtin=None, reason=None):
+    mode = str(mode or "").strip().lower()
+    metadata = await s22_gtin_metadata(category_id)
+    reason_metadata = metadata.get("empty_reason") or {}
+    allowed_reasons = s22_allowed_reasons(reason_metadata)
+
+    if mode == "with_gtin":
+        normalized = s212_digits(gtin)
+        if not s212_valid_gtin(normalized):
+            return {
+                "success": False,
+                "status_code": 422,
+                "error": "GTIN inválido.",
+                "message": "Informe um GTIN real com 8, 12, 13 ou 14 dígitos e dígito verificador válido.",
+                "gtin": normalized,
+            }
+
+        saved = await s22_save_attribute_value(
+            product_id,
+            category_id,
+            "GTIN",
+            value_name=normalized,
+            source="gtin_resolver",
+        )
+        if not saved.get("success"):
+            return {
+                "success": False,
+                "status_code": 400,
+                "error": saved.get("error") or saved.get("raw"),
+            }
+
+        await s22_delete_attribute_value(product_id, "EMPTY_GTIN_REASON")
+
+        # Mantém o Product Master coerente com o valor escolhido.
+        await store.update(
+            "products",
+            f"id=eq.{quote(str(product_id), safe='-')}",
+            {"ean": normalized, "sync_status": "pending"},
+        )
+
+        return {
+            "success": True,
+            "mode": "with_gtin",
+            "gtin": normalized,
+            "removed": "EMPTY_GTIN_REASON",
+        }
+
+    if mode == "without_gtin":
+        reason = str(reason or "").strip()
+        if not reason:
+            return {
+                "success": False,
+                "status_code": 422,
+                "error": "Selecione um motivo para ausência de GTIN.",
+                "allowed_reasons": allowed_reasons,
+            }
+
+        selected = None
+        for option in allowed_reasons:
+            if reason.lower() in {
+                str(option.get("id") or "").lower(),
+                str(option.get("name") or "").lower(),
+            }:
+                selected = option
+                break
+
+        if not selected:
+            return {
+                "success": False,
+                "status_code": 422,
+                "error": "Motivo não permitido para esta categoria.",
+                "received": reason,
+                "allowed_reasons": allowed_reasons,
+            }
+
+        saved = await s22_save_attribute_value(
+            product_id,
+            category_id,
+            "EMPTY_GTIN_REASON",
+            value_id=selected.get("id"),
+            value_name=selected.get("name"),
+            source="gtin_resolver",
+        )
+        if not saved.get("success"):
+            return {
+                "success": False,
+                "status_code": 400,
+                "error": saved.get("error") or saved.get("raw"),
+            }
+
+        await s22_delete_attribute_value(product_id, "GTIN")
+
+        # Remove o EAN inválido do Product Master para impedir nova sugestão.
+        await store.update(
+            "products",
+            f"id=eq.{quote(str(product_id), safe='-')}",
+            {"ean": None, "sync_status": "pending"},
+        )
+
+        return {
+            "success": True,
+            "mode": "without_gtin",
+            "empty_gtin_reason": selected,
+            "removed": "GTIN",
+        }
+
+    return {
+        "success": False,
+        "status_code": 400,
+        "error": "Modo inválido. Use with_gtin ou without_gtin.",
+    }
+
+
+@app.get("/api/gtin-resolver/category/{category_id}/options")
+async def gtin_resolver_options(category_id: str):
+    metadata = await s22_gtin_metadata(category_id)
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "category_id": category_id,
+        "supports_gtin": bool(metadata.get("gtin")),
+        "supports_empty_gtin_reason": bool(metadata.get("empty_reason")),
+        "allowed_reasons": s22_allowed_reasons(metadata.get("empty_reason")),
+        "metadata": metadata,
+    }
+
+
+@app.post("/api/gtin-resolver/product/{product_id}/category/{category_id}")
+async def gtin_resolver_save(product_id: str, category_id: str, request: Request):
+    form = await request.form()
+    result = await s22_resolve_gtin(
+        product_id=product_id,
+        category_id=category_id,
+        mode=form.get("mode"),
+        gtin=form.get("gtin"),
+        reason=form.get("reason"),
+    )
+
+    if not result.get("success"):
+        return JSONResponse(
+            status_code=int(result.get("status_code") or 400),
+            content={
+                "success": False,
+                "version": APP_VERSION,
+                **result,
+            }
+        )
+
+    return RedirectResponse(
+        f"/smart-category-engine/product/{product_id}/category/{category_id}",
+        status_code=303
+    )
+
+
+@app.get("/api/gtin-resolver/product/{product_id}/category/{category_id}/status")
+async def gtin_resolver_status(product_id: str, category_id: str):
+    values = await s21_product_values(product_id, category_id)
+    metadata = await s22_gtin_metadata(category_id)
+
+    gtin = values.get("GTIN") or values.get("gtin") or {}
+    reason = values.get("EMPTY_GTIN_REASON") or values.get("empty_gtin_reason") or {}
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "product_id": product_id,
+        "category_id": category_id,
+        "current": {
+            "gtin": gtin,
+            "empty_gtin_reason": reason,
+        },
+        "allowed_reasons": s22_allowed_reasons(metadata.get("empty_reason")),
+        "validation": await s212_attribute_validation(product_id, category_id),
     }

@@ -1,0 +1,4 @@
+A Sprint 22 não cria novas tabelas nem colunas.
+
+Não é necessário executar uma nova query no Supabase.
+Use apenas o ZIP no GitHub Web e aguarde o deploy da Vercel.
