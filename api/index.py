@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint18-product-master"
+S13_VERSION = "enterprise-v5-sprint19-listing-engine-mercado-livre"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -3620,7 +3620,7 @@ async def product_master_details_page(product_id: str):
 <p><b>Descrição:</b><br>{s18_escape(product.get('description') or '-')}</p>
 <a class='btn' href='/product-master/{product_id}/edit'>Editar</a>
 <a class='btn' href='/product-master/{product_id}/images'>Imagens</a>
-<a class='btn' href='/product-master/{product_id}/attributes'>Atributos</a>
+<a class='btn' href='/product-master/{product_id}/attributes'>Atributos</a><a class='btn' href='/product-master/{product_id}/listing'>Criar anúncio ML</a>
 </div>
 <div class='card'><h2>Imagens</h2>{image_cards}</div>
 <div class='card'>
@@ -3885,3 +3885,601 @@ async def product_master_search(q: str = ""):
             or q_lower in str(p.get("brand") or "").lower()
         ]
     return {"success": True, "version": APP_VERSION, "query": q, "count": len(products), "data": products}
+
+
+# ==========================================================
+# SPRINT 19 - LISTING ENGINE MERCADO LIVRE
+# Draft, categorização, validação, publicação e sincronização.
+# ==========================================================
+
+def s19e(value):
+    value = str(value if value is not None else "")
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
+    )
+
+
+def s19money(value):
+    try:
+        return f"R$ {float(value or 0):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+    except Exception:
+        return "R$ 0,00"
+
+
+def s19int(value, default=0):
+    try:
+        return int(float(str(value or default).replace(",", ".")))
+    except Exception:
+        return default
+
+
+def s19float(value, default=0.0):
+    try:
+        text = str(value or "").strip().replace("R$", "").replace(" ", "")
+        if "," in text and "." in text:
+            text = text.replace(".", "").replace(",", ".")
+        else:
+            text = text.replace(",", ".")
+        return float(text) if text else default
+    except Exception:
+        return default
+
+
+async def s19_get_listing_by_product(product_id):
+    result = await store.select(
+        "listings",
+        f"select=*&company_id=eq.{DEFAULT_COMPANY_ID}&product_id=eq.{quote(str(product_id), safe='-')}&marketplace=eq.mercado_livre&limit=1"
+    )
+    rows = result.get("data") or []
+    return rows[0] if rows else None
+
+
+async def s19_get_listing(listing_id):
+    result = await store.select(
+        "listings",
+        f"select=*&id=eq.{quote(str(listing_id), safe='-')}&limit=1"
+    )
+    rows = result.get("data") or []
+    return rows[0] if rows else None
+
+
+async def s19_history(listing_id, product_id, event_type, message, old_status=None, new_status=None, payload=None):
+    return await store.insert("listing_history", {
+        "company_id": DEFAULT_COMPANY_ID,
+        "listing_id": listing_id,
+        "product_id": product_id,
+        "event_type": event_type,
+        "old_status": old_status,
+        "new_status": new_status,
+        "message": message,
+        "payload": payload or {}
+    })
+
+
+async def s19_product_context(product_id):
+    product = await s18_get_product(product_id)
+    if not product:
+        return None
+
+    inventory_result = await store.select(
+        "inventory",
+        f"select=*&product_id=eq.{quote(str(product_id), safe='-')}&limit=1"
+    )
+    images_result = await store.select(
+        "product_images",
+        f"select=*&product_id=eq.{quote(str(product_id), safe='-')}&order=position.asc"
+    )
+    attrs_result = await store.select(
+        "product_attributes",
+        f"select=*&product_id=eq.{quote(str(product_id), safe='-')}&order=name.asc"
+    )
+
+    inventory = (inventory_result.get("data") or [{}])[0]
+    images = images_result.get("data") or []
+    attributes = attrs_result.get("data") or []
+
+    picture_urls = []
+    if product.get("primary_image_url"):
+        picture_urls.append(product.get("primary_image_url"))
+    for image in images:
+        url = image.get("url")
+        if url and url not in picture_urls:
+            picture_urls.append(url)
+
+    return {
+        "product": product,
+        "inventory": inventory,
+        "images": picture_urls,
+        "attributes": attributes
+    }
+
+
+def s19_local_validation(context, listing):
+    product = context["product"]
+    inventory = context["inventory"]
+    images = context["images"]
+    errors = []
+    warnings = []
+
+    title = str(listing.get("title") or product.get("name") or "").strip()
+    category_id = str(listing.get("category_id") or "").strip()
+    price = s19float(listing.get("price") or product.get("sale_price"), 0)
+    quantity = s19int(listing.get("available_quantity") or inventory.get("available"), 0)
+
+    if not title:
+        errors.append("Título obrigatório.")
+    if len(title) > 60:
+        warnings.append("O título possui mais de 60 caracteres e pode ser rejeitado ou truncado.")
+    if not category_id:
+        errors.append("Categoria do Mercado Livre obrigatória.")
+    if price <= 0:
+        errors.append("Preço deve ser maior que zero.")
+    if quantity < 0:
+        errors.append("Estoque não pode ser negativo.")
+    if not images:
+        errors.append("Adicione ao menos uma imagem pública ao Product Master.")
+    if str(product.get("internal_status") or "draft") != "ready":
+        warnings.append("O produto ainda não está com status interno 'ready'.")
+    if not product.get("ean"):
+        warnings.append("Produto sem EAN/GTIN.")
+    if not product.get("brand"):
+        warnings.append("Produto sem marca.")
+    if not product.get("description"):
+        warnings.append("Produto sem descrição longa.")
+
+    return {
+        "valid": len(errors) == 0,
+        "errors": errors,
+        "warnings": warnings,
+        "summary": {
+            "title": title,
+            "category_id": category_id,
+            "price": price,
+            "available_quantity": quantity,
+            "pictures": len(images)
+        }
+    }
+
+
+def s19_build_ml_payload(context, listing):
+    product = context["product"]
+    inventory = context["inventory"]
+    pictures = [{"source": url} for url in context["images"]]
+    attributes = []
+
+    if product.get("ean"):
+        attributes.append({"id": "GTIN", "value_name": str(product.get("ean"))})
+    if product.get("brand"):
+        attributes.append({"id": "BRAND", "value_name": str(product.get("brand"))})
+
+    for attr in context["attributes"]:
+        attr_name = str(attr.get("name") or "").strip()
+        attr_value = str(attr.get("value") or "").strip()
+        if attr_name and attr_value and attr_name.upper() not in ["GTIN", "BRAND"]:
+            attributes.append({
+                "id": attr_name.upper().replace(" ", "_"),
+                "value_name": attr_value
+            })
+
+    return {
+        "title": str(listing.get("title") or product.get("name") or "")[:60],
+        "category_id": listing.get("category_id"),
+        "price": s19float(listing.get("price") or product.get("sale_price"), 0),
+        "currency_id": listing.get("currency_id") or "BRL",
+        "available_quantity": s19int(listing.get("available_quantity") or inventory.get("available"), 0),
+        "buying_mode": listing.get("buying_mode") or "buy_it_now",
+        "condition": listing.get("condition") or "new",
+        "listing_type_id": listing.get("listing_type_id") or "gold_special",
+        "pictures": pictures,
+        "attributes": attributes
+    }
+
+
+@app.get("/listing-engine", response_class=HTMLResponse)
+async def listing_engine_page(request: Request):
+    status_filter = str(request.query_params.get("status") or "").strip()
+    query = "select=*&company_id=eq." + quote(DEFAULT_COMPANY_ID, safe="-") + "&marketplace=eq.mercado_livre"
+    if status_filter:
+        query += "&status=eq." + quote(status_filter, safe="_-")
+    query += "&order=updated_at.desc&limit=100"
+
+    listings_result = await store.select("listings", query)
+    listings = listings_result.get("data") or []
+
+    rows = ""
+    for listing in listings:
+        product = await s18_get_product(listing.get("product_id"))
+        rows += f"""
+<tr>
+<td>{s19e((product or {}).get('sku') or '-')}</td>
+<td>{s19e(listing.get('title'))}</td>
+<td>{s19e(listing.get('category_id') or '-')}</td>
+<td>{s19money(listing.get('price'))}</td>
+<td>{s19e(listing.get('available_quantity'))}</td>
+<td>{s19e(listing.get('status'))}</td>
+<td>{s19e(listing.get('validation_status') or 'pending')}</td>
+<td>{s19e(listing.get('external_id') or '-')}</td>
+<td><a class='btn' href='/listing-engine/{listing.get("id")}'>Abrir</a></td>
+</tr>
+"""
+
+    if not rows:
+        rows = "<tr><td colspan='9'>Nenhum rascunho de anúncio criado.</td></tr>"
+
+    content = f"""
+<div class='grid'>
+<div class='metric'><span>Anúncios</span><strong>{len(listings)}</strong></div>
+<div class='metric'><span>Marketplace</span><strong>Mercado Livre</strong></div>
+<div class='metric'><span>Publicação</span><strong>Com confirmação</strong></div>
+<div class='metric'><span>Origem</span><strong>Product Master</strong></div>
+</div>
+<div class='card'>
+<h2>Listing Engine</h2>
+<p>Crie um rascunho a partir do Product Master, valide os dados e publique somente após confirmação explícita.</p>
+<a class='btn' href='/product-master'>Selecionar produto</a>
+<a class='btn' href='/listing-engine/sql'>SQL Sprint 19</a>
+<a class='btn' href='/api/listing-engine/status'>Status do módulo</a>
+<a class='btn' href='/api/ml/listing-types'>Tipos de anúncio</a>
+</div>
+<div class='card'>
+<table>
+<thead><tr><th>SKU</th><th>Título</th><th>Categoria</th><th>Preço</th><th>Qtd</th><th>Status</th><th>Validação</th><th>ID ML</th><th>Ação</th></tr></thead>
+<tbody>{rows}</tbody>
+</table>
+</div>
+"""
+    return HTMLResponse(shell("Listing Engine", content))
+
+
+@app.get("/listing-engine/sql", response_class=HTMLResponse)
+async def listing_engine_sql_page():
+    sql_text = open("sprint19_listing_engine.sql", "r", encoding="utf-8").read()
+    return HTMLResponse(shell(
+        "SQL Sprint 19",
+        f"<div class='card'><h2>Migration Listing Engine</h2><p>Copie e execute no Supabase SQL Editor.</p><pre>{s19e(sql_text)}</pre></div>"
+    ))
+
+
+@app.get("/product-master/{product_id}/listing", response_class=HTMLResponse)
+async def listing_from_product_page(product_id: str):
+    context = await s19_product_context(product_id)
+    if not context:
+        return HTMLResponse(shell("Anúncio", "<div class='card'><h2>Produto não encontrado.</h2></div>"), status_code=404)
+
+    product = context["product"]
+    inventory = context["inventory"]
+    current = await s19_get_listing_by_product(product_id) or {}
+    title = current.get("title") or product.get("seo_name") or product.get("name") or ""
+    description = current.get("description") or product.get("description") or product.get("short_description") or ""
+    price = current.get("price") if current.get("price") is not None else product.get("sale_price")
+    quantity = current.get("available_quantity") if current.get("available_quantity") is not None else inventory.get("available", 0)
+
+    content = f"""
+<div class='card'>
+<h2>Preparar anúncio — {s19e(product.get('sku'))}</h2>
+<p><b>Produto:</b> {s19e(product.get('name'))}</p>
+<p><b>Imagens disponíveis:</b> {len(context['images'])}</p>
+<form method='post' action='/api/listing-engine/draft'>
+<input type='hidden' name='product_id' value='{s19e(product_id)}'>
+<label>Título do anúncio</label>
+<input name='title' maxlength='60' value='{s19e(title)}' required>
+<label>Descrição</label>
+<textarea name='description' style='width:100%;min-height:160px;padding:10px;border:1px solid #cbd5e1;border-radius:8px'>{s19e(description)}</textarea>
+<label>Categoria Mercado Livre</label>
+<input name='category_id' value='{s19e(current.get("category_id") or "")}' placeholder='Ex.: MLB1648' required>
+<p><a class='btn' href='/api/ml/category-predict?q={quote(str(product.get("name") or ""))}'>Sugerir categoria</a></p>
+<label>Preço</label><input name='price' value='{s19e(price)}' required>
+<label>Quantidade disponível</label><input name='available_quantity' value='{s19e(quantity)}' required>
+<label>Tipo de anúncio</label>
+<select name='listing_type_id' style='width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:8px;margin:5px 0 12px'>
+<option value='gold_special' {'selected' if current.get('listing_type_id','gold_special') == 'gold_special' else ''}>Clássico / gold_special</option>
+<option value='gold_pro' {'selected' if current.get('listing_type_id') == 'gold_pro' else ''}>Premium / gold_pro</option>
+<option value='free' {'selected' if current.get('listing_type_id') == 'free' else ''}>Grátis / free</option>
+</select>
+<label>Condição</label>
+<select name='condition' style='width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:8px;margin:5px 0 12px'>
+<option value='new' {'selected' if current.get('condition','new') == 'new' else ''}>Novo</option>
+<option value='used' {'selected' if current.get('condition') == 'used' else ''}>Usado</option>
+</select>
+<label>Garantia</label><input name='warranty' value='{s19e(current.get("warranty") or "")}' placeholder='Ex.: Garantia do vendedor: 3 meses'>
+<button type='submit'>Salvar rascunho</button>
+</form>
+</div>
+"""
+    return HTMLResponse(shell("Preparar anúncio", content))
+
+
+@app.post("/api/listing-engine/draft")
+async def listing_save_draft(request: Request):
+    form = await request.form()
+    product_id = str(form.get("product_id") or "").strip()
+    context = await s19_product_context(product_id)
+    if not context:
+        return JSONResponse(status_code=404, content={"success": False, "error": "Produto não encontrado."})
+
+    current = await s19_get_listing_by_product(product_id)
+    listing_id = current.get("id") if current else str(uuid.uuid4())
+    old_status = current.get("status") if current else None
+
+    payload = {
+        "id": listing_id,
+        "company_id": DEFAULT_COMPANY_ID,
+        "product_id": product_id,
+        "marketplace": "mercado_livre",
+        "external_id": current.get("external_id") if current else None,
+        "title": str(form.get("title") or "").strip(),
+        "description": str(form.get("description") or "").strip() or None,
+        "category_id": str(form.get("category_id") or "").strip(),
+        "price": s19float(form.get("price"), 0),
+        "available_quantity": s19int(form.get("available_quantity"), 0),
+        "listing_type_id": str(form.get("listing_type_id") or "gold_special"),
+        "condition": str(form.get("condition") or "new"),
+        "currency_id": "BRL",
+        "buying_mode": "buy_it_now",
+        "warranty": str(form.get("warranty") or "").strip() or None,
+        "status": current.get("status") if current and current.get("external_id") else "draft",
+        "validation_status": "pending",
+        "payload": current.get("payload") if current else {}
+    }
+
+    saved = await store.upsert("listings", payload, "company_id,product_id,marketplace")
+    if not saved.get("success"):
+        return JSONResponse(status_code=400, content={"success": False, "error": saved.get("error") or saved.get("raw")})
+
+    await s19_history(
+        listing_id, product_id, "draft_saved", "Rascunho do anúncio salvo.",
+        old_status, payload["status"], {"category_id": payload["category_id"]}
+    )
+    return RedirectResponse(f"/listing-engine/{listing_id}", status_code=303)
+
+
+@app.get("/listing-engine/{listing_id}", response_class=HTMLResponse)
+async def listing_details_page(listing_id: str):
+    listing = await s19_get_listing(listing_id)
+    if not listing:
+        return HTMLResponse(shell("Anúncio", "<div class='card'><h2>Anúncio não encontrado.</h2></div>"), status_code=404)
+
+    context = await s19_product_context(listing.get("product_id"))
+    if not context:
+        return HTMLResponse(shell("Anúncio", "<div class='card'><h2>Produto relacionado não encontrado.</h2></div>"), status_code=404)
+
+    product = context["product"]
+    validation = s19_local_validation(context, listing)
+    history_result = await store.select(
+        "listing_history",
+        f"select=*&listing_id=eq.{quote(listing_id, safe='-')}&order=created_at.desc&limit=50"
+    )
+
+    errors_html = "".join(f"<li style='color:#b91c1c'>{s19e(x)}</li>" for x in validation["errors"]) or "<li>Nenhum erro local.</li>"
+    warnings_html = "".join(f"<li style='color:#92400e'>{s19e(x)}</li>" for x in validation["warnings"]) or "<li>Nenhum alerta.</li>"
+    history_rows = "".join(
+        f"<tr><td>{s19e(h.get('created_at'))}</td><td>{s19e(h.get('event_type'))}</td><td>{s19e(h.get('old_status') or '-')}</td><td>{s19e(h.get('new_status') or '-')}</td><td>{s19e(h.get('message'))}</td></tr>"
+        for h in (history_result.get("data") or [])
+    ) or "<tr><td colspan='5'>Sem histórico.</td></tr>"
+
+    publish_box = ""
+    if listing.get("external_id"):
+        publish_box = f"""
+<div class='card'>
+<h2>Anúncio publicado</h2>
+<p><b>ID:</b> {s19e(listing.get('external_id'))}</p>
+<p><b>Status:</b> {s19e(listing.get('status'))}</p>
+<p><b>Link:</b> <a href='{s19e(listing.get('permalink') or listing.get('item_url') or '#')}' target='_blank'>{s19e(listing.get('permalink') or listing.get('item_url') or '-')}</a></p>
+<form method='post' action='/api/listing-engine/{listing_id}/sync'>
+<button type='submit'>Sincronizar preço e estoque</button>
+</form>
+</div>
+"""
+    else:
+        publish_box = f"""
+<div class='card'>
+<h2>Publicação controlada</h2>
+<p>Esta ação cria um anúncio real na conta conectada do Mercado Livre.</p>
+<p><b>O sistema não publica automaticamente.</b> Digite <code>PUBLICAR</code> para confirmar.</p>
+<form method='post' action='/api/listing-engine/{listing_id}/publish'>
+<label>Confirmação</label><input name='confirmation' placeholder='PUBLICAR' required>
+<button type='submit'>Publicar no Mercado Livre</button>
+</form>
+</div>
+"""
+
+    content = f"""
+<div class='grid'>
+<div class='metric'><span>SKU</span><strong>{s19e(product.get('sku'))}</strong></div>
+<div class='metric'><span>Status</span><strong>{s19e(listing.get('status'))}</strong></div>
+<div class='metric'><span>Validação</span><strong>{'OK' if validation['valid'] else 'PENDENTE'}</strong></div>
+<div class='metric'><span>Preço</span><strong>{s19money(listing.get('price'))}</strong></div>
+</div>
+<div class='card'>
+<h2>{s19e(listing.get('title'))}</h2>
+<p><b>Categoria:</b> {s19e(listing.get('category_id') or '-')}</p>
+<p><b>Tipo:</b> {s19e(listing.get('listing_type_id'))}</p>
+<p><b>Quantidade:</b> {s19e(listing.get('available_quantity'))}</p>
+<p><b>Imagens:</b> {len(context['images'])}</p>
+<p><b>Descrição:</b><br>{s19e(listing.get('description') or '-')}</p>
+<a class='btn' href='/product-master/{product.get("id")}/listing'>Editar rascunho</a>
+<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a>
+</div>
+<div class='card'><h2>Erros</h2><ul>{errors_html}</ul><h2>Alertas</h2><ul>{warnings_html}</ul></div>
+{publish_box}
+<div class='card'>
+<h2>Histórico</h2>
+<table><thead><tr><th>Data</th><th>Evento</th><th>Anterior</th><th>Novo</th><th>Mensagem</th></tr></thead><tbody>{history_rows}</tbody></table>
+</div>
+"""
+    return HTMLResponse(shell("Detalhes do anúncio", content))
+
+
+@app.post("/api/listing-engine/{listing_id}/publish")
+async def listing_publish(listing_id: str, request: Request):
+    form = await request.form()
+    confirmation = str(form.get("confirmation") or "").strip().upper()
+    if confirmation != "PUBLICAR":
+        return JSONResponse(status_code=400, content={
+            "success": False,
+            "error": "Confirmação inválida. Digite PUBLICAR."
+        })
+
+    listing = await s19_get_listing(listing_id)
+    if not listing:
+        return JSONResponse(status_code=404, content={"success": False, "error": "Anúncio não encontrado."})
+    if listing.get("external_id"):
+        return JSONResponse(status_code=409, content={"success": False, "error": "Este anúncio já possui ID do Mercado Livre."})
+
+    context = await s19_product_context(listing.get("product_id"))
+    validation = s19_local_validation(context, listing)
+    if not validation["valid"]:
+        await store.update(
+            "listings",
+            f"id=eq.{quote(listing_id, safe='-')}",
+            {"validation_status": "failed", "last_error": json.dumps(validation, ensure_ascii=False)}
+        )
+        return JSONResponse(status_code=409, content={
+            "success": False,
+            "error": "O anúncio não passou na validação local.",
+            "validation": validation
+        })
+
+    payload = s19_build_ml_payload(context, listing)
+    result = await ml_request("/items", method="POST", payload=payload)
+    if not result.get("success"):
+        error_text = str(result.get("error") or result.get("raw") or result.get("data") or "")[:3000]
+        await store.update(
+            "listings",
+            f"id=eq.{quote(listing_id, safe='-')}",
+            {"validation_status": "failed", "last_error": error_text, "payload": payload}
+        )
+        await s19_history(listing_id, listing.get("product_id"), "publish_failed", "Mercado Livre rejeitou a publicação.", listing.get("status"), listing.get("status"), {"result": result})
+        return JSONResponse(status_code=400, content={
+            "success": False,
+            "error": "Falha ao publicar no Mercado Livre.",
+            "result": result,
+            "payload_sent": payload
+        })
+
+    item = result.get("data") or {}
+    external_id = item.get("id")
+    permalink = item.get("permalink")
+    new_status = item.get("status") or "active"
+
+    update_payload = {
+        "external_id": external_id,
+        "permalink": permalink,
+        "item_url": permalink,
+        "status": new_status,
+        "validation_status": "published",
+        "last_error": None,
+        "payload": payload,
+        "published_at": __import__("datetime").datetime.utcnow().isoformat(),
+        "last_synced_at": __import__("datetime").datetime.utcnow().isoformat()
+    }
+    await store.update("listings", f"id=eq.{quote(listing_id, safe='-')}", update_payload)
+
+    description = str(listing.get("description") or "").strip()
+    description_result = None
+    if external_id and description:
+        description_result = await ml_request(
+            f"/items/{external_id}/description",
+            method="POST",
+            payload={"plain_text": description}
+        )
+
+    await store.update(
+        "products",
+        f"id=eq.{quote(str(listing.get('product_id')), safe='-')}",
+        {"sync_status": "synced", "last_synced_at": __import__("datetime").datetime.utcnow().isoformat()}
+    )
+    await s19_history(listing_id, listing.get("product_id"), "published", f"Anúncio {external_id} publicado no Mercado Livre.", listing.get("status"), new_status, {"item": item, "description": description_result})
+    await store.insert("logs", {
+        "company_id": DEFAULT_COMPANY_ID,
+        "event_type": "mercado_livre_listing_published",
+        "level": "info",
+        "message": f"Produto publicado no Mercado Livre: {external_id}",
+        "payload": {"listing_id": listing_id, "product_id": listing.get("product_id"), "external_id": external_id}
+    })
+    return RedirectResponse(f"/listing-engine/{listing_id}", status_code=303)
+
+
+@app.post("/api/listing-engine/{listing_id}/sync")
+async def listing_sync(listing_id: str):
+    listing = await s19_get_listing(listing_id)
+    if not listing or not listing.get("external_id"):
+        return JSONResponse(status_code=404, content={"success": False, "error": "Anúncio publicado não encontrado."})
+
+    context = await s19_product_context(listing.get("product_id"))
+    price = s19float(context["product"].get("sale_price"), listing.get("price"))
+    quantity = s19int(context["inventory"].get("available"), listing.get("available_quantity"))
+
+    result = await ml_request(
+        f"/items/{listing.get('external_id')}",
+        method="PUT",
+        payload={"price": price, "available_quantity": quantity}
+    )
+    if not result.get("success"):
+        await store.update("listings", f"id=eq.{quote(listing_id, safe='-')}", {"last_error": str(result.get("error") or result.get("raw") or result.get("data"))[:3000]})
+        return JSONResponse(status_code=400, content={"success": False, "result": result})
+
+    item = result.get("data") or {}
+    update_payload = {
+        "price": price,
+        "available_quantity": quantity,
+        "status": item.get("status") or listing.get("status"),
+        "permalink": item.get("permalink") or listing.get("permalink"),
+        "last_synced_at": __import__("datetime").datetime.utcnow().isoformat(),
+        "last_error": None
+    }
+    await store.update("listings", f"id=eq.{quote(listing_id, safe='-')}", update_payload)
+    await s19_history(listing_id, listing.get("product_id"), "synced", "Preço e estoque sincronizados com o Mercado Livre.", listing.get("status"), update_payload["status"], {"price": price, "quantity": quantity})
+    return RedirectResponse(f"/listing-engine/{listing_id}", status_code=303)
+
+
+@app.get("/api/ml/category-predict")
+async def ml_category_predict(q: str = ""):
+    if not str(q or "").strip():
+        return JSONResponse(status_code=400, content={"success": False, "error": "Informe q."})
+    return await ml_request(
+        "/sites/MLB/domain_discovery/search",
+        params={"q": str(q).strip(), "limit": 8}
+    )
+
+
+@app.get("/api/ml/categories/{category_id}/attributes")
+async def ml_category_attributes(category_id: str):
+    return await ml_request(f"/categories/{quote(category_id, safe='-_')}/attributes")
+
+
+@app.get("/api/ml/listing-types")
+async def ml_listing_types():
+    return await ml_request("/sites/MLB/listing_types")
+
+
+@app.get("/api/listing-engine/status")
+async def listing_engine_status():
+    checks = {}
+    for table in ["products", "inventory", "product_images", "product_attributes", "listings", "listing_history", "oauth_tokens"]:
+        result = await store.select(table, "select=*&limit=1")
+        checks[table] = {
+            "success": bool(result.get("success")),
+            "status_code": result.get("status_code"),
+            "rows": len(result.get("data") or []),
+            "error": str(result.get("error") or result.get("raw") or "")[:500]
+        }
+
+    me = await ml_request("/users/me")
+    return {
+        "success": all(item["success"] for item in checks.values()) and bool(me.get("success")),
+        "version": APP_VERSION,
+        "module": "listing_engine_mercado_livre",
+        "mercado_livre_connected": bool(me.get("success")),
+        "seller_id": (me.get("data") or {}).get("id"),
+        "checks": checks,
+        "safety": {
+            "automatic_publish": False,
+            "explicit_confirmation_required": "PUBLICAR"
+        },
+        "pages": ["/listing-engine", "/listing-engine/sql", "/product-master"]
+    }

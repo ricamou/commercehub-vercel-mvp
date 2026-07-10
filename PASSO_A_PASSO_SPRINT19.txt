@@ -1,16 +1,23 @@
-SPRINT 19 - ORDER MANAGER
+SPRINT 19 - LISTING ENGINE MERCADO LIVRE
 
-1. Envie todos os arquivos para o GitHub Web.
+1. Suba todos os arquivos no GitHub Web.
 2. Aguarde o deploy ficar Ready.
-3. Abra /api/health e confirme sprint19-order-manager.
+3. Abra /api/health e confirme sprint19-listing-engine-mercado-livre.
 4. Faça login.
-5. Abra /orders/sql.
-6. Copie o SQL inteiro.
+5. Abra /listing-engine/sql.
+6. Copie todo o SQL.
 7. Supabase > SQL Editor > New query > cole > Run.
-8. Abra /api/orders/status.
-9. Abra /api/orders/demo-import.
-10. Confira /orders.
-11. Abra o pedido demonstrativo.
-12. Confira /inventory para ver a reserva.
-13. Confira /logs.
-14. Quando o Mercado Livre estiver conectado, abra /api/orders/sync-mercadolivre.
+8. Abra /api/listing-engine/status.
+9. Abra /product-master.
+10. Clique em um produto.
+11. Clique em Criar anúncio ML.
+12. Use Sugerir categoria e copie o category_id adequado.
+13. Salve o rascunho.
+14. Confira erros e alertas.
+15. Adicione imagem pública no Product Master, quando necessário.
+16. Mude o produto para status interno ready.
+17. Somente quando os dados estiverem corretos, digite PUBLICAR.
+
+ATENÇÃO:
+A última etapa cria um anúncio real na conta conectada do Mercado Livre.
+Não use PUBLICAR durante testes preliminares.
