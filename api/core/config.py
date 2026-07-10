@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint19-listing-engine-mercado-livre"
+APP_VERSION = "enterprise-v5-sprint20-upload-manager-supabase-storage"
 
 def env(name, default=""):
     value = os.getenv(name, default)
@@ -43,3 +43,5 @@ SESSION_SECRET = env("SESSION_SECRET", "commercehub-change-this-secret")
 AUTH_REQUIRED = env("AUTH_REQUIRED", "true").lower() in ["1", "true", "yes", "on"]
 SESSION_HOURS = int(env("SESSION_HOURS", "12") or "12")
 COOKIE_SECURE = env("COOKIE_SECURE", "true").lower() in ["1", "true", "yes", "on"]
+SUPABASE_STORAGE_BUCKET = env("SUPABASE_STORAGE_BUCKET", "product-images")
+MAX_IMAGE_MB = int(env("MAX_IMAGE_MB", "5") or "5")

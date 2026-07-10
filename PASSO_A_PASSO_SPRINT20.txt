@@ -1,0 +1,27 @@
+SPRINT 20 — UPLOAD MANAGER + SUPABASE STORAGE
+
+1. Suba todos os arquivos no GitHub Web.
+2. Aguarde o deploy Ready.
+3. Abra /api/health e confirme sprint20.
+4. Faça login.
+5. Abra /upload-manager/sql.
+6. Copie todo o SQL.
+7. Supabase > SQL Editor > New query > cole > Run.
+8. Abra /api/upload-manager/status.
+9. O campo service_role_configured deve ser true.
+10. Abra /product-master.
+11. Entre no produto.
+12. Clique em Imagens.
+13. Selecione JPG, PNG ou WEBP.
+14. Marque Imagem principal.
+15. Clique em Enviar para Supabase Storage.
+16. Confirme que a imagem aparece e que a URL abre no navegador.
+17. Volte ao Listing Engine.
+18. Salve/abra o rascunho.
+19. Use Publicar agora OU ative o modo automático.
+
+IMPORTANTE:
+- Não use caminho C:\Users\...
+- O upload precisa ser imagem real.
+- O bucket deve estar público.
+- O modo automático global começa desativado.

@@ -1,6 +1,6 @@
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
-import json, uuid, hashlib, hmac, base64, time, csv, io, xml.etree.ElementTree as ET
+import json, uuid, hashlib, hmac, base64, time, csv, io, os, mimetypes, xml.etree.ElementTree as ET
 from urllib.parse import quote, urlparse
 from api.core.config import APP_VERSION, DEFAULT_COMPANY_ID
 from api.db import store
@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint19-listing-engine-mercado-livre"
+S13_VERSION = "enterprise-v5-sprint20-upload-manager-supabase-storage"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -3738,22 +3738,53 @@ async def product_master_images_page(product_id: str):
 
     result = await store.select("product_images", f"select=*&product_id=eq.{quote(product_id, safe='-')}&order=position.asc")
     rows = "".join(
-        f"<tr><td><img src='{s18_escape(i.get('url'))}' style='width:70px;height:70px;object-fit:contain'></td><td>{s18_escape(i.get('url'))}</td><td>{s18_escape(i.get('position'))}</td><td>{'Sim' if i.get('is_main') else 'Não'}</td></tr>"
+        f"""<tr>
+<td><img src='{s18_escape(i.get("url"))}' style='width:70px;height:70px;object-fit:contain'></td>
+<td>{s18_escape(i.get('file_name') or i.get('url'))}</td>
+<td>{s18_escape(i.get('mime_type') or '-')}</td>
+<td>{s18_escape(i.get('file_size') or 0)}</td>
+<td>{s18_escape(i.get('position'))}</td>
+<td>{'Sim' if i.get('is_main') else 'Não'}</td>
+<td>{s18_escape(i.get('source') or '-')}</td>
+</tr>"""
         for i in (result.get("data") or [])
-    ) or "<tr><td colspan='4'>Nenhuma imagem.</td></tr>"
+    ) or "<tr><td colspan='7'>Nenhuma imagem.</td></tr>"
 
     content = f"""
 <div class='card'>
-<h2>Adicionar imagem — {s18_escape(product.get('sku'))}</h2>
+<h2>Upload direto — {s18_escape(product.get('sku'))}</h2>
+<p>Envie JPG, PNG ou WEBP. Tamanho máximo configurado: 5 MB.</p>
+<form method='post' action='/api/storage/products/{product_id}/upload' enctype='multipart/form-data'>
+<label>Selecionar imagem</label>
+<input type='file' name='file' accept='image/jpeg,image/png,image/webp' required>
+<label>Texto alternativo</label>
+<input name='alt_text' placeholder='Ex.: Mouse gamer preto visto de frente'>
+<label>Posição</label>
+<input name='position' value='0'>
+<label><input type='checkbox' name='is_main' value='true' style='width:auto'> Imagem principal</label><br><br>
+<button type='submit'>Enviar para Supabase Storage</button>
+</form>
+</div>
+
+<div class='card'>
+<h2>Adicionar por URL pública</h2>
+<p>A URL deve começar com <code>https://</code> e abrir a imagem diretamente.</p>
 <form method='post' action='/api/product-master/{product_id}/images'>
-<label>URL da imagem</label><input name='url' required>
+<label>URL da imagem</label><input name='url' placeholder='https://...' required>
 <label>Texto alternativo</label><input name='alt_text'>
 <label>Posição</label><input name='position' value='0'>
 <label><input type='checkbox' name='is_main' value='true' style='width:auto'> Imagem principal</label><br><br>
-<button type='submit'>Adicionar imagem</button>
+<button type='submit'>Adicionar URL pública</button>
 </form>
 </div>
-<div class='card'><table><thead><tr><th>Imagem</th><th>URL</th><th>Posição</th><th>Principal</th></tr></thead><tbody>{rows}</tbody></table></div>
+
+<div class='card'>
+<h2>Imagens cadastradas</h2>
+<table>
+<thead><tr><th>Imagem</th><th>Arquivo/URL</th><th>Tipo</th><th>Bytes</th><th>Posição</th><th>Principal</th><th>Origem</th></tr></thead>
+<tbody>{rows}</tbody>
+</table>
+</div>
 """
     return HTMLResponse(shell("Imagens do Produto", content))
 
@@ -3768,6 +3799,11 @@ async def product_master_add_image(product_id: str, request: Request):
     url = str(form.get("url") or "").strip()
     if not url:
         return JSONResponse(status_code=400, content={"success": False, "error": "URL obrigatória."})
+    if not url.lower().startswith(("https://", "http://")):
+        return JSONResponse(status_code=400, content={
+            "success": False,
+            "error": "Use uma URL pública iniciada por https://. Caminhos locais como C:\\Users\\... não são aceitos."
+        })
 
     is_main = str(form.get("is_main") or "").lower() == "true"
     payload = {
@@ -4279,10 +4315,17 @@ async def listing_details_page(listing_id: str):
 <div class='card'>
 <h2>Publicação controlada</h2>
 <p>Esta ação cria um anúncio real na conta conectada do Mercado Livre.</p>
-<p><b>O sistema não publica automaticamente.</b> Digite <code>PUBLICAR</code> para confirmar.</p>
+<p><b>Modo manual:</b> digite <code>PUBLICAR</code> para publicar agora.</p>
 <form method='post' action='/api/listing-engine/{listing_id}/publish'>
 <label>Confirmação</label><input name='confirmation' placeholder='PUBLICAR' required>
-<button type='submit'>Publicar no Mercado Livre</button>
+<button type='submit'>Publicar agora no Mercado Livre</button>
+</form>
+<hr style='margin:22px 0'>
+<h3>Modo automático</h3>
+<p>Quando ativado, este rascunho poderá ser publicado pelo executor automático somente após passar em todas as validações.</p>
+<form method='post' action='/api/listing-engine/{listing_id}/automatic'>
+<input type='hidden' name='enabled' value='true'>
+<button type='submit'>Ativar publicação automática para este anúncio</button>
 </form>
 </div>
 """
@@ -4482,4 +4525,571 @@ async def listing_engine_status():
             "explicit_confirmation_required": "PUBLICAR"
         },
         "pages": ["/listing-engine", "/listing-engine/sql", "/product-master"]
+    }
+
+
+# ==========================================================
+# SPRINT 20 - UPLOAD MANAGER + SUPABASE STORAGE
+# Upload server-side, URL pública, validação de imagem e modo automático.
+# ==========================================================
+
+from api.core.config import (
+    SUPABASE_URL,
+    SUPABASE_SERVICE_ROLE_KEY,
+    SUPABASE_STORAGE_BUCKET,
+    MAX_IMAGE_MB,
+)
+
+S20_ALLOWED_MIME = {
+    "image/jpeg": ".jpg",
+    "image/png": ".png",
+    "image/webp": ".webp",
+}
+
+
+def s20_safe_filename(filename):
+    filename = os.path.basename(str(filename or "image"))
+    stem, ext = os.path.splitext(filename)
+    safe_stem = re.sub(r"[^a-zA-Z0-9_-]+", "-", stem).strip("-") or "image"
+    return safe_stem[:80], ext.lower()
+
+
+def s20_public_url(bucket, object_path):
+    return (
+        f"{SUPABASE_URL.rstrip('/')}/storage/v1/object/public/"
+        f"{quote(bucket, safe='-_')}/{quote(object_path, safe='/-_.')}"
+    )
+
+
+async def s20_upload_bytes(bucket, object_path, data, content_type):
+    import httpx
+
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return {
+            "success": False,
+            "status_code": 0,
+            "error": "SUPABASE_URL ou SUPABASE_SERVICE_ROLE_KEY não configurada."
+        }
+
+    upload_url = (
+        f"{SUPABASE_URL.rstrip('/')}/storage/v1/object/"
+        f"{quote(bucket, safe='-_')}/{quote(object_path, safe='/-_.')}"
+    )
+    headers = {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": content_type,
+        "x-upsert": "true",
+        "cache-control": "3600",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
+            response = await client.post(upload_url, headers=headers, content=data)
+
+        raw = response.text
+        try:
+            parsed = response.json()
+        except Exception:
+            parsed = raw
+
+        return {
+            "success": 200 <= response.status_code < 300,
+            "status_code": response.status_code,
+            "data": parsed,
+            "raw": raw[:2000],
+            "public_url": s20_public_url(bucket, object_path),
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "status_code": 0,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+
+
+async def s20_check_public_image(url):
+    import httpx
+
+    if not str(url or "").lower().startswith(("https://", "http://")):
+        return {"success": False, "error": "URL não pública."}
+
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            response = await client.get(url, headers={"User-Agent": "CommerceHub-Image-Validator/1.0"})
+
+        content_type = str(response.headers.get("content-type") or "").split(";")[0].lower()
+        return {
+            "success": 200 <= response.status_code < 300 and content_type.startswith("image/"),
+            "status_code": response.status_code,
+            "content_type": content_type,
+            "content_length": len(response.content),
+            "error": "" if content_type.startswith("image/") else "O endereço não retornou um arquivo de imagem.",
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "status_code": 0,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+        }
+
+
+@app.post("/api/storage/products/{product_id}/upload")
+async def storage_product_upload(
+    product_id: str,
+    file: UploadFile = File(...),
+    alt_text: str = Form(""),
+    position: int = Form(0),
+    is_main: str = Form(""),
+):
+    product = await s18_get_product(product_id)
+    if not product:
+        return JSONResponse(status_code=404, content={"success": False, "error": "Produto não encontrado."})
+
+    content_type = str(file.content_type or "").lower()
+    if content_type not in S20_ALLOWED_MIME:
+        return JSONResponse(status_code=415, content={
+            "success": False,
+            "error": "Formato inválido. Use JPG, PNG ou WEBP.",
+            "content_type": content_type,
+        })
+
+    data = await file.read()
+    max_bytes = MAX_IMAGE_MB * 1024 * 1024
+    if not data:
+        return JSONResponse(status_code=400, content={"success": False, "error": "Arquivo vazio."})
+    if len(data) > max_bytes:
+        return JSONResponse(status_code=413, content={
+            "success": False,
+            "error": f"Imagem excede o limite de {MAX_IMAGE_MB} MB.",
+            "size_bytes": len(data),
+        })
+
+    stem, original_ext = s20_safe_filename(file.filename)
+    extension = S20_ALLOWED_MIME[content_type]
+    file_hash = hashlib.sha256(data).hexdigest()
+    object_name = f"{stem}-{file_hash[:12]}{extension}"
+    object_path = f"{DEFAULT_COMPANY_ID}/{product_id}/{object_name}"
+
+    uploaded = await s20_upload_bytes(
+        SUPABASE_STORAGE_BUCKET,
+        object_path,
+        data,
+        content_type,
+    )
+    if not uploaded.get("success"):
+        return JSONResponse(status_code=400, content={
+            "success": False,
+            "error": "Falha ao enviar a imagem ao Supabase Storage.",
+            "storage": uploaded,
+        })
+
+    public_url = uploaded["public_url"]
+    main_flag = str(is_main or "").lower() == "true"
+
+    if main_flag:
+        await store.update(
+            "product_images",
+            f"product_id=eq.{quote(product_id, safe='-')}",
+            {"is_main": False},
+        )
+
+    image_payload = {
+        "company_id": DEFAULT_COMPANY_ID,
+        "product_id": product_id,
+        "url": public_url,
+        "position": s19int(position, 0),
+        "is_main": main_flag,
+        "alt_text": str(alt_text or "").strip() or None,
+        "source": "supabase_storage",
+        "hash": file_hash,
+        "storage_bucket": SUPABASE_STORAGE_BUCKET,
+        "storage_path": object_path,
+        "file_name": str(file.filename or object_name),
+        "mime_type": content_type,
+        "file_size": len(data),
+        "upload_status": "ready",
+    }
+
+    saved = await store.insert("product_images", image_payload)
+    if not saved.get("success"):
+        return JSONResponse(status_code=400, content={
+            "success": False,
+            "error": "A imagem foi enviada, mas não foi gravada no Product Master.",
+            "public_url": public_url,
+            "database": saved,
+        })
+
+    if main_flag or not product.get("primary_image_url"):
+        await store.update(
+            "products",
+            f"id=eq.{quote(product_id, safe='-')}",
+            {
+                "primary_image_url": public_url,
+                "sync_status": "pending",
+            },
+        )
+
+    await s18_history(
+        product_id,
+        "storage_image_uploaded",
+        f"Imagem {file.filename} enviada ao Supabase Storage.",
+        payload={
+            "public_url": public_url,
+            "storage_path": object_path,
+            "mime_type": content_type,
+            "file_size": len(data),
+            "is_main": main_flag,
+        },
+    )
+
+    await store.insert("logs", {
+        "company_id": DEFAULT_COMPANY_ID,
+        "event_type": "product_image_upload",
+        "level": "info",
+        "message": f"Imagem enviada para o produto {product.get('sku')}",
+        "payload": {
+            "product_id": product_id,
+            "public_url": public_url,
+            "storage_path": object_path,
+        },
+    })
+
+    return RedirectResponse(f"/product-master/{product_id}/images", status_code=303)
+
+
+@app.get("/api/storage/products/{product_id}/validate")
+async def storage_validate_product_images(product_id: str):
+    result = await store.select(
+        "product_images",
+        f"select=*&product_id=eq.{quote(product_id, safe='-')}&order=position.asc"
+    )
+    images = result.get("data") or []
+    validations = []
+
+    for image in images:
+        check = await s20_check_public_image(image.get("url"))
+        validations.append({
+            "id": image.get("id"),
+            "url": image.get("url"),
+            "is_main": image.get("is_main"),
+            **check,
+        })
+
+    return {
+        "success": bool(images) and all(item.get("success") for item in validations),
+        "version": APP_VERSION,
+        "product_id": product_id,
+        "count": len(images),
+        "validations": validations,
+    }
+
+
+@app.get("/upload-manager", response_class=HTMLResponse)
+async def upload_manager_page():
+    images_result = await store.select(
+        "product_images",
+        "select=*&source=eq.supabase_storage&order=created_at.desc&limit=100"
+    )
+    images = images_result.get("data") or []
+
+    total_bytes = sum(int(i.get("file_size") or 0) for i in images)
+    rows = "".join(
+        f"""<tr>
+<td><img src='{s19e(i.get("url"))}' style='width:64px;height:64px;object-fit:contain'></td>
+<td>{s19e(i.get("file_name") or '-')}</td>
+<td>{s19e(i.get("mime_type") or '-')}</td>
+<td>{s19e(i.get("file_size") or 0)}</td>
+<td>{s19e(i.get("storage_path") or '-')}</td>
+<td><a class='btn' href='{s19e(i.get("url"))}' target='_blank'>Abrir</a></td>
+</tr>"""
+        for i in images
+    ) or "<tr><td colspan='6'>Nenhum upload realizado.</td></tr>"
+
+    content = f"""
+<div class='grid'>
+<div class='metric'><span>Uploads</span><strong>{len(images)}</strong></div>
+<div class='metric'><span>Armazenamento</span><strong>{round(total_bytes / 1024 / 1024, 2)} MB</strong></div>
+<div class='metric'><span>Bucket</span><strong>{s19e(SUPABASE_STORAGE_BUCKET)}</strong></div>
+<div class='metric'><span>Limite</span><strong>{MAX_IMAGE_MB} MB/imagem</strong></div>
+</div>
+<div class='card'>
+<h2>Upload Manager</h2>
+<p>Envie imagens pela página do produto. O CommerceHub cria uma URL pública compatível com o Mercado Livre.</p>
+<a class='btn' href='/product-master'>Abrir Product Master</a>
+<a class='btn' href='/upload-manager/sql'>SQL Sprint 20</a>
+<a class='btn' href='/api/upload-manager/status'>Status do módulo</a>
+</div>
+<div class='card'>
+<table>
+<thead><tr><th>Imagem</th><th>Arquivo</th><th>Tipo</th><th>Bytes</th><th>Caminho</th><th>Ação</th></tr></thead>
+<tbody>{rows}</tbody>
+</table>
+</div>
+"""
+    return HTMLResponse(shell("Upload Manager", content))
+
+
+@app.get("/upload-manager/sql", response_class=HTMLResponse)
+async def upload_manager_sql_page():
+    sql_text = open("sprint20_upload_manager.sql", "r", encoding="utf-8").read()
+    return HTMLResponse(shell(
+        "SQL Sprint 20",
+        f"<div class='card'><h2>Migration Upload Manager</h2><p>Copie e execute no Supabase SQL Editor.</p><pre>{s19e(sql_text)}</pre></div>"
+    ))
+
+
+async def s20_get_automation_setting():
+    result = await store.select(
+        "settings",
+        f"select=*&company_id=eq.{DEFAULT_COMPANY_ID}&key=eq.listing_automation&limit=1"
+    )
+    rows = result.get("data") or []
+    if not rows:
+        return {"enabled": False, "mode": "manual", "max_per_run": 10}
+    return rows[0].get("value") or {"enabled": False, "mode": "manual", "max_per_run": 10}
+
+
+@app.get("/listing-automation", response_class=HTMLResponse)
+async def listing_automation_page():
+    setting = await s20_get_automation_setting()
+    enabled = bool(setting.get("enabled"))
+    content = f"""
+<div class='grid'>
+<div class='metric'><span>Modo atual</span><strong>{'AUTOMÁTICO' if enabled else 'MANUAL'}</strong></div>
+<div class='metric'><span>Publicação manual</span><strong>Disponível</strong></div>
+<div class='metric'><span>Automação</span><strong>{'Ativa' if enabled else 'Desativada'}</strong></div>
+<div class='metric'><span>Máximo por execução</span><strong>{s19e(setting.get('max_per_run', 10))}</strong></div>
+</div>
+<div class='card'>
+<h2>Modos de publicação</h2>
+<p><b>Publicar agora:</b> permanece disponível em cada anúncio.</p>
+<p><b>Publicação automática:</b> publica somente rascunhos marcados como automáticos e aprovados na validação.</p>
+<form method='post' action='/api/listing-engine/automation/settings'>
+<label><input type='checkbox' name='enabled' value='true' style='width:auto' {'checked' if enabled else ''}> Ativar publicação automática global</label><br><br>
+<label>Máximo de anúncios por execução</label>
+<input name='max_per_run' value='{s19e(setting.get("max_per_run", 10))}'>
+<button type='submit'>Salvar automação</button>
+</form>
+</div>
+<div class='card'>
+<form method='post' action='/api/listing-engine/automation/run'>
+<button type='submit'>Executar automação agora</button>
+</form>
+<p>A execução agendada contínua poderá ser conectada ao Vercel Cron em uma etapa posterior.</p>
+</div>
+"""
+    return HTMLResponse(shell("Automação de Publicações", content))
+
+
+@app.post("/api/listing-engine/automation/settings")
+async def listing_automation_settings(request: Request):
+    form = await request.form()
+    enabled = str(form.get("enabled") or "").lower() == "true"
+    max_per_run = max(1, min(100, s19int(form.get("max_per_run"), 10)))
+    value = {
+        "enabled": enabled,
+        "mode": "automatic" if enabled else "manual",
+        "max_per_run": max_per_run,
+    }
+
+    result = await store.upsert("settings", {
+        "company_id": DEFAULT_COMPANY_ID,
+        "key": "listing_automation",
+        "value": value,
+    }, "company_id,key")
+
+    if not result.get("success"):
+        return JSONResponse(status_code=400, content={"success": False, "error": result.get("error") or result.get("raw")})
+    return RedirectResponse("/listing-automation", status_code=303)
+
+
+@app.post("/api/listing-engine/{listing_id}/automatic")
+async def listing_toggle_automatic(listing_id: str, request: Request):
+    listing = await s19_get_listing(listing_id)
+    if not listing:
+        return JSONResponse(status_code=404, content={"success": False, "error": "Anúncio não encontrado."})
+
+    form = await request.form()
+    enabled = str(form.get("enabled") or "").lower() == "true"
+    updated = await store.update(
+        "listings",
+        f"id=eq.{quote(listing_id, safe='-')}",
+        {"auto_publish": enabled},
+    )
+    if not updated.get("success"):
+        return JSONResponse(status_code=400, content={"success": False, "error": updated.get("error") or updated.get("raw")})
+
+    await s19_history(
+        listing_id,
+        listing.get("product_id"),
+        "automatic_mode_changed",
+        f"Publicação automática {'ativada' if enabled else 'desativada'}.",
+        listing.get("status"),
+        listing.get("status"),
+        {"auto_publish": enabled},
+    )
+    return RedirectResponse(f"/listing-engine/{listing_id}", status_code=303)
+
+
+async def s20_publish_automatic_listing(listing):
+    listing_id = listing.get("id")
+    context = await s19_product_context(listing.get("product_id"))
+    validation = s19_local_validation(context, listing)
+
+    if not validation.get("valid"):
+        await store.update(
+            "listings",
+            f"id=eq.{quote(str(listing_id), safe='-')}",
+            {
+                "validation_status": "failed",
+                "last_error": json.dumps(validation, ensure_ascii=False),
+                "auto_publish_last_attempt": __import__("datetime").datetime.utcnow().isoformat(),
+                "auto_publish_attempts": int(listing.get("auto_publish_attempts") or 0) + 1,
+            },
+        )
+        return {"success": False, "listing_id": listing_id, "stage": "validation", "validation": validation}
+
+    # Confirma que todas as URLs realmente retornam imagens públicas.
+    image_checks = []
+    for url in context.get("images") or []:
+        image_checks.append(await s20_check_public_image(url))
+    if not image_checks or not all(check.get("success") for check in image_checks):
+        return {
+            "success": False,
+            "listing_id": listing_id,
+            "stage": "images",
+            "error": "Uma ou mais imagens não são públicas ou válidas.",
+            "image_checks": image_checks,
+        }
+
+    payload = s19_build_ml_payload(context, listing)
+    result = await ml_request("/items", method="POST", payload=payload)
+    if not result.get("success"):
+        await store.update(
+            "listings",
+            f"id=eq.{quote(str(listing_id), safe='-')}",
+            {
+                "validation_status": "failed",
+                "last_error": str(result.get("error") or result.get("raw") or result.get("data"))[:3000],
+                "auto_publish_last_attempt": __import__("datetime").datetime.utcnow().isoformat(),
+                "auto_publish_attempts": int(listing.get("auto_publish_attempts") or 0) + 1,
+            },
+        )
+        return {"success": False, "listing_id": listing_id, "stage": "mercado_livre", "result": result}
+
+    item = result.get("data") or {}
+    external_id = item.get("id")
+    new_status = item.get("status") or "active"
+    permalink = item.get("permalink")
+
+    await store.update(
+        "listings",
+        f"id=eq.{quote(str(listing_id), safe='-')}",
+        {
+            "external_id": external_id,
+            "permalink": permalink,
+            "item_url": permalink,
+            "status": new_status,
+            "validation_status": "published",
+            "last_error": None,
+            "payload": payload,
+            "published_at": __import__("datetime").datetime.utcnow().isoformat(),
+            "last_synced_at": __import__("datetime").datetime.utcnow().isoformat(),
+            "auto_publish_last_attempt": __import__("datetime").datetime.utcnow().isoformat(),
+            "auto_publish_attempts": int(listing.get("auto_publish_attempts") or 0) + 1,
+        },
+    )
+
+    description = str(listing.get("description") or "").strip()
+    if external_id and description:
+        await ml_request(
+            f"/items/{external_id}/description",
+            method="POST",
+            payload={"plain_text": description},
+        )
+
+    await store.update(
+        "products",
+        f"id=eq.{quote(str(listing.get('product_id')), safe='-')}",
+        {"sync_status": "synced", "last_synced_at": __import__("datetime").datetime.utcnow().isoformat()},
+    )
+    await s19_history(
+        listing_id,
+        listing.get("product_id"),
+        "auto_published",
+        f"Anúncio {external_id} publicado automaticamente.",
+        listing.get("status"),
+        new_status,
+        {"external_id": external_id},
+    )
+    return {"success": True, "listing_id": listing_id, "external_id": external_id, "permalink": permalink}
+
+
+@app.post("/api/listing-engine/automation/run")
+async def listing_automation_run():
+    setting = await s20_get_automation_setting()
+    if not setting.get("enabled"):
+        return JSONResponse(status_code=409, content={
+            "success": False,
+            "error": "A publicação automática global está desativada.",
+            "next": "/listing-automation",
+        })
+
+    max_per_run = max(1, min(100, s19int(setting.get("max_per_run"), 10)))
+    result = await store.select(
+        "listings",
+        "select=*&company_id=eq."
+        + quote(DEFAULT_COMPANY_ID, safe="-")
+        + "&marketplace=eq.mercado_livre"
+        + "&auto_publish=eq.true"
+        + "&external_id=is.null"
+        + "&status=eq.draft"
+        + f"&order=created_at.asc&limit={max_per_run}"
+    )
+    listings = result.get("data") or []
+    processed = []
+
+    for listing in listings:
+        processed.append(await s20_publish_automatic_listing(listing))
+
+    return {
+        "success": all(item.get("success") for item in processed) if processed else True,
+        "version": APP_VERSION,
+        "mode": "automatic",
+        "selected": len(listings),
+        "published": sum(1 for item in processed if item.get("success")),
+        "failed": sum(1 for item in processed if not item.get("success")),
+        "results": processed,
+    }
+
+
+@app.get("/api/upload-manager/status")
+async def upload_manager_status():
+    checks = {}
+    for table in ["product_images", "products", "listings", "settings"]:
+        result = await store.select(table, "select=*&limit=1")
+        checks[table] = {
+            "success": bool(result.get("success")),
+            "status_code": result.get("status_code"),
+            "rows": len(result.get("data") or []),
+            "error": str(result.get("error") or result.get("raw") or "")[:500],
+        }
+
+    bucket_url = f"{SUPABASE_URL.rstrip('/')}/storage/v1/object/public/{SUPABASE_STORAGE_BUCKET}/" if SUPABASE_URL else ""
+    return {
+        "success": all(item["success"] for item in checks.values())
+                   and bool(SUPABASE_URL)
+                   and bool(SUPABASE_SERVICE_ROLE_KEY),
+        "version": APP_VERSION,
+        "module": "upload_manager_supabase_storage",
+        "bucket": SUPABASE_STORAGE_BUCKET,
+        "bucket_public_base_url": bucket_url,
+        "max_image_mb": MAX_IMAGE_MB,
+        "allowed_mime_types": sorted(S20_ALLOWED_MIME.keys()),
+        "service_role_configured": bool(SUPABASE_SERVICE_ROLE_KEY),
+        "checks": checks,
+        "pages": ["/upload-manager", "/upload-manager/sql", "/listing-automation"],
     }
