@@ -1,40 +1,31 @@
-# CommerceHub Enterprise V5 — Sprint 22 Intelligent GTIN Resolver
+# CommerceHub Enterprise V5 — Sprint 22.1 GTIN Resolver UI
 
 ## Entregue
 
-- Consulta automática das opções de `EMPTY_GTIN_REASON`
-- Dropdown com os valores permitidos pelo Mercado Livre
-- Gravação de `value_id` e `value_name`
-- Modo “produto possui GTIN”
-- Modo “produto não possui GTIN”
-- Exclusão automática do atributo conflitante
-- Ao escolher GTIN:
-  - salva GTIN válido
-  - remove `EMPTY_GTIN_REASON`
-- Ao escolher produto sem GTIN:
-  - salva `EMPTY_GTIN_REASON`
-  - remove GTIN
-  - limpa o EAN inválido do Product Master
-- O Smart Category não volta a sugerir o GTIN inválido
-- Endpoint de diagnóstico do resolvedor
+- Tela dedicada e simplificada para resolver GTIN
+- Rádio “Produto possui GTIN”
+- Rádio “Produto não possui GTIN”
+- Campo GTIN ativado apenas quando necessário
+- Select de motivos ativado apenas quando necessário
+- Motivos carregados dos metadados do Mercado Livre
+- Salvamento no resolvedor já existente da Sprint 22
+- Remoção automática do atributo conflitante
+- Link `Resolver GTIN` na tela de atributos inteligentes
+- Nenhum novo SQL necessário
 
 ## Instalação
 
 1. Envie todos os arquivos pelo GitHub Web.
 2. Aguarde o deploy.
 3. Abra `/api/health`.
-4. Confirme a versão:
-   `enterprise-v5-sprint22-intelligent-gtin-resolver`
-5. Não é necessário executar novo SQL.
+4. Confirme:
+   `enterprise-v5-sprint22-1-gtin-resolver-ui`
+5. Não execute SQL.
 6. Abra o produto → anúncio → Atributos inteligentes.
-7. Use o painel “Resolvedor inteligente de GTIN”.
-8. Escolha:
-   - GTIN real; ou
-   - produto sem GTIN + motivo permitido.
-9. Valide os requisitos.
-10. Publique.
+7. Clique em `Resolver GTIN`.
+8. Escolha uma das opções e salve.
+9. Volte aos atributos, valide e publique.
 
-## Endpoints
+## Rota nova
 
-- `/api/gtin-resolver/category/{category_id}/options`
-- `/api/gtin-resolver/product/{product_id}/category/{category_id}/status`
+`/gtin-resolver/product/{product_id}/category/{category_id}`

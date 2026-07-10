@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint22-intelligent-gtin-resolver"
+S13_VERSION = "enterprise-v5-sprint22-1-gtin-resolver-ui"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -3479,6 +3479,7 @@ async def product_master_page(request: Request):
 </div>
 
 <p style='margin-top:12px'>
+<a class='btn' href='/gtin-resolver/product/{product_id}/category/{category_id}'>Abrir resolvedor simplificado</a>
 <a class='btn' href='/api/gtin-resolver/product/{product_id}/category/{category_id}/status'>Ver status do resolvedor</a>
 <a class='btn' href='/api/gtin-resolver/category/{category_id}/options'>Ver opções do Mercado Livre</a>
 </p>
@@ -5713,6 +5714,7 @@ async def smart_category_product_page(product_id:str, category_id:str):
 <a class='btn' href='/api/smart-category/product/{product_id}/category/{category_id}/validate'>Validar requisitos</a>
 <a class='btn' href='/product-master/{product_id}/listing'>Voltar ao anúncio</a>
 <a class='btn' href='/product-master/{product_id}/edit'>Editar produto</a>
+<a class='btn' href='/gtin-resolver/product/{product_id}/category/{category_id}'>Resolver GTIN</a>
 </div>
 <div class='card'>
 <h2>Pendências</h2>
@@ -6276,3 +6278,112 @@ async def gtin_resolver_status(product_id: str, category_id: str):
         "allowed_reasons": s22_allowed_reasons(metadata.get("empty_reason")),
         "validation": await s212_attribute_validation(product_id, category_id),
     }
+
+
+# ==========================================================
+# SPRINT 22.1 - GTIN RESOLVER UI
+# Interface simples para escolher GTIN real ou motivo de ausência.
+# ==========================================================
+
+@app.get("/gtin-resolver/product/{product_id}/category/{category_id}", response_class=HTMLResponse)
+async def gtin_resolver_page(product_id: str, category_id: str):
+    metadata = await s22_gtin_metadata(category_id)
+    allowed_reasons = s22_allowed_reasons(metadata.get("empty_reason"))
+    values = await s21_product_values(product_id, category_id)
+
+    gtin_row = values.get("GTIN") or values.get("gtin") or {}
+    reason_row = values.get("EMPTY_GTIN_REASON") or values.get("empty_gtin_reason") or {}
+
+    gtin_value = str(gtin_row.get("value_name") or "").strip()
+    reason_value_id = str(reason_row.get("value_id") or "").strip()
+    reason_value_name = str(reason_row.get("value_name") or "").strip()
+
+    reason_options = "".join(
+        f"<option value='{s19e(option.get('id'))}' "
+        f"{'selected' if str(option.get('id') or '').lower() == reason_value_id.lower() else ''}>"
+        f"{s19e(option.get('name'))}</option>"
+        for option in allowed_reasons
+    )
+
+    selected_mode = "without_gtin" if (reason_value_id or reason_value_name) else "with_gtin"
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Produto</span><strong>{s19e(product_id[:8])}</strong></div>
+  <div class='metric'><span>Categoria</span><strong>{s19e(category_id)}</strong></div>
+  <div class='metric'><span>GTIN válido</span><strong>{'SIM' if s212_valid_gtin(gtin_value) else 'NÃO'}</strong></div>
+  <div class='metric'><span>Motivo salvo</span><strong>{s19e(reason_value_name or '-')}</strong></div>
+</div>
+
+<div class='card'>
+<h2>Resolvedor inteligente de GTIN</h2>
+<p>Escolha uma opção. O CommerceHub removerá automaticamente o atributo conflitante.</p>
+
+<form id='gtinResolverForm' method='post' action='/api/gtin-resolver/product/{product_id}/category/{category_id}'>
+  <div style='display:flex;gap:20px;flex-wrap:wrap;margin-bottom:18px'>
+    <label style='display:flex;align-items:center;gap:8px'>
+      <input type='radio' name='mode' value='with_gtin' style='width:auto'
+        {'checked' if selected_mode == 'with_gtin' else ''} onchange='toggleGtinMode()'>
+      Produto possui GTIN
+    </label>
+
+    <label style='display:flex;align-items:center;gap:8px'>
+      <input type='radio' name='mode' value='without_gtin' style='width:auto'
+        {'checked' if selected_mode == 'without_gtin' else ''} onchange='toggleGtinMode()'>
+      Produto não possui GTIN
+    </label>
+  </div>
+
+  <div id='withGtinBox' style='border:1px solid #dbe3ef;border-radius:12px;padding:16px;margin-bottom:16px'>
+    <label>GTIN real do produto</label>
+    <input id='gtinInput' name='gtin' value='{s19e(gtin_value)}'
+      placeholder='8, 12, 13 ou 14 dígitos'>
+    <small>Use o código real da embalagem ou do fabricante.</small>
+  </div>
+
+  <div id='withoutGtinBox' style='border:1px solid #dbe3ef;border-radius:12px;padding:16px;margin-bottom:16px'>
+    <label>Motivo permitido pelo Mercado Livre</label>
+    <select id='reasonSelect' name='reason' style='width:100%;padding:10px'>
+      <option value=''>Selecione...</option>
+      {reason_options}
+    </select>
+    <small>As opções são carregadas dos metadados da categoria {s19e(category_id)}.</small>
+  </div>
+
+  <button type='submit'>Salvar decisão de GTIN</button>
+  <a class='btn' href='/smart-category-engine/product/{product_id}/category/{category_id}'>Voltar aos atributos</a>
+  <a class='btn' href='/api/gtin-resolver/product/{product_id}/category/{category_id}/status'>Ver status técnico</a>
+</form>
+</div>
+
+<script>
+function toggleGtinMode() {{
+  const selected = document.querySelector('input[name="mode"]:checked');
+  const withBox = document.getElementById('withGtinBox');
+  const withoutBox = document.getElementById('withoutGtinBox');
+  const gtinInput = document.getElementById('gtinInput');
+  const reasonSelect = document.getElementById('reasonSelect');
+
+  const mode = selected ? selected.value : 'with_gtin';
+
+  if (mode === 'with_gtin') {{
+    withBox.style.opacity = '1';
+    withoutBox.style.opacity = '0.45';
+    gtinInput.disabled = false;
+    gtinInput.required = true;
+    reasonSelect.disabled = true;
+    reasonSelect.required = false;
+  }} else {{
+    withBox.style.opacity = '0.45';
+    withoutBox.style.opacity = '1';
+    gtinInput.disabled = true;
+    gtinInput.required = false;
+    reasonSelect.disabled = false;
+    reasonSelect.required = true;
+  }}
+}}
+
+document.addEventListener('DOMContentLoaded', toggleGtinMode);
+</script>
+"""
+    return HTMLResponse(shell("Resolvedor de GTIN", content))

@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint22-intelligent-gtin-resolver"
+APP_VERSION = "enterprise-v5-sprint22-1-gtin-resolver-ui"
 
 def env(name, default=""):
     value = os.getenv(name, default)

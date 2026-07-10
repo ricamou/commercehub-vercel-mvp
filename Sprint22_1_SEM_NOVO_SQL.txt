@@ -1,0 +1,4 @@
+A Sprint 22.1 não altera o banco de dados.
+
+Não é necessário executar nova query no Supabase.
+Apenas envie os arquivos pelo GitHub Web e aguarde o deploy.
