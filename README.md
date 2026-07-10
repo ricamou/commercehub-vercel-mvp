@@ -1,20 +1,18 @@
-# CommerceHub Enterprise V5 - Sprint 13 Continuity Stable
+# CommerceHub Enterprise V5 - Sprint 14 Database Installer
 
-Objetivo: dar continuidade ao sistema com uma camada estável independente das rotas antigas.
+Continuação direta da Sprint 13.
 
-Teste após subir:
+## Objetivo
+Resolver o bloqueio atual: o Supabase está conectado, porém as tabelas ainda não foram criadas.
+
+## Rotas
 - /api/health
+- /install
+- /install/sql
+- /api/install/status
+- /api/install/seed
+- /api/install/verify
 - /continuity
-- /api/continuity/health
-- /api/continuity/env
-- /api/continuity/schema
-- /api/continuity/status
-- /api/continuity/seed
-- /continuity/products
-- /api/continuity/create-product
-- /api/continuity/ml-readiness
 
-Health esperado:
-enterprise-v5-sprint13-continuity-stable
-
-Se /api/continuity/schema mostrar tabelas ausentes, execute o SQL de /database-sql no Supabase SQL Editor.
+## Health esperado
+enterprise-v5-sprint14-database-installer

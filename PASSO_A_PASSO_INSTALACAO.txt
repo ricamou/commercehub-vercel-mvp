@@ -1,0 +1,11 @@
+COMMERCEHUB - INSTALAÇÃO DO BANCO
+
+1. Faça deploy desta versão.
+2. Abra /api/health e confirme enterprise-v5-sprint14-database-installer.
+3. Abra /install.
+4. Abra /install/sql e copie todo o SQL.
+5. No Supabase: SQL Editor > New query > cole o SQL > Run.
+6. Abra /api/install/status. Deve mostrar 23/23.
+7. Abra /api/install/seed.
+8. Abra /api/install/verify.
+9. Se success=true, o banco e os dados iniciais estão prontos.

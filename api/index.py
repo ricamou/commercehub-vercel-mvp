@@ -6,7 +6,7 @@ from api.db import store
 from api.services.mercadolivre import auth_url, exchange_code, ml_request, get_token
 from api.ui.templates import shell, btn
 
-app = FastAPI(title="CommerceHub Enterprise V4", version=APP_VERSION)
+app = FastAPI(title="CommerceHub Enterprise V5", version=APP_VERSION)
 
 def state():
     return {"version": APP_VERSION, "mode": store.mode(), "supabase_configured": store.configured()}
@@ -18,7 +18,7 @@ def health():
 @app.get("/", response_class=HTMLResponse)
 async def dashboard():
     token = await get_token()
-    content = f"<div class='grid'><div class='metric'><span>Sistema</span><strong>OK</strong></div><div class='metric'><span>Banco</span><strong>{store.mode().upper()}</strong></div><div class='metric'><span>ML</span><strong>{'ON' if token else 'OFF'}</strong></div><div class='metric'><span>Versão</span><strong>V4</strong></div></div><div class='card'><h2>CommerceHub Enterprise V4 - Sprint 1</h2><p>Base limpa: login, empresas, Supabase e OAuth Mercado Livre.</p>{btn('/setup','Setup')}{btn('/login','Login')}{btn('/companies','Empresas')}{btn('/mercado-livre','Mercado Livre')}</div>"
+    content = f"<div class='grid'><div class='metric'><span>Sistema</span><strong>OK</strong></div><div class='metric'><span>Banco</span><strong>{store.mode().upper()}</strong></div><div class='metric'><span>ML</span><strong>{'ON' if token else 'OFF'}</strong></div><div class='metric'><span>Versão</span><strong>V4</strong></div></div><div class='card'><h2>CommerceHub Enterprise V5 - Sprint 1</h2><p>Base limpa: login, empresas, Supabase e OAuth Mercado Livre.</p>{btn('/setup','Setup')}{btn('/login','Login')}{btn('/companies','Empresas')}{btn('/mercado-livre','Mercado Livre')}</div>"
     return HTMLResponse(shell("Dashboard", content))
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -1721,7 +1721,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint13-continuity-stable"
+S13_VERSION = "enterprise-v5-sprint14-database-installer"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -2031,4 +2031,232 @@ async def s13_ml_readiness():
             "user_id": bool(_s13_env("ML_USER_ID")),
         },
         "next": "OAuth Mercado Livre" if bool(_s13_env("ML_CLIENT_ID") and _s13_env("ML_CLIENT_SECRET") and _s13_env("ML_REDIRECT_URI")) else "Configurar variáveis ML_CLIENT_ID, ML_CLIENT_SECRET e ML_REDIRECT_URI"
+    }
+
+
+
+
+# ==========================================================
+# SPRINT 14 - DATABASE INSTALLER / BOOTSTRAP
+# ==========================================================
+
+EXPECTED_TABLES_S14 = [
+    "companies", "users_app", "settings", "suppliers", "categories", "brands",
+    "products", "product_images", "inventory", "inventory_movements",
+    "marketplace_accounts", "oauth_tokens", "listings", "orders", "order_items",
+    "queue", "sync_jobs", "sync_logs", "webhooks", "ai_history", "logs",
+    "audit_logs", "notifications"
+]
+
+def _s14_load_schema():
+    try:
+        with open("commercehub_enterprise_schema.sql", "r", encoding="utf-8") as fh:
+            return fh.read()
+    except Exception as exc:
+        return f"-- Não foi possível carregar o SQL: {exc}"
+
+@app.get("/install", response_class=HTMLResponse)
+async def install_page():
+    status = await install_status()
+    summary = status.get("summary", {})
+    ok_count = summary.get("ok_count", 0)
+    total = summary.get("total", len(EXPECTED_TABLES_S14))
+    ready = summary.get("database_ready", False)
+    state_label = "PRONTO" if ready else "PENDENTE"
+    state_class = "ok" if ready else "bad"
+    content = f"""
+<div class='card'>
+<h2>Instalador do Banco CommerceHub</h2>
+<p>Estado atual: <b class='{state_class}'>{state_label}</b> — {ok_count}/{total} tabelas encontradas.</p>
+<p>As variáveis e a conexão com o Supabase já funcionam. O passo pendente é criar o schema dentro do Supabase SQL Editor.</p>
+<a class='btn' href='/install/sql'>Abrir SQL completo</a>
+<a class='btn' href='/api/install/status'>Ver status JSON</a>
+<a class='btn' href='/api/install/seed'>Criar dados iniciais</a>
+<a class='btn' href='/continuity'>Voltar à Continuidade</a>
+</div>
+<div class='card'>
+<h2>Como instalar</h2>
+<ol>
+<li>Abra <b>Supabase → SQL Editor → New query</b>.</li>
+<li>Abra <b>/install/sql</b> neste sistema.</li>
+<li>Copie todo o SQL e cole no SQL Editor.</li>
+<li>Clique em <b>Run</b>.</li>
+<li>Volte aqui e clique em <b>Ver status JSON</b>.</li>
+<li>Quando aparecer 23/23, clique em <b>Criar dados iniciais</b>.</li>
+</ol>
+</div>
+"""
+    return HTMLResponse(shell("Instalador do Banco", content))
+
+@app.get("/install/sql", response_class=HTMLResponse)
+def install_sql_page():
+    import html
+    sql = _s14_load_schema()
+    content = f"""
+<div class='card'>
+<h2>SQL completo do CommerceHub</h2>
+<p>Use Ctrl+A e Ctrl+C dentro do bloco abaixo. Depois cole no Supabase SQL Editor e execute.</p>
+<pre>{html.escape(sql)}</pre>
+</div>
+"""
+    return HTMLResponse(shell("SQL do Banco", content))
+
+@app.get("/api/install/status")
+async def install_status():
+    results = {}
+    ok_count = 0
+    for table in EXPECTED_TABLES_S14:
+        try:
+            res = await store.select(table, "select=*&limit=1")
+            ok = bool(res.get("success"))
+            if ok:
+                ok_count += 1
+            results[table] = {
+                "success": ok,
+                "status_code": res.get("status_code"),
+                "rows": len(res.get("data", []) if isinstance(res.get("data"), list) else []),
+                "error": str(res.get("error", ""))[:350],
+                "raw": str(res.get("raw", ""))[:350],
+            }
+        except Exception as exc:
+            results[table] = {"success": False, "error": str(exc)[:350]}
+    ready = ok_count == len(EXPECTED_TABLES_S14)
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "summary": {
+            "database_ready": ready,
+            "ok_count": ok_count,
+            "total": len(EXPECTED_TABLES_S14),
+            "supabase_configured": store.configured(),
+            "mode": store.mode(),
+        },
+        "missing_tables": [name for name, item in results.items() if not item.get("success")],
+        "results": results,
+        "next_step": "/api/install/seed" if ready else "Execute o SQL de /install/sql no Supabase SQL Editor."
+    }
+
+@app.get("/api/install/seed")
+@app.post("/api/install/seed")
+async def install_seed():
+    check = await install_status()
+    if not check.get("summary", {}).get("database_ready"):
+        return {
+            "success": False,
+            "version": APP_VERSION,
+            "error": "O schema ainda não está instalado.",
+            "missing_tables": check.get("missing_tables", []),
+            "next_step": "/install/sql"
+        }
+    import uuid, hashlib
+    company = {
+        "id": DEFAULT_COMPANY_ID,
+        "name": "CommerceHub",
+        "legal_name": "CommerceHub",
+        "document": "00000000000000",
+        "email": "admin@commercehub.local",
+        "plan": "enterprise",
+        "status": "active",
+        "settings": {"currency": "BRL", "timezone": "America/Sao_Paulo"}
+    }
+    user = {
+        "id": str(uuid.uuid4()),
+        "company_id": DEFAULT_COMPANY_ID,
+        "name": "Administrador",
+        "email": "admin@commercehub.local",
+        "role": "admin",
+        "password_hash": hashlib.sha256("admin123".encode()).hexdigest(),
+        "status": "active"
+    }
+    supplier = {
+        "id": "00000000-0000-0000-0000-000000000101",
+        "company_id": DEFAULT_COMPANY_ID,
+        "name": "Fornecedor Inicial",
+        "type": "manual",
+        "status": "active",
+        "config": {"source": "sprint14_seed"}
+    }
+    brand = {
+        "id": "00000000-0000-0000-0000-000000000201",
+        "company_id": DEFAULT_COMPANY_ID,
+        "name": "CommerceHub",
+        "status": "active"
+    }
+    category = {
+        "id": "00000000-0000-0000-0000-000000000301",
+        "company_id": DEFAULT_COMPANY_ID,
+        "name": "Categoria Inicial",
+        "marketplace": "mercadolivre",
+        "status": "active"
+    }
+    product = {
+        "id": "00000000-0000-0000-0000-000000000401",
+        "company_id": DEFAULT_COMPANY_ID,
+        "supplier_id": supplier["id"],
+        "category_id": category["id"],
+        "brand_id": brand["id"],
+        "sku": "CH-TEST-001",
+        "name": "Produto Teste CommerceHub",
+        "brand": "CommerceHub",
+        "ean": "7890000000000",
+        "description": "Produto inicial para validar o banco.",
+        "cost_price": 25.0,
+        "sale_price": 59.9,
+        "status": "active",
+        "raw_data": {"source": "sprint14_seed"}
+    }
+    inventory = {
+        "company_id": DEFAULT_COMPANY_ID,
+        "product_id": product["id"],
+        "sku": product["sku"],
+        "quantity": 10,
+        "reserved": 0,
+        "status": "available"
+    }
+    results = {
+        "company": await store.upsert("companies", company),
+        "user": await store.upsert("users_app", user, "email"),
+        "supplier": await store.upsert("suppliers", supplier),
+        "brand": await store.upsert("brands", brand),
+        "category": await store.upsert("categories", category),
+        "product": await store.upsert("products", product),
+        "inventory": await store.upsert("inventory", inventory, "product_id"),
+        "log": await store.insert("logs", {
+            "company_id": DEFAULT_COMPANY_ID,
+            "event_type": "database_installed",
+            "level": "info",
+            "message": "Banco CommerceHub instalado e populado",
+            "payload": {"version": APP_VERSION}
+        })
+    }
+    all_ok = all(bool(item.get("success")) for item in results.values())
+    return {
+        "success": all_ok,
+        "version": APP_VERSION,
+        "results": results,
+        "login": {"email": "admin@commercehub.local", "password": "admin123"},
+        "next_step": "/api/continuity/status" if all_ok else "Verifique o item que retornou success=false."
+    }
+
+@app.get("/api/install/verify")
+async def install_verify():
+    status = await install_status()
+    if not status.get("summary", {}).get("database_ready"):
+        return {"success": False, "version": APP_VERSION, "stage": "schema", "details": status}
+    checks = {}
+    for table in ["companies", "users_app", "suppliers", "products", "inventory", "logs"]:
+        res = await store.select(table, "select=*&limit=5")
+        checks[table] = {
+            "success": bool(res.get("success")),
+            "rows": len(res.get("data", []) if isinstance(res.get("data"), list) else []),
+            "status_code": res.get("status_code"),
+            "error": str(res.get("error", ""))[:300]
+        }
+    ready = all(item.get("success") and item.get("rows", 0) >= 1 for item in checks.values())
+    return {
+        "success": ready,
+        "version": APP_VERSION,
+        "stage": "complete" if ready else "seed",
+        "checks": checks,
+        "next_step": "/" if ready else "/api/install/seed"
     }
