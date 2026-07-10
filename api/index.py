@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint22-1-gtin-resolver-ui"
+S13_VERSION = "enterprise-v5-sprint22-2-gtin-readiness-hotfix"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -4091,10 +4091,15 @@ async def s19_product_context(product_id):
         "product_attributes",
         f"select=*&product_id=eq.{quote(str(product_id), safe='-')}&order=name.asc"
     )
+    marketplace_attrs_result = await store.select(
+        "product_marketplace_attributes",
+        f"select=*&product_id=eq.{quote(str(product_id), safe='-')}&marketplace=eq.mercado_livre"
+    )
 
     inventory = (inventory_result.get("data") or [{}])[0]
     images = images_result.get("data") or []
     attributes = attrs_result.get("data") or []
+    marketplace_attributes = marketplace_attrs_result.get("data") or []
 
     picture_urls = []
     if product.get("primary_image_url"):
@@ -4108,7 +4113,8 @@ async def s19_product_context(product_id):
         "product": product,
         "inventory": inventory,
         "images": picture_urls,
-        "attributes": attributes
+        "attributes": attributes,
+        "marketplace_attributes": marketplace_attributes
     }
 
 
@@ -4139,7 +4145,13 @@ def s19_local_validation(context, listing):
     if str(product.get("internal_status") or "draft") != "ready":
         warnings.append("O produto ainda não está com status interno 'ready'.")
     if not product.get("ean"):
-        warnings.append("Produto sem EAN/GTIN.")
+        has_empty_gtin_reason = any(
+            str(row.get("attribute_id") or "").upper() == "EMPTY_GTIN_REASON"
+            and bool(row.get("value_id") or row.get("value_name"))
+            for row in context.get("marketplace_attributes") or []
+        )
+        if not has_empty_gtin_reason:
+            warnings.append("Produto sem EAN/GTIN e sem motivo de ausência informado.")
     if not product.get("brand"):
         warnings.append("Produto sem marca.")
     if not product.get("description"):
@@ -4154,7 +4166,15 @@ def s19_local_validation(context, listing):
             "category_id": category_id,
             "price": price,
             "available_quantity": quantity,
-            "pictures": len(images)
+            "pictures": len(images),
+            "gtin_resolution": (
+                "gtin" if product.get("ean") else
+                "empty_gtin_reason" if any(
+                    str(row.get("attribute_id") or "").upper() == "EMPTY_GTIN_REASON"
+                    and bool(row.get("value_id") or row.get("value_name"))
+                    for row in context.get("marketplace_attributes") or []
+                ) else "missing"
+            )
         }
     }
 

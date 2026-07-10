@@ -1,0 +1,7 @@
+1. Suba todos os arquivos pelo GitHub Web.
+2. Aguarde o deploy.
+3. Confirme /api/health = enterprise-v5-sprint22-2-gtin-readiness-hotfix.
+4. Não execute SQL.
+5. Abra o anúncio e clique em Verificar prontidão.
+6. O alerta antigo de GTIN deve desaparecer.
+7. Publique novamente.
