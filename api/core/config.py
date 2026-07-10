@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint23-intelligent-category-rules"
+APP_VERSION = "enterprise-v5-sprint24-marketplace-metadata-preflight"
 
 def env(name, default=""):
     value = os.getenv(name, default)

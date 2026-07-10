@@ -1,0 +1,16 @@
+SPRINT 24 — MARKETPLACE METADATA PREFLIGHT
+
+1. Envie os arquivos pelo GitHub Web.
+2. Aguarde a Vercel concluir o deploy.
+3. Abra /api/health.
+4. Confirme:
+   enterprise-v5-sprint24-marketplace-metadata-preflight
+5. Não execute SQL.
+6. Abra o anúncio.
+7. Clique em Metadata Preflight.
+8. Leia os bloqueios.
+9. Se aparecer GTIN obrigatório:
+   - informe um GTIN real; ou
+   - escolha outra categoria adequada.
+10. Confirme que CATEGORY_RULE_GTIN_REQUIRED não aparece no payload.
+11. Publique somente quando o status estiver LIBERADO.

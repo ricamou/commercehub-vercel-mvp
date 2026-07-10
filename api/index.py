@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint23-intelligent-category-rules"
+S13_VERSION = "enterprise-v5-sprint24-marketplace-metadata-preflight"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -4239,11 +4239,31 @@ def s202_ml_error_text(result):
 
 
 async def s202_publish_with_fallback(context, listing):
+    preflight = await s24_metadata_preflight(context, listing)
+    if not preflight.get("success"):
+        return {
+            "success": False,
+            "mode": "marketplace_metadata_preflight",
+            "payload": preflight.get("payload_preview") or {},
+            "result": {
+                "success": False,
+                "status_code": 422,
+                "data": {
+                    "message": "marketplace_metadata_preflight_failed",
+                    "error": "O anúncio foi bloqueado pelas regras oficiais ou aprendidas do marketplace.",
+                    "preflight": preflight,
+                },
+                "error": "Marketplace Metadata Preflight falhou.",
+                "transport": "commercehub-local",
+            },
+            "attempts": 0,
+        }
+
     category_rule = await s23_product_category_rule(
         context["product"].get("id"),
         listing.get("category_id")
     )
-    feedback_rule = await s23_product_feedback_rule(context["product"].get("id"))
+    feedback_rule = await s23_product_feedback_rule(context["product"].get("id"), listing.get("category_id"))
 
     if feedback_rule and category_rule.get("mode") == "empty_gtin_reason":
         category_rule["allowed_to_publish"] = False
@@ -4577,7 +4597,7 @@ async def listing_details_page(listing_id: str):
 <p><b>Imagens:</b> {len(context['images'])}</p>
 <p><b>Descrição:</b><br>{s19e(listing.get('description') or '-')}</p>
 <a class='btn' href='/product-master/{product.get("id")}/listing'>Editar rascunho</a>
-<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a>
+<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a><a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a>
 </div>
 <div class='card'><h2>Erros</h2><ul>{errors_html}</ul><h2>Alertas</h2><ul>{warnings_html}</ul></div>
 {publish_box}
@@ -5980,7 +6000,32 @@ async def s212_payload_attributes(product_id, category_id, base):
     else:
         merged.pop("GTIN", None)
 
-    return list(merged.values())
+    official_ids = set(metadata.keys())
+    internal_prefixes = (
+        "CATEGORY_RULE_",
+        "COMMERCEHUB_",
+        "CH_INTERNAL_",
+        "ML_RULE_",
+        "SMART_SCORE",
+        "LAST_ML_ERROR",
+    )
+
+    clean = []
+    for attribute_id, payload in merged.items():
+        upper_id = str(attribute_id or "").upper()
+
+        if any(upper_id.startswith(prefix) for prefix in internal_prefixes):
+            continue
+
+        # Só envia atributos oficialmente retornados pela categoria.
+        # BRAND, MODEL, GTIN e EMPTY_GTIN_REASON também precisam existir
+        # no metadata cache para serem enviados.
+        if upper_id not in official_ids:
+            continue
+
+        clean.append(payload)
+
+    return clean
 
 
 async def s212_attribute_validation(product_id, category_id):
@@ -6584,13 +6629,20 @@ async def s23_record_ml_rule_feedback(product_id, category_id, result):
     }
 
 
-async def s23_product_feedback_rule(product_id):
-    values = await s21_product_values(product_id, None)
-    row = (
-        values.get("CATEGORY_RULE_GTIN_REQUIRED")
-        or values.get("category_rule_gtin_required")
-        or {}
+async def s23_product_feedback_rule(product_id, category_id=None):
+    query = (
+        "select=*&product_id=eq."
+        + quote(str(product_id), safe="-")
+        + "&marketplace=eq.mercado_livre"
+        + "&attribute_id=eq.CATEGORY_RULE_GTIN_REQUIRED"
     )
+    if category_id:
+        query += "&category_id=eq." + quote(str(category_id), safe="-_")
+
+    result = await store.select("product_marketplace_attributes", query + "&limit=1")
+    rows = result.get("data") or []
+    row = rows[0] if rows else {}
+
     return bool(
         s23_text(row.get("value_name")).lower() == "true"
         or s23_text(row.get("value_id")).lower() == "true"
@@ -6610,7 +6662,7 @@ async def category_rules_category(category_id: str):
 @app.get("/api/category-rules/product/{product_id}/category/{category_id}")
 async def category_rules_product(product_id: str, category_id: str):
     rule = await s23_product_category_rule(product_id, category_id)
-    feedback_rule = await s23_product_feedback_rule(product_id)
+    feedback_rule = await s23_product_feedback_rule(product_id, category_id)
 
     if feedback_rule and rule.get("mode") == "empty_gtin_reason":
         rule["allowed_to_publish"] = False
@@ -6666,3 +6718,254 @@ async def category_rules_page(product_id: str, category_id: str):
 </div>
 """
     return HTMLResponse(shell("Regras da Categoria", content))
+
+
+# ==========================================================
+# SPRINT 24 - MARKETPLACE METADATA PREFLIGHT
+# Consulta metadados oficiais e regras condicionais antes do POST /items.
+# ==========================================================
+
+def s24_extract_attribute_ids(value):
+    found = set()
+
+    def walk(node):
+        if isinstance(node, dict):
+            candidate = node.get("id") or node.get("attribute_id")
+            if candidate:
+                found.add(str(candidate).upper())
+
+            for key, item in node.items():
+                key_lower = str(key).lower()
+                if key_lower in {
+                    "required_attributes",
+                    "conditional_attributes",
+                    "missing_attributes",
+                    "attributes",
+                    "causes",
+                    "references",
+                }:
+                    walk(item)
+                elif isinstance(item, (dict, list)):
+                    walk(item)
+
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+        elif isinstance(node, str):
+            text = node.upper()
+            for token in re.findall(r"\b[A-Z][A-Z0-9_]{2,}\b", text):
+                if token not in {
+                    "POST", "GET", "HTTP", "JSON", "ERROR", "TRUE", "FALSE",
+                    "BRL", "MLB", "ITEM", "ITEMS", "VALIDATION"
+                }:
+                    found.add(token)
+
+    walk(value)
+    return sorted(found)
+
+
+async def s24_conditional_metadata(category_id, payload):
+    path = f"/categories/{quote(str(category_id), safe='-_')}/attributes/conditional"
+
+    # A documentação oficial descreve esta validação com o payload do produto.
+    first = await ml_request(path, method="POST", payload=payload)
+
+    # Algumas versões da API podem esperar apenas attributes.
+    if not first.get("success") and first.get("status_code") in (400, 404, 405):
+        second = await ml_request(
+            path,
+            method="POST",
+            payload={"attributes": payload.get("attributes") or []}
+        )
+        if second.get("success"):
+            return {
+                "success": True,
+                "request_shape": "attributes_only",
+                "result": second,
+            }
+
+    return {
+        "success": bool(first.get("success")),
+        "request_shape": "full_item",
+        "result": first,
+    }
+
+
+async def s24_metadata_preflight(context, listing):
+    product_id = context["product"].get("id")
+    category_id = listing.get("category_id")
+
+    await s21_sync_category(category_id)
+    metadata = await s212_attribute_metadata(category_id)
+    category_rule = await s23_product_category_rule(product_id, category_id)
+    learned_gtin_rule = await s23_product_feedback_rule(product_id, category_id)
+
+    payload = s19_build_ml_payload(context, listing, mode="user_product")
+    payload["attributes"] = await s21_payload_attributes(
+        product_id,
+        category_id,
+        payload.get("attributes")
+    )
+
+    official_ids = sorted(metadata.keys())
+    sent_ids = sorted(
+        str(item.get("id") or "").upper()
+        for item in payload.get("attributes") or []
+        if item.get("id")
+    )
+    filtered_ids = sorted(set(sent_ids) - set(official_ids))
+
+    conditional = await s24_conditional_metadata(category_id, payload)
+    conditional_result = conditional.get("result") or {}
+    conditional_ids = s24_extract_attribute_ids(
+        conditional_result.get("data")
+        or conditional_result.get("raw")
+        or conditional_result.get("error")
+    )
+
+    blockers = []
+    warnings = []
+
+    if filtered_ids:
+        blockers.append({
+            "code": "non_official_attributes",
+            "message": "O payload contém atributos que não existem nos metadados da categoria.",
+            "attributes": filtered_ids,
+        })
+
+    if learned_gtin_rule and not category_rule.get("has_valid_gtin"):
+        blockers.append({
+            "code": "learned_gtin_required",
+            "message": "O Mercado Livre já confirmou que esta categoria exige GTIN válido.",
+            "attribute": "GTIN",
+        })
+
+    if not category_rule.get("allowed_to_publish"):
+        blockers.append({
+            "code": "category_rule_blocked",
+            "message": category_rule.get("blocking_reason"),
+        })
+
+    if conditional.get("success"):
+        missing_conditionals = [
+            attr_id
+            for attr_id in conditional_ids
+            if attr_id in official_ids and attr_id not in sent_ids
+        ]
+        if missing_conditionals:
+            blockers.append({
+                "code": "conditional_required_missing",
+                "message": "A validação condicional retornou atributos ainda não enviados.",
+                "attributes": missing_conditionals,
+            })
+    else:
+        warnings.append({
+            "code": "conditional_endpoint_unavailable",
+            "message": "A API condicional não respondeu com sucesso; as demais validações continuam ativas.",
+            "status_code": conditional_result.get("status_code"),
+            "error": str(
+                conditional_result.get("error")
+                or conditional_result.get("raw")
+                or ""
+            )[:800],
+        })
+
+    return {
+        "success": len(blockers) == 0,
+        "version": APP_VERSION,
+        "product_id": product_id,
+        "category_id": category_id,
+        "payload_preview": payload,
+        "official_attribute_ids": official_ids,
+        "sent_attribute_ids": sent_ids,
+        "conditional_attribute_ids": conditional_ids,
+        "category_rule": category_rule,
+        "learned_gtin_required": learned_gtin_rule,
+        "conditional_validation": conditional,
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+
+
+@app.get("/api/metadata-preflight/listing/{listing_id}")
+async def metadata_preflight_endpoint(listing_id: str):
+    listing = await s19_get_listing(listing_id)
+    if not listing:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "error": "Anúncio não encontrado."}
+        )
+
+    context = await s19_product_context(listing.get("product_id"))
+    if not context:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "error": "Produto não encontrado."}
+        )
+
+    return await s24_metadata_preflight(context, listing)
+
+
+@app.get("/metadata-preflight/listing/{listing_id}", response_class=HTMLResponse)
+async def metadata_preflight_page(listing_id: str):
+    listing = await s19_get_listing(listing_id)
+    if not listing:
+        return HTMLResponse(shell("Metadata Preflight", "<div class='card'>Anúncio não encontrado.</div>"), status_code=404)
+
+    context = await s19_product_context(listing.get("product_id"))
+    result = await s24_metadata_preflight(context, listing)
+
+    blockers = result.get("blockers") or []
+    warnings = result.get("warnings") or []
+
+    blockers_html = "".join(
+        f"<li><b>{s19e(item.get('code'))}</b>: {s19e(item.get('message'))} "
+        f"{s19e(', '.join(item.get('attributes') or []))}</li>"
+        for item in blockers
+    ) or "<li>Nenhum bloqueio encontrado.</li>"
+
+    warnings_html = "".join(
+        f"<li><b>{s19e(item.get('code'))}</b>: {s19e(item.get('message'))}</li>"
+        for item in warnings
+    ) or "<li>Nenhum alerta.</li>"
+
+    category_rule = result.get("category_rule") or {}
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Status</span><strong>{'LIBERADO' if result.get('success') else 'BLOQUEADO'}</strong></div>
+  <div class='metric'><span>Categoria</span><strong>{s19e(result.get('category_id'))}</strong></div>
+  <div class='metric'><span>Atributos oficiais</span><strong>{len(result.get('official_attribute_ids') or [])}</strong></div>
+  <div class='metric'><span>Atributos enviados</span><strong>{len(result.get('sent_attribute_ids') or [])}</strong></div>
+</div>
+
+<div class='card'>
+<h2>Bloqueios</h2>
+<ul>{blockers_html}</ul>
+<h2>Alertas</h2>
+<ul>{warnings_html}</ul>
+</div>
+
+<div class='card'>
+<h2>Regra de GTIN</h2>
+<p><b>GTIN válido:</b> {'SIM' if category_rule.get('has_valid_gtin') else 'NÃO'}</p>
+<p><b>Motivo sem GTIN:</b> {'SIM' if category_rule.get('has_empty_gtin_reason') else 'NÃO'}</p>
+<p><b>Regra aprendida:</b> {'GTIN obrigatório' if result.get('learned_gtin_required') else 'Nenhuma'}</p>
+<p><b>Modo:</b> {s19e(category_rule.get('mode'))}</p>
+</div>
+
+<div class='card'>
+<h2>Atributos do payload</h2>
+<p>{s19e(', '.join(result.get('sent_attribute_ids') or []))}</p>
+<h2>Atributos condicionais detectados</h2>
+<p>{s19e(', '.join(result.get('conditional_attribute_ids') or []))}</p>
+</div>
+
+<div class='card'>
+<a class='btn' href='/product-master/{listing.get("product_id")}/listing'>Voltar ao anúncio</a>
+<a class='btn' href='/gtin-resolver/product/{listing.get("product_id")}/category/{listing.get("category_id")}'>Resolver GTIN</a>
+<a class='btn' href='/api/metadata-preflight/listing/{listing_id}'>Ver JSON técnico</a>
+</div>
+"""
+    return HTMLResponse(shell("Marketplace Metadata Preflight", content))
