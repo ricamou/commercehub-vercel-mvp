@@ -1,27 +1,20 @@
-# CommerceHub Enterprise V6 - Clean Architecture
+# CommerceHub Enterprise V5 - Sprint 13 Continuity Stable
 
-Arquitetura reconstruída para GitHub Web/Vercel com menos de 100 arquivos.
+Objetivo: dar continuidade ao sistema com uma camada estável independente das rotas antigas.
 
-## Arquivos
-- api/index.py
-- requirements.txt
-- vercel.json
-- README.md
-
-## Testes após deploy
+Teste após subir:
 - /api/health
-- /
-- /setup
-- /database-sql
-- /system-check
-- /api/system/status
-- /api/setup/seed
-- /products
-- /api/products/create-test
-- /mercado-livre
-- /api/routes
+- /continuity
+- /api/continuity/health
+- /api/continuity/env
+- /api/continuity/schema
+- /api/continuity/status
+- /api/continuity/seed
+- /continuity/products
+- /api/continuity/create-product
+- /api/continuity/ml-readiness
 
-## Health esperado
-enterprise-v6-clean-architecture
+Health esperado:
+enterprise-v5-sprint13-continuity-stable
 
-Se as tabelas ainda não existirem, copie o SQL de `/database-sql` e execute no Supabase > SQL Editor.
+Se /api/continuity/schema mostrar tabelas ausentes, execute o SQL de /database-sql no Supabase SQL Editor.

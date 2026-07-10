@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint11-enterprise-debug-mode"
+APP_VERSION = "enterprise-v5-sprint13-continuity-stable"
 
 def env(name, default=""):
     value = os.getenv(name, default)
