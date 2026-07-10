@@ -1,0 +1,27 @@
+SPRINT 22 — INTELLIGENT GTIN RESOLVER
+
+1. Suba todos os arquivos no GitHub Web.
+2. Aguarde o deploy da Vercel.
+3. Abra /api/health.
+4. Confirme:
+   enterprise-v5-sprint22-intelligent-gtin-resolver
+5. Não execute SQL.
+6. Abra o produto no Listing Engine.
+7. Clique em Atributos inteligentes.
+8. Localize “Resolvedor inteligente de GTIN”.
+
+PRODUTO COM GTIN:
+9. Informe o GTIN real.
+10. Clique em “Usar este GTIN”.
+
+PRODUTO SEM GTIN:
+9. Deixe o GTIN vazio.
+10. Selecione o motivo disponibilizado pelo Mercado Livre.
+11. Clique em “Confirmar produto sem GTIN”.
+
+12. Clique em Validar requisitos.
+13. Confirme:
+    valid=true
+    missing_count=0
+    invalid_count=0
+14. Volte ao anúncio e publique.
