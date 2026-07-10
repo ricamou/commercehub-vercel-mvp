@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint15-core-routes-fix"
+APP_VERSION = "enterprise-v5-sprint16-enterprise-auth"
 
 def env(name, default=""):
     value = os.getenv(name, default)
@@ -39,3 +39,7 @@ def supabase_configured():
     return bool(SUPABASE_URL and SUPABASE_KEY and not is_placeholder(SUPABASE_URL) and not is_placeholder(SUPABASE_KEY))
 
 DEBUG_MODE = env("DEBUG_MODE", "true").lower() in ["1", "true", "yes", "on"]
+SESSION_SECRET = env("SESSION_SECRET", "commercehub-change-this-secret")
+AUTH_REQUIRED = env("AUTH_REQUIRED", "true").lower() in ["1", "true", "yes", "on"]
+SESSION_HOURS = int(env("SESSION_HOURS", "12") or "12")
+COOKIE_SECURE = env("COOKIE_SECURE", "true").lower() in ["1", "true", "yes", "on"]

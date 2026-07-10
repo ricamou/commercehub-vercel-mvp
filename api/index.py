@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request
-from fastapi.responses import HTMLResponse
-import json, uuid, hashlib
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+import json, uuid, hashlib, hmac, base64, time
+from urllib.parse import quote
 from api.core.config import APP_VERSION, DEFAULT_COMPANY_ID
 from api.db import store
 from api.services.mercadolivre import auth_url, exchange_code, ml_request, get_token
@@ -47,21 +48,137 @@ async def seed():
     b = await store.upsert("users_app", user, "email")
     return {"success": True, "company": a, "user": b, "login": {"email": "admin@commercehub.local", "password": "admin123"}}
 
+
 @app.get("/login", response_class=HTMLResponse)
-def login_page():
-    content = "<div class='card'><h2>Login</h2><form method='post' action='/api/login'><label>Email</label><input name='email' value='admin@commercehub.local'><label>Senha</label><input name='password' value='admin123' type='password'><button type='submit'>Entrar</button></form></div>"
+async def login_page(request: Request):
+    current = auth_user_from_request(request)
+    if current:
+        return RedirectResponse("/dashboard", status_code=303)
+
+    error = request.query_params.get("error", "")
+    notice = f"<p style='color:#b91c1c;font-weight:bold'>{error}</p>" if error else ""
+    content = f"""
+<div class='card' style='max-width:520px'>
+<h2>Entrar no CommerceHub</h2>
+<p>Use seu usuário administrador para acessar o sistema.</p>
+{notice}
+<form method='post' action='/api/login'>
+<label>Email</label>
+<input name='email' value='admin@commercehub.local' autocomplete='email' required>
+<label>Senha</label>
+<input name='password' type='password' autocomplete='current-password' required>
+<button type='submit'>Entrar</button>
+</form>
+<p style='color:#64748b;font-size:13px'>Sessão segura com token JWT HS256 em cookie HttpOnly.</p>
+</div>
+"""
     return HTMLResponse(shell("Login", content))
+
 
 @app.post("/api/login")
 async def login(request: Request):
     form = await request.form()
-    email = str(form.get("email") or "")
+    email = str(form.get("email") or "").strip().lower()
     password = str(form.get("password") or "")
-    users = await store.select("users_app", f"select=*&email=eq.{email}&limit=1")
+
+    if not email or not password:
+        return RedirectResponse("/login?error=Informe+email+e+senha", status_code=303)
+
+    safe_email = quote(email, safe="@._+-")
+    users = await store.select("users_app", f"select=*&email=eq.{safe_email}&limit=1")
     rows = users.get("data") or []
-    expected = hashlib.sha256(password.encode()).hexdigest()
-    ok = bool(rows and rows[0].get("password_hash") == expected)
-    return {"success": ok, "message": "Login OK" if ok else "Login inválido"}
+    expected = hashlib.sha256(password.encode("utf-8")).hexdigest()
+
+    if not rows or not hmac.compare_digest(str(rows[0].get("password_hash") or ""), expected):
+        return RedirectResponse("/login?error=Email+ou+senha+inválidos", status_code=303)
+
+    user = rows[0]
+    if str(user.get("status") or "").lower() != "active":
+        return RedirectResponse("/login?error=Usuário+inativo", status_code=303)
+
+    token = create_session_token(user)
+    response = RedirectResponse("/dashboard", status_code=303)
+    response.set_cookie(
+        key="commercehub_session",
+        value=token,
+        max_age=SESSION_HOURS * 3600,
+        httponly=True,
+        secure=COOKIE_SECURE,
+        samesite="lax",
+        path="/",
+    )
+
+    await store.insert("logs", {
+        "company_id": user.get("company_id") or DEFAULT_COMPANY_ID,
+        "event_type": "login_success",
+        "level": "info",
+        "message": f"Login realizado por {email}",
+        "payload": {"user_id": user.get("id"), "role": user.get("role")}
+    })
+    return response
+
+
+@app.get("/logout")
+async def logout(request: Request):
+    current = auth_user_from_request(request)
+    response = RedirectResponse("/login", status_code=303)
+    response.delete_cookie("commercehub_session", path="/")
+
+    if current:
+        await store.insert("logs", {
+            "company_id": current.get("company_id") or DEFAULT_COMPANY_ID,
+            "event_type": "logout",
+            "level": "info",
+            "message": f"Logout realizado por {current.get('email')}",
+            "payload": {"user_id": current.get("sub")}
+        })
+    return response
+
+
+@app.get("/profile", response_class=HTMLResponse)
+async def profile_page(request: Request):
+    user = auth_user_from_request(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    content = f"""
+<div class='card'>
+<h2>Meu Perfil</h2>
+<table>
+<tr><th>Nome</th><td>{user.get('name','')}</td></tr>
+<tr><th>Email</th><td>{user.get('email','')}</td></tr>
+<tr><th>Perfil</th><td>{user.get('role','')}</td></tr>
+<tr><th>Empresa</th><td>{user.get('company_id','')}</td></tr>
+<tr><th>Sessão expira</th><td>{user.get('exp','')}</td></tr>
+</table>
+<a class='btn' href='/api/auth/status'>Status da sessão</a>
+<a class='btn' href='/logout'>Sair</a>
+</div>
+"""
+    return HTMLResponse(shell("Meu Perfil", content))
+
+
+@app.get("/api/auth/status")
+async def auth_status(request: Request):
+    user = auth_user_from_request(request)
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "authenticated": bool(user),
+        "auth_required": AUTH_REQUIRED,
+        "user": user or None,
+        "roles": ["admin", "operator", "viewer"]
+    }
+
+
+@app.get("/api/auth/admin-check")
+async def auth_admin_check(request: Request):
+    user = auth_user_from_request(request)
+    if not user:
+        return JSONResponse(status_code=401, content={"success": False, "error": "Não autenticado"})
+    if user.get("role") != "admin":
+        return JSONResponse(status_code=403, content={"success": False, "error": "Permissão de administrador necessária"})
+    return {"success": True, "message": "Administrador autorizado", "user": user}
 
 @app.get("/companies", response_class=HTMLResponse)
 async def companies_page():
@@ -1721,7 +1838,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint15-core-routes-fix"
+S13_VERSION = "enterprise-v5-sprint16-enterprise-auth"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -2291,3 +2408,113 @@ async def core_routes_check():
         "results": results,
         "pages": ["/companies", "/users", "/suppliers", "/products", "/inventory", "/logs"]
     }
+
+
+# ==========================================================
+# SPRINT 16 - ENTERPRISE AUTH
+# JWT HS256, cookie HttpOnly, sessão, papéis e proteção de rotas.
+# ==========================================================
+
+from api.core.config import SESSION_SECRET, AUTH_REQUIRED, SESSION_HOURS, COOKIE_SECURE
+
+def _b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+def _b64url_decode(data: str) -> bytes:
+    padding = "=" * (-len(data) % 4)
+    return base64.urlsafe_b64decode(data + padding)
+
+def create_session_token(user: dict) -> str:
+    now = int(time.time())
+    header = {"alg": "HS256", "typ": "JWT"}
+    payload = {
+        "sub": str(user.get("id") or ""),
+        "company_id": str(user.get("company_id") or DEFAULT_COMPANY_ID),
+        "name": str(user.get("name") or ""),
+        "email": str(user.get("email") or ""),
+        "role": str(user.get("role") or "viewer"),
+        "iat": now,
+        "exp": now + (SESSION_HOURS * 3600),
+        "jti": str(uuid.uuid4()),
+    }
+    encoded_header = _b64url_encode(json.dumps(header, separators=(",", ":")).encode("utf-8"))
+    encoded_payload = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+    message = f"{encoded_header}.{encoded_payload}".encode("ascii")
+    signature = hmac.new(SESSION_SECRET.encode("utf-8"), message, hashlib.sha256).digest()
+    return f"{encoded_header}.{encoded_payload}.{_b64url_encode(signature)}"
+
+def decode_session_token(token: str):
+    try:
+        parts = token.split(".")
+        if len(parts) != 3:
+            return None
+        message = f"{parts[0]}.{parts[1]}".encode("ascii")
+        expected = hmac.new(SESSION_SECRET.encode("utf-8"), message, hashlib.sha256).digest()
+        supplied = _b64url_decode(parts[2])
+        if not hmac.compare_digest(expected, supplied):
+            return None
+        payload = json.loads(_b64url_decode(parts[1]).decode("utf-8"))
+        if int(payload.get("exp") or 0) <= int(time.time()):
+            return None
+        return payload
+    except Exception:
+        return None
+
+def auth_user_from_request(request: Request):
+    token = request.cookies.get("commercehub_session", "")
+    return decode_session_token(token) if token else None
+
+PUBLIC_PATHS = {
+    "/login",
+    "/api/login",
+    "/api/health",
+    "/api/routes",
+    "/favicon.ico",
+    "/install",
+    "/install/sql",
+    "/api/install/status",
+    "/api/install/verify",
+    "/api/install/seed",
+}
+
+PUBLIC_PREFIXES = (
+    "/docs",
+    "/openapi.json",
+    "/redoc",
+    "/api/audit",
+    "/api/test",
+    "/api/infra",
+    "/api/connectivity",
+    "/api/vercel",
+    "/api/env-finder",
+    "/api/raw",
+    "/api/environment",
+)
+
+@app.middleware("http")
+async def enterprise_auth_middleware(request: Request, call_next):
+    path = request.url.path
+
+    if not AUTH_REQUIRED:
+        return await call_next(request)
+
+    if path in PUBLIC_PATHS or any(path.startswith(prefix) for prefix in PUBLIC_PREFIXES):
+        return await call_next(request)
+
+    user = auth_user_from_request(request)
+    if user:
+        request.state.user = user
+        return await call_next(request)
+
+    if path.startswith("/api/"):
+        return JSONResponse(
+            status_code=401,
+            content={
+                "success": False,
+                "error": "Não autenticado",
+                "login_url": "/login",
+                "version": APP_VERSION
+            }
+        )
+
+    return RedirectResponse("/login", status_code=303)
