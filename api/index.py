@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
-import json, uuid, hashlib, hmac, base64, time
-from urllib.parse import quote
+import json, uuid, hashlib, hmac, base64, time, csv, io, xml.etree.ElementTree as ET
+from urllib.parse import quote, urlparse
 from api.core.config import APP_VERSION, DEFAULT_COMPANY_ID
 from api.db import store
 from api.services.mercadolivre import auth_url, exchange_code, ml_request, get_token
@@ -1838,7 +1838,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint16-enterprise-auth"
+S13_VERSION = "enterprise-v5-sprint17-universal-supplier-connector"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -2518,3 +2518,812 @@ async def enterprise_auth_middleware(request: Request, call_next):
         )
 
     return RedirectResponse("/login", status_code=303)
+
+
+# ==========================================================
+# SPRINT 17 - UNIVERSAL SUPPLIER CONNECTOR
+# Referência Hayamax + JSON, XML e CSV.
+# ==========================================================
+
+S17_HAYAMAX_SUPPLIER_ID = "00000000-0000-0000-0000-000000001700"
+
+S17_DEMO_PRODUCTS = [
+    {
+        "codigo": "HAYA-1001",
+        "sku": "HAYA-1001",
+        "ean": "7891000001001",
+        "nome": "Mouse Gamer RGB USB",
+        "marca": "Fortrek",
+        "categoria": "Mouse",
+        "descricao": "Mouse gamer RGB com conexão USB.",
+        "preco": 42.90,
+        "estoque": 18,
+        "imagem": "https://example.com/mouse-gamer.jpg"
+    },
+    {
+        "codigo": "HAYA-1002",
+        "sku": "HAYA-1002",
+        "ean": "7891000001002",
+        "nome": "Teclado Mecânico Gamer ABNT2",
+        "marca": "Fortrek",
+        "categoria": "Teclado",
+        "descricao": "Teclado mecânico gamer padrão ABNT2.",
+        "preco": 129.50,
+        "estoque": 9,
+        "imagem": "https://example.com/teclado-gamer.jpg"
+    },
+    {
+        "codigo": "HAYA-1003",
+        "sku": "HAYA-1003",
+        "ean": "7891000001003",
+        "nome": "Headset Gamer USB 7.1",
+        "marca": "Harmonics",
+        "categoria": "Headset",
+        "descricao": "Headset gamer USB com som virtual 7.1.",
+        "preco": 87.40,
+        "estoque": 12,
+        "imagem": "https://example.com/headset-gamer.jpg"
+    }
+]
+
+
+def s17_escape(value):
+    value = str(value if value is not None else "")
+    return (
+        value.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
+    )
+
+
+def s17_number(value, default=0.0):
+    try:
+        if value is None or value == "":
+            return default
+        if isinstance(value, (int, float)):
+            return float(value)
+        cleaned = str(value).strip().replace("R$", "").replace(" ", "")
+        if "," in cleaned and "." in cleaned:
+            cleaned = cleaned.replace(".", "").replace(",", ".")
+        elif "," in cleaned:
+            cleaned = cleaned.replace(",", ".")
+        return float(cleaned)
+    except Exception:
+        return default
+
+
+def s17_integer(value, default=0):
+    try:
+        return int(float(str(value or default).replace(",", ".")))
+    except Exception:
+        return default
+
+
+def s17_pick(item, aliases, default=""):
+    if not isinstance(item, dict):
+        return default
+    lower = {str(k).lower().strip(): v for k, v in item.items()}
+    for alias in aliases:
+        if alias in item and item.get(alias) not in [None, ""]:
+            return item.get(alias)
+        value = lower.get(str(alias).lower().strip())
+        if value not in [None, ""]:
+            return value
+    return default
+
+
+def s17_normalize_product(item, supplier_id, source_format="json"):
+    external_id = str(s17_pick(item, [
+        "external_id", "id", "codigo", "código", "cod", "product_id",
+        "idproduto", "codigo_produto", "referencia"
+    ])).strip()
+
+    sku = str(s17_pick(item, [
+        "sku", "codigo", "código", "cod", "referencia", "ref", "part_number"
+    ], external_id)).strip()
+
+    ean = str(s17_pick(item, [
+        "ean", "gtin", "barcode", "codigo_barras", "código_barras"
+    ])).strip()
+
+    name = str(s17_pick(item, [
+        "name", "nome", "title", "titulo", "título", "produto", "descricao_curta"
+    ])).strip()
+
+    if not external_id:
+        external_id = sku or ean or hashlib.sha256(
+            json.dumps(item, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        ).hexdigest()[:24]
+
+    if not sku:
+        sku = external_id
+
+    if not name:
+        name = f"Produto {sku}"
+
+    brand = str(s17_pick(item, ["brand", "marca", "fabricante"])).strip()
+    category = str(s17_pick(item, ["category", "categoria", "departamento", "grupo"])).strip()
+    description = str(s17_pick(item, [
+        "description", "descricao", "descrição", "descricao_longa", "detalhes"
+    ])).strip()
+
+    cost_price = s17_number(s17_pick(item, [
+        "cost_price", "preco_custo", "preço_custo", "preco", "preço",
+        "price", "valor", "valor_unitario"
+    ], 0))
+
+    sale_price = s17_number(s17_pick(item, [
+        "sale_price", "preco_venda", "preço_venda", "suggested_price",
+        "preco_sugerido"
+    ], 0))
+
+    if sale_price <= 0 and cost_price > 0:
+        sale_price = round(cost_price * 1.35, 2)
+
+    stock = s17_integer(s17_pick(item, [
+        "stock", "estoque", "quantity", "quantidade", "saldo", "disponivel"
+    ], 0))
+
+    image_url = str(s17_pick(item, [
+        "image_url", "imagem", "image", "foto", "url_imagem", "imagem_principal"
+    ])).strip()
+
+    status_value = str(s17_pick(item, ["status", "situacao", "situação"], "active")).lower()
+    status = "inactive" if status_value in ["inactive", "inativo", "0", "false", "indisponivel"] else "active"
+
+    return {
+        "company_id": DEFAULT_COMPANY_ID,
+        "supplier_id": supplier_id,
+        "external_id": external_id,
+        "sku": sku,
+        "ean": ean or None,
+        "name": name,
+        "brand": brand or None,
+        "category": category or None,
+        "description": description or None,
+        "cost_price": cost_price,
+        "sale_price": sale_price,
+        "stock": stock,
+        "image_url": image_url or None,
+        "status": status,
+        "source_format": source_format,
+        "raw_data": item,
+    }
+
+
+def s17_xml_node_to_dict(node):
+    result = {}
+    for child in list(node):
+        if len(list(child)) > 0:
+            result[child.tag.split("}")[-1]] = s17_xml_node_to_dict(child)
+        else:
+            result[child.tag.split("}")[-1]] = (child.text or "").strip()
+    result.update({k.split("}")[-1]: v for k, v in node.attrib.items()})
+    return result
+
+
+def s17_parse_payload(raw_text, source_format):
+    fmt = str(source_format or "").lower().strip()
+    raw_text = str(raw_text or "").strip()
+
+    if fmt == "json":
+        parsed = json.loads(raw_text)
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, dict):
+            for key in ["products", "produtos", "items", "itens", "data", "catalog"]:
+                value = parsed.get(key)
+                if isinstance(value, list):
+                    return value
+            return [parsed]
+        return []
+
+    if fmt == "csv":
+        sample = raw_text[:4096]
+        try:
+            dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
+        except Exception:
+            dialect = csv.excel
+            dialect.delimiter = ";"
+        return list(csv.DictReader(io.StringIO(raw_text), dialect=dialect))
+
+    if fmt == "xml":
+        root = ET.fromstring(raw_text)
+        candidates = []
+        common_tags = {"produto", "product", "item", "registro"}
+        for node in root.iter():
+            tag = node.tag.split("}")[-1].lower()
+            if tag in common_tags and len(list(node)) > 0:
+                candidates.append(s17_xml_node_to_dict(node))
+        if candidates:
+            return candidates
+
+        children = list(root)
+        if children:
+            return [s17_xml_node_to_dict(node) for node in children]
+        return [s17_xml_node_to_dict(root)]
+
+    raise ValueError("Formato não suportado. Use json, xml ou csv.")
+
+
+async def s17_get_supplier(supplier_id):
+    result = await store.select(
+        "suppliers",
+        f"select=*&id=eq.{quote(str(supplier_id), safe='-')}&limit=1"
+    )
+    rows = result.get("data") or []
+    return rows[0] if rows else None
+
+
+async def s17_ensure_hayamax_supplier():
+    current = await s17_get_supplier(S17_HAYAMAX_SUPPLIER_ID)
+    payload = {
+        "id": S17_HAYAMAX_SUPPLIER_ID,
+        "company_id": DEFAULT_COMPANY_ID,
+        "name": "Hayamax",
+        "document": "01725627000172",
+        "email": "hayamax@hayamax.com.br",
+        "phone": "(43) 3377-6600",
+        "type": "xml",
+        "status": "active",
+        "config": {
+            "connector": "universal_supplier_v1",
+            "reference_supplier": "hayamax",
+            "source_format": "xml",
+            "catalog_url": "",
+            "authentication": "provided_by_supplier_or_partner",
+            "note": "Preencha a URL oficial disponibilizada ao revendedor."
+        }
+    }
+    if current:
+        payload["created_at"] = current.get("created_at")
+    return await store.upsert("suppliers", payload, "id")
+
+
+async def s17_create_job(supplier_id, mode):
+    job_id = str(uuid.uuid4())
+    now = __import__("datetime").datetime.utcnow().isoformat()
+    payload = {
+        "id": job_id,
+        "company_id": DEFAULT_COMPANY_ID,
+        "sync_type": "supplier_catalog_import",
+        "marketplace": None,
+        "status": "running",
+        "payload": {"supplier_id": supplier_id, "mode": mode, "version": APP_VERSION},
+        "result": {},
+        "started_at": now
+    }
+    await store.upsert("sync_jobs", payload, "id")
+    return payload
+
+
+async def s17_finish_job(job, status, result):
+    job["status"] = status
+    job["result"] = result
+    job["finished_at"] = __import__("datetime").datetime.utcnow().isoformat()
+    return await store.upsert("sync_jobs", job, "id")
+
+
+async def s17_job_log(job_id, level, message, payload=None):
+    return await store.insert("sync_logs", {
+        "company_id": DEFAULT_COMPANY_ID,
+        "sync_job_id": job_id,
+        "level": level,
+        "message": message,
+        "payload": payload or {}
+    })
+
+
+async def s17_import_normalized(supplier, normalized, mode="manual"):
+    job = await s17_create_job(supplier["id"], mode)
+    stats = {
+        "received": len(normalized),
+        "normalized": 0,
+        "supplier_products": 0,
+        "master_created_or_updated": 0,
+        "inventory_created_or_updated": 0,
+        "errors": []
+    }
+
+    await s17_job_log(job["id"], "info", "Importação iniciada", {
+        "supplier": supplier.get("name"),
+        "received": len(normalized),
+        "mode": mode
+    })
+
+    for item in normalized:
+        try:
+            stats["normalized"] += 1
+            offer = await store.upsert(
+                "supplier_products",
+                item,
+                "company_id,supplier_id,external_id"
+            )
+            if not offer.get("success"):
+                raise RuntimeError(str(offer.get("error") or offer.get("raw") or "Falha supplier_products"))
+            stats["supplier_products"] += 1
+
+            product_id = str(uuid.uuid5(
+                uuid.UUID("00000000-0000-0000-0000-000000000017"),
+                f"{DEFAULT_COMPANY_ID}:{supplier['id']}:{item['sku']}"
+            ))
+
+            product_payload = {
+                "id": product_id,
+                "company_id": DEFAULT_COMPANY_ID,
+                "supplier_id": supplier["id"],
+                "sku": item["sku"],
+                "name": item["name"],
+                "brand": item.get("brand"),
+                "ean": item.get("ean"),
+                "description": item.get("description"),
+                "cost_price": item.get("cost_price", 0),
+                "sale_price": item.get("sale_price", 0),
+                "status": item.get("status", "active"),
+                "raw_data": {
+                    "source": "supplier_connector",
+                    "supplier_id": supplier["id"],
+                    "external_id": item["external_id"],
+                    "category": item.get("category"),
+                    "image_url": item.get("image_url"),
+                    "source_format": item.get("source_format")
+                }
+            }
+
+            master = await store.upsert("products", product_payload, "company_id,sku")
+            if not master.get("success"):
+                raise RuntimeError(str(master.get("error") or master.get("raw") or "Falha products"))
+            stats["master_created_or_updated"] += 1
+
+            master_rows = master.get("data") or []
+            real_product_id = master_rows[0].get("id") if master_rows else product_id
+
+            inventory_payload = {
+                "company_id": DEFAULT_COMPANY_ID,
+                "product_id": real_product_id,
+                "sku": item["sku"],
+                "quantity": item.get("stock", 0),
+                "reserved": 0,
+                "status": "available" if item.get("stock", 0) > 0 else "unavailable"
+            }
+
+            inventory = await store.upsert(
+                "inventory",
+                inventory_payload,
+                "company_id,product_id"
+            )
+            if not inventory.get("success"):
+                raise RuntimeError(str(inventory.get("error") or inventory.get("raw") or "Falha inventory"))
+            stats["inventory_created_or_updated"] += 1
+
+            await store.upsert(
+                "supplier_products",
+                {**item, "product_id": real_product_id},
+                "company_id,supplier_id,external_id"
+            )
+
+        except Exception as exc:
+            stats["errors"].append({
+                "external_id": item.get("external_id"),
+                "sku": item.get("sku"),
+                "error": str(exc)[:500]
+            })
+
+    final_status = "completed" if not stats["errors"] else "completed_with_errors"
+    await s17_finish_job(job, final_status, stats)
+    await s17_job_log(job["id"], "info" if not stats["errors"] else "warning",
+                      "Importação finalizada", stats)
+
+    await store.insert("logs", {
+        "company_id": DEFAULT_COMPANY_ID,
+        "event_type": "supplier_catalog_import",
+        "level": "info" if not stats["errors"] else "warning",
+        "message": f"Catálogo de {supplier.get('name')} importado: {stats['master_created_or_updated']} produtos",
+        "payload": {"job_id": job["id"], **stats}
+    })
+
+    return {
+        "success": len(stats["errors"]) == 0,
+        "version": APP_VERSION,
+        "job_id": job["id"],
+        "supplier": supplier.get("name"),
+        "stats": stats
+    }
+
+
+@app.get("/supplier-connector", response_class=HTMLResponse)
+async def supplier_connector_page(request: Request):
+    suppliers_result = await store.select(
+        "suppliers",
+        "select=id,name,type,status,config,updated_at&order=name.asc"
+    )
+    suppliers = suppliers_result.get("data") or []
+
+    rows = ""
+    for supplier in suppliers:
+        config = supplier.get("config") or {}
+        connector = config.get("connector", "não configurado")
+        source_format = config.get("source_format", supplier.get("type", "manual"))
+        catalog_url = config.get("catalog_url") or ""
+        rows += f"""
+<tr>
+<td>{s17_escape(supplier.get('name'))}</td>
+<td>{s17_escape(source_format)}</td>
+<td>{s17_escape(connector)}</td>
+<td>{s17_escape(supplier.get('status'))}</td>
+<td>{'Configurada' if catalog_url else 'Pendente'}</td>
+<td>
+<a class='btn' href='/supplier-connector/{supplier.get("id")}'>Configurar</a>
+<a class='btn' href='/api/suppliers/{supplier.get("id")}/test'>Testar</a>
+</td>
+</tr>
+"""
+
+    if not rows:
+        rows = "<tr><td colspan='6'>Nenhum fornecedor cadastrado.</td></tr>"
+
+    content = f"""
+<div class='card'>
+<h2>Universal Supplier Connector</h2>
+<p>Importa catálogos JSON, XML ou CSV, normaliza os dados e atualiza Produtos e Estoque.</p>
+<a class='btn' href='/api/suppliers/hayamax/setup'>Adicionar Hayamax</a>
+<a class='btn' href='/api/suppliers/hayamax/demo-import'>Importação demonstrativa Hayamax</a>
+<a class='btn' href='/supplier-imports'>Histórico</a>
+<a class='btn' href='/supplier-connector/sql'>SQL Sprint 17</a>
+</div>
+<div class='card'>
+<h2>Fornecedores conectáveis</h2>
+<table>
+<thead><tr><th>Fornecedor</th><th>Formato</th><th>Conector</th><th>Status</th><th>URL</th><th>Ações</th></tr></thead>
+<tbody>{rows}</tbody>
+</table>
+</div>
+<div class='card'>
+<h2>Fluxo</h2>
+<pre>Fornecedor → JSON/XML/CSV → Parser → Normalizador → Catálogo Mestre → Estoque → Mercado Livre</pre>
+</div>
+"""
+    return HTMLResponse(shell("Supplier Connector", content))
+
+
+@app.get("/supplier-connector/sql", response_class=HTMLResponse)
+async def supplier_connector_sql_page():
+    sql_text = open("sprint17_supplier_connector.sql", "r", encoding="utf-8").read()
+    return HTMLResponse(shell(
+        "SQL Sprint 17",
+        f"<div class='card'><h2>Migration Supplier Connector</h2><p>Copie e execute no Supabase SQL Editor.</p><pre>{s17_escape(sql_text)}</pre></div>"
+    ))
+
+
+@app.get("/supplier-connector/{supplier_id}", response_class=HTMLResponse)
+async def supplier_connector_config_page(supplier_id: str):
+    supplier = await s17_get_supplier(supplier_id)
+    if not supplier:
+        return HTMLResponse(shell("Fornecedor", "<div class='card'><h2>Fornecedor não encontrado.</h2></div>"), status_code=404)
+
+    config = supplier.get("config") or {}
+    content = f"""
+<div class='card'>
+<h2>Configurar {s17_escape(supplier.get('name'))}</h2>
+<form method='post' action='/api/suppliers/{s17_escape(supplier_id)}/config'>
+<label>Formato da fonte</label>
+<select name='source_format' style='width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:8px;margin:5px 0 12px'>
+<option value='json' {'selected' if config.get('source_format') == 'json' else ''}>JSON</option>
+<option value='xml' {'selected' if config.get('source_format') == 'xml' else ''}>XML</option>
+<option value='csv' {'selected' if config.get('source_format') == 'csv' else ''}>CSV</option>
+</select>
+<label>URL do catálogo</label>
+<input name='catalog_url' value='{s17_escape(config.get("catalog_url") or "")}' placeholder='https://fornecedor.com/catalogo.xml'>
+<label>Header de autenticação (nome)</label>
+<input name='auth_header' value='{s17_escape(config.get("auth_header") or "")}' placeholder='Authorization ou X-API-Key'>
+<label>Valor do header</label>
+<input name='auth_value' type='password' value='{s17_escape(config.get("auth_value") or "")}' placeholder='Token fornecido pelo fornecedor'>
+<label>Margem padrão (%)</label>
+<input name='margin_percent' value='{s17_escape(config.get("margin_percent") or "35")}' placeholder='35'>
+<button type='submit'>Salvar configuração</button>
+</form>
+</div>
+<div class='card'>
+<a class='btn' href='/api/suppliers/{s17_escape(supplier_id)}/test'>Testar conexão</a>
+<a class='btn' href='/api/suppliers/{s17_escape(supplier_id)}/preview'>Pré-visualizar</a>
+<a class='btn' href='/api/suppliers/{s17_escape(supplier_id)}/import'>Importar catálogo</a>
+</div>
+"""
+    return HTMLResponse(shell(f"Conector - {supplier.get('name')}", content))
+
+
+@app.post("/api/suppliers/{supplier_id}/config")
+async def supplier_connector_save_config(supplier_id: str, request: Request):
+    supplier = await s17_get_supplier(supplier_id)
+    if not supplier:
+        return JSONResponse(status_code=404, content={"success": False, "error": "Fornecedor não encontrado"})
+
+    form = await request.form()
+    current_config = supplier.get("config") or {}
+    config = {
+        **current_config,
+        "connector": "universal_supplier_v1",
+        "source_format": str(form.get("source_format") or "json").lower(),
+        "catalog_url": str(form.get("catalog_url") or "").strip(),
+        "auth_header": str(form.get("auth_header") or "").strip(),
+        "auth_value": str(form.get("auth_value") or "").strip(),
+        "margin_percent": s17_number(form.get("margin_percent"), 35),
+    }
+    payload = {**supplier, "config": config, "type": config["source_format"]}
+    result = await store.upsert("suppliers", payload, "id")
+
+    if not result.get("success"):
+        return JSONResponse(status_code=400, content={
+            "success": False,
+            "error": result.get("error") or result.get("raw"),
+            "result": result
+        })
+    return RedirectResponse(f"/supplier-connector/{supplier_id}", status_code=303)
+
+
+@app.get("/api/suppliers/hayamax/setup")
+async def supplier_hayamax_setup():
+    result = await s17_ensure_hayamax_supplier()
+    return {
+        "success": bool(result.get("success")),
+        "version": APP_VERSION,
+        "supplier_id": S17_HAYAMAX_SUPPLIER_ID,
+        "supplier": "Hayamax",
+        "result": result,
+        "next": f"/supplier-connector/{S17_HAYAMAX_SUPPLIER_ID}"
+    }
+
+
+@app.get("/api/suppliers/hayamax/demo-import")
+async def supplier_hayamax_demo_import():
+    migration_check = await store.select("supplier_products", "select=id&limit=1")
+    if not migration_check.get("success"):
+        return JSONResponse(status_code=409, content={
+            "success": False,
+            "version": APP_VERSION,
+            "error": "A tabela supplier_products ainda não existe.",
+            "next_step": "Execute o SQL disponível em /supplier-connector/sql no Supabase SQL Editor.",
+            "details": str(migration_check.get("error") or migration_check.get("raw"))[:600]
+        })
+
+    await s17_ensure_hayamax_supplier()
+    supplier = await s17_get_supplier(S17_HAYAMAX_SUPPLIER_ID)
+    normalized = [
+        s17_normalize_product(item, supplier["id"], "hayamax_demo")
+        for item in S17_DEMO_PRODUCTS
+    ]
+    return await s17_import_normalized(supplier, normalized, "hayamax_demo")
+
+
+async def s17_fetch_supplier_catalog(supplier):
+    import httpx
+
+    config = supplier.get("config") or {}
+    catalog_url = str(config.get("catalog_url") or "").strip()
+    source_format = str(config.get("source_format") or supplier.get("type") or "json").lower()
+
+    if not catalog_url:
+        return {
+            "success": False,
+            "error": "URL do catálogo não configurada.",
+            "source_format": source_format
+        }
+
+    parsed_url = urlparse(catalog_url)
+    if parsed_url.scheme not in ["http", "https"]:
+        return {
+            "success": False,
+            "error": "A URL deve iniciar com http:// ou https://.",
+            "source_format": source_format
+        }
+
+    request_headers = {"Accept": "*/*", "User-Agent": "CommerceHub-Supplier-Connector/1.0"}
+    auth_header = str(config.get("auth_header") or "").strip()
+    auth_value = str(config.get("auth_value") or "").strip()
+    if auth_header and auth_value:
+        request_headers[auth_header] = auth_value
+
+    try:
+        async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
+            response = await client.get(catalog_url, headers=request_headers)
+
+        return {
+            "success": 200 <= response.status_code < 300,
+            "status_code": response.status_code,
+            "content_type": response.headers.get("content-type", ""),
+            "content_length": len(response.content),
+            "text": response.text,
+            "source_format": source_format,
+            "final_url": str(response.url),
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "source_format": source_format
+        }
+
+
+@app.get("/api/suppliers/{supplier_id}/test")
+async def supplier_connector_test(supplier_id: str):
+    supplier = await s17_get_supplier(supplier_id)
+    if not supplier:
+        return JSONResponse(status_code=404, content={"success": False, "error": "Fornecedor não encontrado"})
+
+    config = supplier.get("config") or {}
+    if not config.get("catalog_url"):
+        return {
+            "success": False,
+            "version": APP_VERSION,
+            "supplier": supplier.get("name"),
+            "configured": False,
+            "message": "Fornecedor cadastrado, mas a URL do catálogo ainda não foi informada.",
+            "next": f"/supplier-connector/{supplier_id}"
+        }
+
+    fetched = await s17_fetch_supplier_catalog(supplier)
+    return {
+        "success": bool(fetched.get("success")),
+        "version": APP_VERSION,
+        "supplier": supplier.get("name"),
+        "configured": True,
+        "status_code": fetched.get("status_code"),
+        "content_type": fetched.get("content_type"),
+        "content_length": fetched.get("content_length"),
+        "final_url": fetched.get("final_url"),
+        "error": fetched.get("error", "")
+    }
+
+
+@app.get("/api/suppliers/{supplier_id}/preview")
+async def supplier_connector_preview(supplier_id: str):
+    supplier = await s17_get_supplier(supplier_id)
+    if not supplier:
+        return JSONResponse(status_code=404, content={"success": False, "error": "Fornecedor não encontrado"})
+
+    fetched = await s17_fetch_supplier_catalog(supplier)
+    if not fetched.get("success"):
+        return fetched
+
+    try:
+        items = s17_parse_payload(fetched.get("text", ""), fetched.get("source_format"))
+        normalized = [
+            s17_normalize_product(item, supplier["id"], fetched.get("source_format"))
+            for item in items[:10]
+        ]
+        return {
+            "success": True,
+            "version": APP_VERSION,
+            "supplier": supplier.get("name"),
+            "source_format": fetched.get("source_format"),
+            "detected_items": len(items),
+            "preview_count": len(normalized),
+            "preview": normalized
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "version": APP_VERSION,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "hint": "Confira o formato escolhido e a estrutura do catálogo."
+        }
+
+
+@app.get("/api/suppliers/{supplier_id}/import")
+async def supplier_connector_import(supplier_id: str):
+    supplier = await s17_get_supplier(supplier_id)
+    if not supplier:
+        return JSONResponse(status_code=404, content={"success": False, "error": "Fornecedor não encontrado"})
+
+    migration_check = await store.select("supplier_products", "select=id&limit=1")
+    if not migration_check.get("success"):
+        return JSONResponse(status_code=409, content={
+            "success": False,
+            "error": "Execute primeiro a migration da Sprint 17.",
+            "next": "/supplier-connector/sql"
+        })
+
+    fetched = await s17_fetch_supplier_catalog(supplier)
+    if not fetched.get("success"):
+        return fetched
+
+    try:
+        items = s17_parse_payload(fetched.get("text", ""), fetched.get("source_format"))
+        normalized = [
+            s17_normalize_product(item, supplier["id"], fetched.get("source_format"))
+            for item in items
+        ]
+        return await s17_import_normalized(supplier, normalized, "remote_catalog")
+    except Exception as exc:
+        return {
+            "success": False,
+            "version": APP_VERSION,
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "hint": "Use /api/suppliers/{id}/preview antes de importar."
+        }
+
+
+@app.get("/supplier-imports", response_class=HTMLResponse)
+async def supplier_imports_page():
+    jobs_result = await store.select(
+        "sync_jobs",
+        "select=*&sync_type=eq.supplier_catalog_import&order=created_at.desc&limit=50"
+    )
+    jobs = jobs_result.get("data") or []
+
+    rows = ""
+    for job in jobs:
+        payload = job.get("payload") or {}
+        result = job.get("result") or {}
+        rows += f"""
+<tr>
+<td>{s17_escape(job.get('created_at'))}</td>
+<td>{s17_escape(payload.get('mode'))}</td>
+<td>{s17_escape(job.get('status'))}</td>
+<td>{s17_escape(result.get('received', 0))}</td>
+<td>{s17_escape(result.get('master_created_or_updated', 0))}</td>
+<td>{s17_escape(len(result.get('errors') or []))}</td>
+<td><a class='btn' href='/api/supplier-imports/{job.get("id")}'>Detalhes</a></td>
+</tr>
+"""
+
+    if not rows:
+        rows = "<tr><td colspan='7'>Nenhuma importação executada.</td></tr>"
+
+    content = f"""
+<div class='card'>
+<h2>Histórico de Importações</h2>
+<table>
+<thead><tr><th>Data</th><th>Modo</th><th>Status</th><th>Recebidos</th><th>Catálogo mestre</th><th>Erros</th><th>Ação</th></tr></thead>
+<tbody>{rows}</tbody>
+</table>
+</div>
+"""
+    return HTMLResponse(shell("Importações de Fornecedores", content))
+
+
+@app.get("/api/supplier-imports/{job_id}")
+async def supplier_import_details(job_id: str):
+    job_result = await store.select(
+        "sync_jobs",
+        f"select=*&id=eq.{quote(job_id, safe='-')}&limit=1"
+    )
+    logs_result = await store.select(
+        "sync_logs",
+        f"select=*&sync_job_id=eq.{quote(job_id, safe='-')}&order=created_at.asc"
+    )
+    jobs = job_result.get("data") or []
+    return {
+        "success": bool(jobs),
+        "version": APP_VERSION,
+        "job": jobs[0] if jobs else None,
+        "logs": logs_result.get("data") or []
+    }
+
+
+@app.get("/api/supplier-connector/status")
+async def supplier_connector_status():
+    checks = {}
+    for table in ["suppliers", "supplier_products", "products", "inventory", "sync_jobs", "sync_logs"]:
+        result = await store.select(table, "select=*&limit=1")
+        checks[table] = {
+            "success": bool(result.get("success")),
+            "status_code": result.get("status_code"),
+            "rows": len(result.get("data") or []),
+            "error": str(result.get("error") or result.get("raw") or "")[:500]
+        }
+
+    return {
+        "success": all(item["success"] for item in checks.values()),
+        "version": APP_VERSION,
+        "module": "universal_supplier_connector",
+        "formats": ["json", "xml", "csv"],
+        "reference_supplier": "Hayamax",
+        "checks": checks,
+        "next": "/supplier-connector"
+    }

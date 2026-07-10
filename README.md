@@ -1,42 +1,46 @@
-# CommerceHub Enterprise V5 - Sprint 16 Enterprise Auth
+# CommerceHub Enterprise V5 - Sprint 17 Universal Supplier Connector
 
-## Incluído
-- Login real contra `users_app`
-- Verificação SHA-256 compatível com o seed atual
-- Token JWT HS256 sem biblioteca adicional
-- Cookie HttpOnly, Secure e SameSite=Lax
-- Logout
-- Perfil
-- Papéis: admin, operator e viewer
-- Middleware protegendo páginas e APIs
-- Rotas `/api/auth/status` e `/api/auth/admin-check`
-- Logs de login e logout
+## Entregue
+- Conector universal para JSON, XML e CSV
+- Hayamax como fornecedor de referência
+- Cadastro e configuração da URL do catálogo
+- Header opcional de autenticação
+- Teste de conexão
+- Pré-visualização normalizada
+- Importação para `supplier_products`
+- Criação/atualização do Catálogo Mestre (`products`)
+- Atualização de estoque (`inventory`)
+- Histórico em `sync_jobs` e `sync_logs`
+- Importação demonstrativa Hayamax sem credenciais externas
+- Proteção pelo login da Sprint 16
 
-## Variável obrigatória na Vercel
-Crie:
+## Observação sobre Hayamax
+A Hayamax informa publicamente que disponibiliza catálogo de dropshipping com preços,
+imagens e descrições após ativação, e também possui histórico de integração por XML.
+A URL e as credenciais reais precisam ser fornecidas ao revendedor pela Hayamax ou
+parceiro de integração. Esta Sprint não inventa credenciais privadas.
 
-`SESSION_SECRET`
-
-Use uma chave longa, privada e aleatória.
-
-Também estão disponíveis:
-- `AUTH_REQUIRED=true`
-- `SESSION_HOURS=12`
-- `COOKIE_SECURE=true`
-
-## Teste após o deploy
-1. `/api/health`
-2. `/login`
-3. Entre com:
-   - Email: `admin@commercehub.local`
-   - Senha: `admin123`
-4. `/profile`
-5. `/api/auth/status`
-6. `/api/auth/admin-check`
-7. `/logout`
+## Instalação
+1. Faça o deploy.
+2. Confirme `/api/health`.
+3. Entre no sistema.
+4. Abra `/supplier-connector/sql`.
+5. Copie o SQL e execute no Supabase SQL Editor.
+6. Abra `/api/supplier-connector/status`.
+7. Abra `/api/suppliers/hayamax/setup`.
+8. Abra `/api/suppliers/hayamax/demo-import`.
+9. Confira `/products`, `/inventory` e `/supplier-imports`.
 
 ## Versão esperada
-`enterprise-v5-sprint16-enterprise-auth`
+`enterprise-v5-sprint17-universal-supplier-connector`
 
-## Total de arquivos
-Mantido abaixo do limite de 100 arquivos do GitHub Web.
+## Rotas principais
+- `/supplier-connector`
+- `/supplier-connector/sql`
+- `/supplier-imports`
+- `/api/supplier-connector/status`
+- `/api/suppliers/hayamax/setup`
+- `/api/suppliers/hayamax/demo-import`
+
+## Limite GitHub Web
+Pacote mantido abaixo de 100 arquivos.

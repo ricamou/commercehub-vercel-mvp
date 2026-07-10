@@ -1,0 +1,19 @@
+SPRINT 17 - PASSO A PASSO
+
+1. Suba todos os arquivos no GitHub Web.
+2. Aguarde o deploy Ready na Vercel.
+3. Abra /api/health e confirme sprint17.
+4. Faça login.
+5. Abra /supplier-connector/sql.
+6. Copie todo o SQL.
+7. Supabase > SQL Editor > New query > cole > Run.
+8. Abra /api/supplier-connector/status.
+9. Abra /api/suppliers/hayamax/setup.
+10. Abra /api/suppliers/hayamax/demo-import.
+11. Confira /products.
+12. Confira /inventory.
+13. Confira /supplier-imports.
+
+A importação demonstrativa usa dados fictícios no formato Hayamax para validar toda
+a arquitetura. Para o catálogo real, obtenha da Hayamax a URL XML/CSV/JSON e as
+credenciais de revendedor, depois configure em /supplier-connector.

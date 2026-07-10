@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint16-enterprise-auth"
+APP_VERSION = "enterprise-v5-sprint17-universal-supplier-connector"
 
 def env(name, default=""):
     value = os.getenv(name, default)
