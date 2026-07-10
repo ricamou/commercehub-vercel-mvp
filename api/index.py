@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint20-2-intelligent-listing-payload"
+S13_VERSION = "enterprise-v5-sprint21-smart-category-engine"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -4161,6 +4161,7 @@ def s202_ml_error_text(result):
 async def s202_publish_with_fallback(context, listing):
     # Primeira tentativa: User Products.
     first_payload = s19_build_ml_payload(context, listing, mode="user_product")
+    first_payload["attributes"] = await s21_payload_attributes(context["product"].get("id"), listing.get("category_id"), first_payload.get("attributes"))
     first_result = await ml_request("/items", method="POST", payload=first_payload)
     if first_result.get("success"):
         return {
@@ -4182,6 +4183,7 @@ async def s202_publish_with_fallback(context, listing):
 
     if should_try_classic:
         second_payload = s19_build_ml_payload(context, listing, mode="classic")
+        second_payload["attributes"] = await s21_payload_attributes(context["product"].get("id"), listing.get("category_id"), second_payload.get("attributes"))
         second_result = await ml_request("/items", method="POST", payload=second_payload)
         return {
             "success": bool(second_result.get("success")),
@@ -4434,7 +4436,7 @@ async def listing_details_page(listing_id: str):
 <p><b>Imagens:</b> {len(context['images'])}</p>
 <p><b>Descrição:</b><br>{s19e(listing.get('description') or '-')}</p>
 <a class='btn' href='/product-master/{product.get("id")}/listing'>Editar rascunho</a>
-<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a>
+<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a>
 </div>
 <div class='card'><h2>Erros</h2><ul>{errors_html}</ul><h2>Alertas</h2><ul>{warnings_html}</ul></div>
 {publish_box}
@@ -5430,3 +5432,134 @@ async def listing_readiness(listing_id: str):
         "image_checks": image_checks,
         "missing_or_warning": missing,
     }
+
+
+# ==========================================================
+# SPRINT 21 - SMART CATEGORY ENGINE
+# ==========================================================
+
+def s21_required(tags):
+    tags = tags or {}
+    return bool(tags.get("required") or tags.get("catalog_required") or tags.get("catalog_listing_required"))
+
+async def s21_sync_category(category_id):
+    category_id = str(category_id or "").strip()
+    category = await ml_request(f"/categories/{quote(category_id, safe='-_')}")
+    attrs = await ml_request(f"/categories/{quote(category_id, safe='-_')}/attributes")
+    if not category.get("success") or not attrs.get("success"):
+        return {"success": False, "category": category, "attributes": attrs}
+    c = category.get("data") or {}
+    saved = await store.upsert("ml_categories", {
+        "id": category_id, "site_id": c.get("site_id") or "MLB", "name": c.get("name") or category_id,
+        "path": c.get("path_from_root") or [], "settings": c.get("settings") or {}, "raw_data": c,
+        "last_synced_at": __import__("datetime").datetime.utcnow().isoformat()
+    }, "id")
+    if not saved.get("success"):
+        return {"success": False, "stage": "save_category", "result": saved}
+    total=0; errors=[]
+    for a in (attrs.get("data") or []):
+        tags=a.get("tags") or {}
+        r=await store.upsert("ml_category_attributes", {
+            "category_id": category_id, "attribute_id": a.get("id"), "name": a.get("name") or a.get("id"),
+            "value_type": a.get("value_type"), "tags": tags, "values": a.get("values") or [],
+            "required": s21_required(tags), "catalog_required": bool(tags.get("catalog_required") or tags.get("catalog_listing_required")),
+            "raw_data": a, "last_synced_at": __import__("datetime").datetime.utcnow().isoformat()
+        }, "category_id,attribute_id")
+        if r.get("success"): total+=1
+        else: errors.append({"attribute_id":a.get("id"),"error":r.get("error") or r.get("raw")})
+    return {"success": not errors, "category_id":category_id, "category_name":c.get("name"), "saved":total, "errors":errors}
+
+async def s21_category_attrs(category_id):
+    r=await store.select("ml_category_attributes", "select=*&category_id=eq."+quote(str(category_id),safe='-_')+"&order=required.desc,name.asc")
+    return r.get("data") or []
+
+async def s21_product_values(product_id, category_id):
+    r=await store.select("product_marketplace_attributes", "select=*&product_id=eq."+quote(str(product_id),safe='-')+"&marketplace=eq.mercado_livre&category_id=eq."+quote(str(category_id),safe='-_'))
+    return {str(x.get("attribute_id")):x for x in (r.get("data") or [])}
+
+def s21_guess(attr_id, attr_name, product, attrs):
+    aid=str(attr_id or '').upper(); name=str(attr_name or '').lower()
+    if aid=='BRAND': return product.get('brand'),'product.brand',100
+    if aid=='GTIN': return product.get('ean'),'product.ean',100
+    for x in attrs:
+        k=str(x.get('name') or '').lower()
+        if (aid=='MODEL' and k in ['modelo','model']) or (aid in ['COLOR','MAIN_COLOR'] and k in ['cor','color']) or k==name:
+            return x.get('value'),'product_attribute',100
+    if aid=='MODEL':
+        v=str(product.get('seo_name') or product.get('name') or '').strip()[:60]
+        return (v or None),'product.name',65
+    return None,None,0
+
+async def s21_prepare(product_id, category_id):
+    await s21_sync_category(category_id)
+    context=await s19_product_context(product_id)
+    if not context: return {"success":False,"error":"Produto não encontrado"}
+    values=await s21_product_values(product_id,category_id)
+    result=[]
+    for a in await s21_category_attrs(category_id):
+        aid=str(a.get('attribute_id')); current=values.get(aid)
+        if current and current.get('value_name'):
+            result.append({"attribute_id":aid,"name":a.get('name'),"required":a.get('required') or a.get('catalog_required'),"value_name":current.get('value_name'),"source":current.get('source'),"status":"filled"}); continue
+        val,src,conf=s21_guess(aid,a.get('name'),context['product'],context['attributes'])
+        if val:
+            await store.upsert("product_marketplace_attributes", {"company_id":DEFAULT_COMPANY_ID,"product_id":product_id,"marketplace":"mercado_livre","category_id":category_id,"attribute_id":aid,"value_name":val,"source":src,"confidence":conf,"status":"active","raw_data":{}}, "product_id,marketplace,attribute_id")
+        result.append({"attribute_id":aid,"name":a.get('name'),"required":a.get('required') or a.get('catalog_required'),"value_name":val,"source":src,"status":"suggested" if val else "missing"})
+    return {"success":True,"product_id":product_id,"category_id":category_id,"attributes":result}
+
+async def s21_validation(product_id, category_id):
+    attrs=await s21_category_attrs(category_id); values=await s21_product_values(product_id,category_id)
+    missing=[]; filled=[]
+    for a in attrs:
+        if not (a.get('required') or a.get('catalog_required')): continue
+        aid=str(a.get('attribute_id')); v=values.get(aid)
+        if v and v.get('value_name'): filled.append({"attribute_id":aid,"name":a.get('name'),"value_name":v.get('value_name')})
+        else: missing.append({"attribute_id":aid,"name":a.get('name')})
+    return {"valid":not missing,"required_count":len(filled)+len(missing),"filled_count":len(filled),"missing_count":len(missing),"filled":filled,"missing":missing}
+
+async def s21_payload_attributes(product_id, category_id, base):
+    values=await s21_product_values(product_id,category_id); merged={str(x.get('id')):x for x in (base or []) if x.get('id')}
+    for aid,row in values.items():
+        p={"id":aid}
+        if row.get('value_id'): p['value_id']=row.get('value_id')
+        if row.get('value_name'): p['value_name']=row.get('value_name')
+        merged[aid]=p
+    return list(merged.values())
+
+@app.get('/smart-category-engine', response_class=HTMLResponse)
+async def smart_category_engine_page():
+    return HTMLResponse(shell('Smart Category Engine', """<div class='card'><h2>Smart Category Engine</h2><form method='get' action='/smart-category-engine/category'><label>Categoria ML</label><input name='category_id' value='MLB1648' required><button type='submit'>Consultar e salvar exigências</button></form></div>"""))
+
+@app.get('/smart-category-engine/category', response_class=HTMLResponse)
+async def smart_category_category_page(category_id:str):
+    sync=await s21_sync_category(category_id); attrs=await s21_category_attrs(category_id)
+    rows=''.join(f"<tr><td>{s19e(a.get('attribute_id'))}</td><td>{s19e(a.get('name'))}</td><td>{'Sim' if a.get('required') else 'Não'}</td><td>{'Sim' if a.get('catalog_required') else 'Não'}</td><td>{s19e(a.get('value_type') or '-')}</td></tr>" for a in attrs) or "<tr><td colspan='5'>Nenhum atributo.</td></tr>"
+    return HTMLResponse(shell('Categoria '+category_id, f"<div class='card'><h2>{s19e(category_id)}</h2><p>Sincronização: {'OK' if sync.get('success') else 'ERRO'}</p><table><thead><tr><th>ID</th><th>Nome</th><th>Obrigatório</th><th>Catálogo</th><th>Tipo</th></tr></thead><tbody>{rows}</tbody></table></div>"))
+
+@app.get('/smart-category-engine/product/{product_id}/category/{category_id}', response_class=HTMLResponse)
+async def smart_category_product_page(product_id:str, category_id:str):
+    await s21_prepare(product_id,category_id); attrs=await s21_category_attrs(category_id); vals=await s21_product_values(product_id,category_id); v=await s21_validation(product_id,category_id)
+    rows=''
+    for a in attrs:
+        aid=str(a.get('attribute_id')); cur=vals.get(aid) or {}
+        rows+=f"<tr><td>{s19e(aid)}</td><td>{s19e(a.get('name'))}</td><td>{'Obrigatório' if a.get('required') or a.get('catalog_required') else 'Opcional'}</td><td><form method='post' action='/api/smart-category/product/{product_id}/attribute'><input type='hidden' name='category_id' value='{s19e(category_id)}'><input type='hidden' name='attribute_id' value='{s19e(aid)}'><input name='value_name' value='{s19e(cur.get('value_name') or '')}'><button type='submit'>Salvar</button></form></td><td>{s19e(cur.get('source') or '-')}</td></tr>"
+    return HTMLResponse(shell('Atributos inteligentes', f"<div class='grid'><div class='metric'><span>Obrigatórios</span><strong>{v['required_count']}</strong></div><div class='metric'><span>Faltando</span><strong>{v['missing_count']}</strong></div></div><div class='card'><a class='btn' href='/api/smart-category/product/{product_id}/category/{category_id}/validate'>Validar requisitos</a><a class='btn' href='/product-master/{product_id}/listing'>Voltar ao anúncio</a></div><div class='card'><table><thead><tr><th>ID</th><th>Atributo</th><th>Exigência</th><th>Valor</th><th>Origem</th></tr></thead><tbody>{rows}</tbody></table></div>"))
+
+@app.post('/api/smart-category/product/{product_id}/attribute')
+async def smart_category_save_attribute(product_id:str, request:Request):
+    f=await request.form(); cid=str(f.get('category_id') or '').strip(); aid=str(f.get('attribute_id') or '').strip(); val=str(f.get('value_name') or '').strip()
+    r=await store.upsert('product_marketplace_attributes', {"company_id":DEFAULT_COMPANY_ID,"product_id":product_id,"marketplace":"mercado_livre","category_id":cid,"attribute_id":aid,"value_name":val or None,"source":"manual","confidence":100,"status":"active","raw_data":{}}, 'product_id,marketplace,attribute_id')
+    if not r.get('success'): return JSONResponse(status_code=400,content={"success":False,"error":r.get('error') or r.get('raw')})
+    return RedirectResponse(f'/smart-category-engine/product/{product_id}/category/{cid}',status_code=303)
+
+@app.get('/api/smart-category/category/{category_id}/sync')
+async def smart_category_sync(category_id:str): return await s21_sync_category(category_id)
+
+@app.get('/api/smart-category/product/{product_id}/category/{category_id}/validate')
+async def smart_category_validate(product_id:str, category_id:str): return {"success":True,"version":APP_VERSION,"validation":await s21_validation(product_id,category_id)}
+
+@app.get('/api/smart-category/status')
+async def smart_category_status():
+    checks={}
+    for table in ['ml_categories','ml_category_attributes','product_marketplace_attributes']:
+        r=await store.select(table,'select=*&limit=1'); checks[table]={"success":bool(r.get('success')),"status_code":r.get('status_code'),"rows":len(r.get('data') or []),"error":str(r.get('error') or r.get('raw') or '')[:300]}
+    return {"success":all(x['success'] for x in checks.values()),"version":APP_VERSION,"module":"smart_category_engine","checks":checks}

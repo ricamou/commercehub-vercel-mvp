@@ -1,0 +1,8 @@
+1. Deploy no GitHub Web.
+2. Abra /api/health.
+3. Execute sprint21_smart_category_engine.sql no Supabase.
+4. Abra /api/smart-category/status.
+5. Abra /smart-category-engine/category?category_id=MLB1648.
+6. Abra o anúncio e clique em Atributos inteligentes.
+7. Preencha MODEL e demais obrigatórios.
+8. Valide. Quando missing_count = 0, publique.
