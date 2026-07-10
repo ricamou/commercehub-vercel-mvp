@@ -1,0 +1,16 @@
+SPRINT 18 - PRODUCT MASTER
+
+1. Suba todos os arquivos no GitHub Web.
+2. Aguarde o deploy ficar Ready.
+3. Abra /api/health e confirme sprint18-product-master.
+4. Faça login.
+5. Abra /product-master/sql.
+6. Copie todo o SQL.
+7. No Supabase: SQL Editor > New query > cole > Run.
+8. Abra /api/product-master/status.
+9. Abra /product-master.
+10. Clique em um produto.
+11. Teste Editar.
+12. Teste Imagens.
+13. Teste Atributos.
+14. Confira Product Suppliers e Histórico.

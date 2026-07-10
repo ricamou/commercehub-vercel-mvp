@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint19-order-manager"
+APP_VERSION = "enterprise-v5-sprint18-product-master"
 
 def env(name, default=""):
     value = os.getenv(name, default)
