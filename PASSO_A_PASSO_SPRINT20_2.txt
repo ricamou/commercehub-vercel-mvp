@@ -1,0 +1,14 @@
+SPRINT 20.2 — INTELLIGENT LISTING PAYLOAD
+
+1. Suba todos os arquivos pelo GitHub Web.
+2. Aguarde o deploy ficar Ready.
+3. Abra /api/health.
+4. Confirme:
+   enterprise-v5-sprint20-2-intelligent-listing-payload
+5. Não execute novo SQL.
+6. Abra o mesmo anúncio no Listing Engine.
+7. Clique em Verificar prontidão.
+8. Confirme ready_to_publish=true.
+9. Digite PUBLICAR.
+10. O sistema enviará primeiro family_name sem title.
+11. Se necessário, fará fallback automático para o payload clássico.

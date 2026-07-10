@@ -56,3 +56,15 @@ Correção aplicada ao payload de publicação do Mercado Livre:
 - A URL pública da imagem permanece inalterada.
 - Não é necessário executar novo SQL.
 - Versão esperada: `enterprise-v5-sprint20-1-2-family-name-hotfix`.
+
+
+## Sprint 20.2 — Intelligent Listing Payload
+
+- Publicação tenta primeiro o modelo `user_product`.
+- Nesse modelo envia `family_name` e remove `title`.
+- Se a API indicar incompatibilidade, tenta automaticamente o modelo clássico.
+- O retorno de erro informa `publish_mode`, `attempts` e a primeira tentativa.
+- Novo endpoint de prontidão:
+  `/api/listing-engine/{listing_id}/readiness`
+- Nenhum novo SQL é necessário.
+- Versão: `enterprise-v5-sprint20-2-intelligent-listing-payload`

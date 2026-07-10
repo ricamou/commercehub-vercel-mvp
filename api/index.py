@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint20-1-2-family-name-hotfix"
+S13_VERSION = "enterprise-v5-sprint20-2-intelligent-listing-payload"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -4099,7 +4099,7 @@ def s19_local_validation(context, listing):
     }
 
 
-def s19_build_ml_payload(context, listing):
+def s19_build_ml_payload(context, listing, mode="user_product"):
     product = context["product"]
     inventory = context["inventory"]
     pictures = [{"source": url} for url in context["images"]]
@@ -4119,6 +4119,7 @@ def s19_build_ml_payload(context, listing):
                 "value_name": attr_value
             })
 
+    title = str(listing.get("title") or product.get("name") or "").strip()[:60]
     family_name = str(
         product.get("seo_name")
         or product.get("name")
@@ -4126,9 +4127,7 @@ def s19_build_ml_payload(context, listing):
         or ""
     ).strip()[:60]
 
-    return {
-        "title": str(listing.get("title") or product.get("name") or "")[:60],
-        "family_name": family_name,
+    payload = {
         "category_id": listing.get("category_id"),
         "price": s19float(listing.get("price") or product.get("sale_price"), 0),
         "currency_id": listing.get("currency_id") or "BRL",
@@ -4138,6 +4137,70 @@ def s19_build_ml_payload(context, listing):
         "listing_type_id": listing.get("listing_type_id") or "gold_special",
         "pictures": pictures,
         "attributes": attributes
+    }
+
+    # Novo padrão User Products: family_name sem title.
+    if mode == "user_product":
+        payload["family_name"] = family_name
+    else:
+        payload["title"] = title
+
+    return payload
+
+
+def s202_ml_error_text(result):
+    data = result.get("data") if isinstance(result, dict) else {}
+    return " ".join([
+        str(result.get("error") or "") if isinstance(result, dict) else "",
+        str(result.get("raw") or "") if isinstance(result, dict) else "",
+        str(data.get("message") or "") if isinstance(data, dict) else "",
+        str(data.get("error") or "") if isinstance(data, dict) else "",
+    ]).lower()
+
+
+async def s202_publish_with_fallback(context, listing):
+    # Primeira tentativa: User Products.
+    first_payload = s19_build_ml_payload(context, listing, mode="user_product")
+    first_result = await ml_request("/items", method="POST", payload=first_payload)
+    if first_result.get("success"):
+        return {
+            "success": True,
+            "mode": "user_product",
+            "payload": first_payload,
+            "result": first_result,
+            "attempts": 1,
+        }
+
+    error_text = s202_ml_error_text(first_result)
+
+    # Se a API rejeitar family_name ou exigir title, tenta o fluxo clássico.
+    should_try_classic = (
+        "family_name" in error_text
+        or "fields [family_name] are invalid" in error_text
+        or "title" in error_text and "required" in error_text
+    )
+
+    if should_try_classic:
+        second_payload = s19_build_ml_payload(context, listing, mode="classic")
+        second_result = await ml_request("/items", method="POST", payload=second_payload)
+        return {
+            "success": bool(second_result.get("success")),
+            "mode": "classic",
+            "payload": second_payload,
+            "result": second_result,
+            "first_attempt": {
+                "payload": first_payload,
+                "result": first_result,
+            },
+            "attempts": 2,
+        }
+
+    return {
+        "success": False,
+        "mode": "user_product",
+        "payload": first_payload,
+        "result": first_result,
+        "attempts": 1,
     }
 
 
@@ -4371,7 +4434,7 @@ async def listing_details_page(listing_id: str):
 <p><b>Imagens:</b> {len(context['images'])}</p>
 <p><b>Descrição:</b><br>{s19e(listing.get('description') or '-')}</p>
 <a class='btn' href='/product-master/{product.get("id")}/listing'>Editar rascunho</a>
-<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a>
+<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a>
 </div>
 <div class='card'><h2>Erros</h2><ul>{errors_html}</ul><h2>Alertas</h2><ul>{warnings_html}</ul></div>
 {publish_box}
@@ -4413,9 +4476,10 @@ async def listing_publish(listing_id: str, request: Request):
             "validation": validation
         })
 
-    payload = s19_build_ml_payload(context, listing)
-    result = await ml_request("/items", method="POST", payload=payload)
-    if not result.get("success"):
+    publish_attempt = await s202_publish_with_fallback(context, listing)
+    payload = publish_attempt.get("payload") or {}
+    result = publish_attempt.get("result") or {}
+    if not publish_attempt.get("success"):
         error_text = str(result.get("error") or result.get("raw") or result.get("data") or "")[:3000]
         await store.update(
             "listings",
@@ -4427,7 +4491,10 @@ async def listing_publish(listing_id: str, request: Request):
             "success": False,
             "error": "Falha ao publicar no Mercado Livre.",
             "result": result,
-            "payload_sent": payload
+            "payload_sent": payload,
+            "publish_mode": publish_attempt.get("mode"),
+            "attempts": publish_attempt.get("attempts"),
+            "first_attempt": publish_attempt.get("first_attempt")
         })
 
     item = result.get("data") or {}
@@ -4985,9 +5052,10 @@ async def s20_publish_automatic_listing(listing):
             "image_checks": image_checks,
         }
 
-    payload = s19_build_ml_payload(context, listing)
-    result = await ml_request("/items", method="POST", payload=payload)
-    if not result.get("success"):
+    publish_attempt = await s202_publish_with_fallback(context, listing)
+    payload = publish_attempt.get("payload") or {}
+    result = publish_attempt.get("result") or {}
+    if not publish_attempt.get("success"):
         await store.update(
             "listings",
             f"id=eq.{quote(str(listing_id), safe='-')}",
@@ -5317,4 +5385,48 @@ async def image_manager_status():
             "validate_public_image",
         ],
         "pages": ["/upload-manager", "/product-master"],
+    }
+
+
+@app.get("/api/listing-engine/{listing_id}/readiness")
+async def listing_readiness(listing_id: str):
+    listing = await s19_get_listing(listing_id)
+    if not listing:
+        return JSONResponse(status_code=404, content={"success": False, "error": "Anúncio não encontrado."})
+
+    context = await s19_product_context(listing.get("product_id"))
+    if not context:
+        return JSONResponse(status_code=404, content={"success": False, "error": "Produto relacionado não encontrado."})
+
+    validation = s19_local_validation(context, listing)
+    image_checks = []
+    for url in context.get("images") or []:
+        image_checks.append(await s20_check_public_image(url))
+
+    missing = []
+    product = context["product"]
+
+    if not listing.get("category_id"):
+        missing.append("category_id")
+    if not product.get("ean"):
+        missing.append("GTIN/EAN")
+    if not product.get("brand"):
+        missing.append("BRAND")
+    if not context.get("images"):
+        missing.append("pictures")
+    if str(product.get("internal_status") or "") != "ready":
+        missing.append("product_internal_status_ready")
+
+    public_images_ok = bool(image_checks) and all(item.get("success") for item in image_checks)
+
+    return {
+        "success": validation.get("valid") and public_images_ok,
+        "version": APP_VERSION,
+        "listing_id": listing_id,
+        "ready_to_publish": validation.get("valid") and public_images_ok,
+        "recommended_mode": "user_product",
+        "validation": validation,
+        "public_images_ok": public_images_ok,
+        "image_checks": image_checks,
+        "missing_or_warning": missing,
     }
