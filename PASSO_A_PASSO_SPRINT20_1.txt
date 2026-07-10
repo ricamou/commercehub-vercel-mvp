@@ -1,0 +1,18 @@
+SPRINT 20.1 — IMAGE MANAGER ENTERPRISE
+
+1. Envie os arquivos pelo GitHub Web.
+2. Aguarde o deploy ficar Ready.
+3. Abra /api/health.
+4. Confirme sprint20-1-image-manager-enterprise.
+5. No Supabase, crie uma NOVA QUERY.
+6. Cole o conteúdo de sprint20_1_image_manager.sql.
+7. Clique em Run.
+8. Abra /api/image-manager/status.
+9. Abra Product Master.
+10. Entre no produto.
+11. Clique em Imagens.
+12. Exclua os registros antigos com caminhos C:\Users\...
+13. Selecione JPG, PNG ou WEBP.
+14. Marque Imagem principal.
+15. Clique em Enviar imagem.
+16. Teste os botões Principal, ↑, ↓, Copiar URL e Excluir.

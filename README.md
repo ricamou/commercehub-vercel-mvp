@@ -1,54 +1,38 @@
-# CommerceHub Enterprise V5 — Sprint 20 Upload Manager
+# CommerceHub Enterprise V5 — Sprint 20.1 Image Manager Enterprise
 
 ## Entregue
-- Upload de JPG, PNG e WEBP pelo navegador
-- Armazenamento no Supabase Storage
-- Bucket público `product-images`
-- Geração automática de URL pública
-- Gravação no Product Master
-- Definição de imagem principal
-- Validação de URL pública
-- Bloqueio de caminhos locais `C:\Users\...`
-- Envio das URLs públicas ao Mercado Livre
-- Upload Manager em `/upload-manager`
-- Dois modos: `Publicar agora` e `Publicação automática`
-- Automação global desligada por padrão
-- Automação por anúncio e executor controlado
+- Upload de imagem com diagnóstico detalhado de erro
+- Galeria em cards
+- Definir imagem principal
+- Mover imagem para cima ou para baixo
+- Copiar URL pública
+- Abrir imagem
+- Excluir do banco
+- Excluir do Supabase Storage
+- Atualização automática da imagem principal
+- Remoção de caminhos locais inválidos
+- Validação das imagens públicas
+- Nenhuma publicação automática foi ativada
 
 ## Instalação
-1. Envie todos os arquivos no GitHub Web.
+1. Suba os arquivos pelo GitHub Web.
 2. Aguarde o deploy.
 3. Confirme `/api/health`.
 4. Faça login.
-5. Abra `/upload-manager/sql`.
-6. Copie o SQL.
-7. Supabase → SQL Editor → New query → cole → Run.
-8. Abra `/api/upload-manager/status`.
-9. Abra um produto → Imagens.
-10. Selecione uma imagem JPG/PNG/WEBP e envie.
-11. Abra a URL pública gerada.
-12. Volte ao anúncio e publique.
+5. Abra `/upload-manager/sql` se ainda não executou a Sprint 20.
+6. Abra o arquivo `sprint20_1_image_manager.sql` e execute em uma nova query.
+7. Abra `/api/image-manager/status`.
+8. Entre em Product Master → produto → Imagens.
+9. Remova as imagens antigas inválidas.
+10. Faça upload de uma imagem JPG, PNG ou WEBP.
 
-## Versão esperada
-`enterprise-v5-sprint20-upload-manager-supabase-storage`
+## Versão
+`enterprise-v5-sprint20-1-image-manager-enterprise`
 
-## Variáveis
-- `SUPABASE_URL`
-- `SUPABASE_SERVICE_ROLE_KEY`
-- `SUPABASE_STORAGE_BUCKET=product-images`
-- `MAX_IMAGE_MB=5`
+## Observação
+Em caso de falha no upload, o endpoint agora devolve JSON com:
+- `error_type`
+- `detail`
+- `product_id`
 
-## Modos de publicação
-### Manual
-O usuário revisa e clica em `Publicar agora`.
-
-### Automático
-1. Ative globalmente em `/listing-automation`.
-2. Ative no anúncio específico.
-3. Execute `/api/listing-engine/automation/run` pelo botão da tela.
-4. Apenas anúncios válidos são publicados.
-
-A automação agendada contínua poderá ser ligada a um cron em sprint posterior.
-
-## Limite GitHub Web
-Pacote mantido abaixo de 100 arquivos.
+Isso evita a tela genérica `Internal Server Error`.

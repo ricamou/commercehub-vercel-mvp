@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint20-upload-manager-supabase-storage"
+S13_VERSION = "enterprise-v5-sprint20-1-image-manager-enterprise"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -3736,57 +3736,75 @@ async def product_master_images_page(product_id: str):
     if not product:
         return HTMLResponse(shell("Imagens", "<div class='card'><h2>Produto não encontrado.</h2></div>"), status_code=404)
 
-    result = await store.select("product_images", f"select=*&product_id=eq.{quote(product_id, safe='-')}&order=position.asc")
-    rows = "".join(
-        f"""<tr>
-<td><img src='{s18_escape(i.get("url"))}' style='width:70px;height:70px;object-fit:contain'></td>
-<td>{s18_escape(i.get('file_name') or i.get('url'))}</td>
-<td>{s18_escape(i.get('mime_type') or '-')}</td>
-<td>{s18_escape(i.get('file_size') or 0)}</td>
-<td>{s18_escape(i.get('position'))}</td>
-<td>{'Sim' if i.get('is_main') else 'Não'}</td>
-<td>{s18_escape(i.get('source') or '-')}</td>
-</tr>"""
-        for i in (result.get("data") or [])
-    ) or "<tr><td colspan='7'>Nenhuma imagem.</td></tr>"
+    result = await store.select(
+        "product_images",
+        f"select=*&product_id=eq.{quote(product_id, safe='-')}&deleted_at=is.null&order=position.asc,created_at.asc"
+    )
+    images = result.get("data") or []
+
+    cards = ""
+    for image in images:
+        image_id = image.get("id")
+        url = image.get("url") or ""
+        valid_url = str(url).lower().startswith(("https://", "http://"))
+        badge = "Principal" if image.get("is_main") else f"Posição {image.get('position', 0)}"
+        validation = image.get("validation_status") or ("pending" if valid_url else "invalid")
+        cards += f"""
+<div class='card' style='width:280px;display:inline-block;vertical-align:top;margin:0 12px 12px 0'>
+<div style='height:190px;display:grid;place-items:center;background:#f8fafc;border-radius:10px;overflow:hidden'>
+{"<img src='" + s18_escape(url) + "' style='max-width:100%;max-height:190px;object-fit:contain'>" if valid_url else "<div style='padding:20px;text-align:center;color:#b91c1c'>Imagem local/inválida</div>"}
+</div>
+<h3 style='margin-bottom:5px'>{s18_escape(image.get('file_name') or 'Imagem')}</h3>
+<p><b>{s18_escape(badge)}</b> · Validação: {s18_escape(validation)}</p>
+<p style='overflow-wrap:anywhere;font-size:12px'>{s18_escape(url)}</p>
+
+<form method='post' action='/api/image-manager/{image_id}/main' style='display:inline'>
+<button type='submit'>⭐ Tornar principal</button>
+</form>
+
+<form method='post' action='/api/image-manager/{image_id}/move' style='display:inline'>
+<input type='hidden' name='direction' value='up'>
+<button type='submit'>↑</button>
+</form>
+
+<form method='post' action='/api/image-manager/{image_id}/move' style='display:inline'>
+<input type='hidden' name='direction' value='down'>
+<button type='submit'>↓</button>
+</form>
+
+<button type='button' onclick="navigator.clipboard.writeText('{s18_escape(url)}');this.innerText='Copiado!'">📋 Copiar URL</button>
+<a class='btn' href='{s18_escape(url) if valid_url else "#"}' target='_blank'>Abrir</a>
+
+<form method='post' action='/api/image-manager/{image_id}/delete'
+      onsubmit="return confirm('Excluir esta imagem do Product Master e do Supabase Storage?');"
+      style='margin-top:10px'>
+<button type='submit' style='background:#b91c1c'>🗑 Excluir</button>
+</form>
+</div>
+"""
+
+    if not cards:
+        cards = "<div class='card'><p>Nenhuma imagem cadastrada.</p></div>"
 
     content = f"""
 <div class='card'>
-<h2>Upload direto — {s18_escape(product.get('sku'))}</h2>
-<p>Envie JPG, PNG ou WEBP. Tamanho máximo configurado: 5 MB.</p>
+<h2>Gerenciador de Imagens — {s18_escape(product.get('sku'))}</h2>
+<p>Envie JPG, PNG ou WEBP. O CommerceHub gera a URL pública automaticamente.</p>
 <form method='post' action='/api/storage/products/{product_id}/upload' enctype='multipart/form-data'>
 <label>Selecionar imagem</label>
 <input type='file' name='file' accept='image/jpeg,image/png,image/webp' required>
 <label>Texto alternativo</label>
-<input name='alt_text' placeholder='Ex.: Mouse gamer preto visto de frente'>
+<input name='alt_text' placeholder='Descrição da imagem'>
 <label>Posição</label>
-<input name='position' value='0'>
+<input name='position' value='{len(images)}'>
 <label><input type='checkbox' name='is_main' value='true' style='width:auto'> Imagem principal</label><br><br>
-<button type='submit'>Enviar para Supabase Storage</button>
+<button type='submit'>Enviar imagem</button>
 </form>
+<p><a class='btn' href='/api/storage/products/{product_id}/validate'>Validar todas as imagens</a></p>
 </div>
-
-<div class='card'>
-<h2>Adicionar por URL pública</h2>
-<p>A URL deve começar com <code>https://</code> e abrir a imagem diretamente.</p>
-<form method='post' action='/api/product-master/{product_id}/images'>
-<label>URL da imagem</label><input name='url' placeholder='https://...' required>
-<label>Texto alternativo</label><input name='alt_text'>
-<label>Posição</label><input name='position' value='0'>
-<label><input type='checkbox' name='is_main' value='true' style='width:auto'> Imagem principal</label><br><br>
-<button type='submit'>Adicionar URL pública</button>
-</form>
-</div>
-
-<div class='card'>
-<h2>Imagens cadastradas</h2>
-<table>
-<thead><tr><th>Imagem</th><th>Arquivo/URL</th><th>Tipo</th><th>Bytes</th><th>Posição</th><th>Principal</th><th>Origem</th></tr></thead>
-<tbody>{rows}</tbody>
-</table>
-</div>
+<div style='white-space:normal'>{cards}</div>
 """
-    return HTMLResponse(shell("Imagens do Produto", content))
+    return HTMLResponse(shell("Image Manager Enterprise", content))
 
 
 @app.post("/api/product-master/{product_id}/images")
@@ -4585,7 +4603,7 @@ async def s20_upload_bytes(bucket, object_path, data, content_type):
 
     try:
         async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
-            response = await client.post(upload_url, headers=headers, content=data)
+            response = await client.put(upload_url, headers=headers, content=data)
 
         raw = response.text
         try:
@@ -4644,120 +4662,112 @@ async def storage_product_upload(
     position: int = Form(0),
     is_main: str = Form(""),
 ):
-    product = await s18_get_product(product_id)
-    if not product:
-        return JSONResponse(status_code=404, content={"success": False, "error": "Produto não encontrado."})
+    try:
+        product = await s18_get_product(product_id)
+        if not product:
+            return JSONResponse(status_code=404, content={"success": False, "error": "Produto não encontrado."})
 
-    content_type = str(file.content_type or "").lower()
-    if content_type not in S20_ALLOWED_MIME:
-        return JSONResponse(status_code=415, content={
-            "success": False,
-            "error": "Formato inválido. Use JPG, PNG ou WEBP.",
-            "content_type": content_type,
-        })
+        content_type = str(file.content_type or "").lower().strip()
+        if content_type not in S20_ALLOWED_MIME:
+            return JSONResponse(status_code=415, content={
+                "success": False,
+                "error": "Formato inválido. Use JPG, PNG ou WEBP.",
+                "content_type": content_type,
+            })
 
-    data = await file.read()
-    max_bytes = MAX_IMAGE_MB * 1024 * 1024
-    if not data:
-        return JSONResponse(status_code=400, content={"success": False, "error": "Arquivo vazio."})
-    if len(data) > max_bytes:
-        return JSONResponse(status_code=413, content={
-            "success": False,
-            "error": f"Imagem excede o limite de {MAX_IMAGE_MB} MB.",
-            "size_bytes": len(data),
-        })
+        data = await file.read()
+        max_bytes = MAX_IMAGE_MB * 1024 * 1024
+        if not data:
+            return JSONResponse(status_code=400, content={"success": False, "error": "Arquivo vazio."})
+        if len(data) > max_bytes:
+            return JSONResponse(status_code=413, content={
+                "success": False,
+                "error": f"Imagem excede o limite de {MAX_IMAGE_MB} MB.",
+                "size_bytes": len(data),
+            })
 
-    stem, original_ext = s20_safe_filename(file.filename)
-    extension = S20_ALLOWED_MIME[content_type]
-    file_hash = hashlib.sha256(data).hexdigest()
-    object_name = f"{stem}-{file_hash[:12]}{extension}"
-    object_path = f"{DEFAULT_COMPANY_ID}/{product_id}/{object_name}"
+        stem, _ = s20_safe_filename(file.filename)
+        extension = S20_ALLOWED_MIME[content_type]
+        file_hash = hashlib.sha256(data).hexdigest()
+        object_name = f"{stem}-{file_hash[:12]}{extension}"
+        object_path = f"{DEFAULT_COMPANY_ID}/{product_id}/{object_name}"
 
-    uploaded = await s20_upload_bytes(
-        SUPABASE_STORAGE_BUCKET,
-        object_path,
-        data,
-        content_type,
-    )
-    if not uploaded.get("success"):
-        return JSONResponse(status_code=400, content={
-            "success": False,
-            "error": "Falha ao enviar a imagem ao Supabase Storage.",
-            "storage": uploaded,
-        })
-
-    public_url = uploaded["public_url"]
-    main_flag = str(is_main or "").lower() == "true"
-
-    if main_flag:
-        await store.update(
-            "product_images",
-            f"product_id=eq.{quote(product_id, safe='-')}",
-            {"is_main": False},
+        uploaded = await s20_upload_bytes(
+            SUPABASE_STORAGE_BUCKET,
+            object_path,
+            data,
+            content_type,
         )
+        if not uploaded.get("success"):
+            return JSONResponse(status_code=400, content={
+                "success": False,
+                "error": "Falha ao enviar a imagem ao Supabase Storage.",
+                "storage": uploaded,
+            })
 
-    image_payload = {
-        "company_id": DEFAULT_COMPANY_ID,
-        "product_id": product_id,
-        "url": public_url,
-        "position": s19int(position, 0),
-        "is_main": main_flag,
-        "alt_text": str(alt_text or "").strip() or None,
-        "source": "supabase_storage",
-        "hash": file_hash,
-        "storage_bucket": SUPABASE_STORAGE_BUCKET,
-        "storage_path": object_path,
-        "file_name": str(file.filename or object_name),
-        "mime_type": content_type,
-        "file_size": len(data),
-        "upload_status": "ready",
-    }
+        public_url = uploaded["public_url"]
+        public_check = await s20_check_public_image(public_url)
+        main_flag = str(is_main or "").lower() == "true"
 
-    saved = await store.insert("product_images", image_payload)
-    if not saved.get("success"):
-        return JSONResponse(status_code=400, content={
-            "success": False,
-            "error": "A imagem foi enviada, mas não foi gravada no Product Master.",
-            "public_url": public_url,
-            "database": saved,
-        })
+        if main_flag:
+            await store.update(
+                "product_images",
+                f"product_id=eq.{quote(product_id, safe='-')}&deleted_at=is.null",
+                {"is_main": False},
+            )
 
-    if main_flag or not product.get("primary_image_url"):
-        await store.update(
-            "products",
-            f"id=eq.{quote(product_id, safe='-')}",
-            {
-                "primary_image_url": public_url,
-                "sync_status": "pending",
-            },
-        )
-
-    await s18_history(
-        product_id,
-        "storage_image_uploaded",
-        f"Imagem {file.filename} enviada ao Supabase Storage.",
-        payload={
-            "public_url": public_url,
+        image_payload = {
+            "company_id": DEFAULT_COMPANY_ID,
+            "product_id": product_id,
+            "url": public_url,
+            "position": s19int(position, 0),
+            "is_main": main_flag,
+            "alt_text": str(alt_text or "").strip() or None,
+            "source": "supabase_storage",
+            "hash": file_hash,
+            "storage_bucket": SUPABASE_STORAGE_BUCKET,
             "storage_path": object_path,
+            "file_name": str(file.filename or object_name),
             "mime_type": content_type,
             "file_size": len(data),
-            "is_main": main_flag,
-        },
-    )
+            "upload_status": "ready",
+            "validation_status": "valid" if public_check.get("success") else "pending",
+            "validation_message": public_check.get("error") or None,
+        }
 
-    await store.insert("logs", {
-        "company_id": DEFAULT_COMPANY_ID,
-        "event_type": "product_image_upload",
-        "level": "info",
-        "message": f"Imagem enviada para o produto {product.get('sku')}",
-        "payload": {
+        saved = await store.insert("product_images", image_payload)
+        if not saved.get("success"):
+            return JSONResponse(status_code=400, content={
+                "success": False,
+                "error": "Imagem enviada ao Storage, mas não gravada no Product Master.",
+                "public_url": public_url,
+                "database": saved,
+            })
+
+        if main_flag or not product.get("primary_image_url"):
+            await store.update(
+                "products",
+                f"id=eq.{quote(product_id, safe='-')}",
+                {"primary_image_url": public_url, "sync_status": "pending"},
+            )
+
+        await s18_history(
+            product_id,
+            "storage_image_uploaded",
+            f"Imagem {file.filename} enviada ao Supabase Storage.",
+            payload={"public_url": public_url, "storage_path": object_path, "is_main": main_flag},
+        )
+        return RedirectResponse(f"/product-master/{product_id}/images", status_code=303)
+
+    except Exception as exc:
+        return JSONResponse(status_code=500, content={
+            "success": False,
+            "version": APP_VERSION,
+            "error": "Falha interna no upload.",
+            "error_type": type(exc).__name__,
+            "detail": str(exc),
             "product_id": product_id,
-            "public_url": public_url,
-            "storage_path": object_path,
-        },
-    })
-
-    return RedirectResponse(f"/product-master/{product_id}/images", status_code=303)
+        })
 
 
 @app.get("/api/storage/products/{product_id}/validate")
@@ -5092,4 +5102,209 @@ async def upload_manager_status():
         "service_role_configured": bool(SUPABASE_SERVICE_ROLE_KEY),
         "checks": checks,
         "pages": ["/upload-manager", "/upload-manager/sql", "/listing-automation"],
+    }
+
+
+# ==========================================================
+# SPRINT 20.1 - IMAGE MANAGER ENTERPRISE
+# Excluir, principal, ordenar e limpar registros inválidos.
+# ==========================================================
+
+async def s201_get_image(image_id):
+    result = await store.select(
+        "product_images",
+        f"select=*&id=eq.{quote(str(image_id), safe='-')}&limit=1"
+    )
+    rows = result.get("data") or []
+    return rows[0] if rows else None
+
+
+async def s201_delete_storage_object(bucket, object_path):
+    import httpx
+    if not bucket or not object_path:
+        return {"success": True, "skipped": True}
+
+    url = (
+        f"{SUPABASE_URL.rstrip('/')}/storage/v1/object/"
+        f"{quote(str(bucket), safe='-_')}/{quote(str(object_path), safe='/-_.')}"
+    )
+    headers = {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.delete(url, headers=headers)
+        return {
+            "success": response.status_code in [200, 204, 404],
+            "status_code": response.status_code,
+            "raw": response.text[:1000],
+        }
+    except Exception as exc:
+        return {"success": False, "error_type": type(exc).__name__, "error": str(exc)}
+
+
+async def s201_refresh_primary(product_id):
+    result = await store.select(
+        "product_images",
+        f"select=*&product_id=eq.{quote(str(product_id), safe='-')}&deleted_at=is.null&order=is_main.desc,position.asc,created_at.asc&limit=1"
+    )
+    rows = result.get("data") or []
+    primary_url = rows[0].get("url") if rows else None
+    if rows and not rows[0].get("is_main"):
+        await store.update(
+            "product_images",
+            f"id=eq.{quote(str(rows[0].get('id')), safe='-')}",
+            {"is_main": True},
+        )
+    await store.update(
+        "products",
+        f"id=eq.{quote(str(product_id), safe='-')}",
+        {"primary_image_url": primary_url, "sync_status": "pending"},
+    )
+    return primary_url
+
+
+@app.post("/api/image-manager/{image_id}/main")
+async def image_manager_set_main(image_id: str):
+    image = await s201_get_image(image_id)
+    if not image:
+        return JSONResponse(status_code=404, content={"success": False, "error": "Imagem não encontrada."})
+
+    product_id = image.get("product_id")
+    await store.update(
+        "product_images",
+        f"product_id=eq.{quote(str(product_id), safe='-')}&deleted_at=is.null",
+        {"is_main": False},
+    )
+    updated = await store.update(
+        "product_images",
+        f"id=eq.{quote(image_id, safe='-')}",
+        {"is_main": True},
+    )
+    await store.update(
+        "products",
+        f"id=eq.{quote(str(product_id), safe='-')}",
+        {"primary_image_url": image.get("url"), "sync_status": "pending"},
+    )
+    await s18_history(product_id, "main_image_changed", "Imagem principal alterada.", payload={"image_id": image_id})
+    return RedirectResponse(f"/product-master/{product_id}/images", status_code=303)
+
+
+@app.post("/api/image-manager/{image_id}/move")
+async def image_manager_move(image_id: str, request: Request):
+    image = await s201_get_image(image_id)
+    if not image:
+        return JSONResponse(status_code=404, content={"success": False, "error": "Imagem não encontrada."})
+
+    form = await request.form()
+    direction = str(form.get("direction") or "up")
+    current_position = int(image.get("position") or 0)
+    new_position = max(0, current_position - 1) if direction == "up" else current_position + 1
+
+    await store.update(
+        "product_images",
+        f"id=eq.{quote(image_id, safe='-')}",
+        {"position": new_position},
+    )
+    await s18_history(
+        image.get("product_id"),
+        "image_reordered",
+        f"Imagem movida para posição {new_position}.",
+        payload={"image_id": image_id, "old_position": current_position, "new_position": new_position},
+    )
+    return RedirectResponse(f"/product-master/{image.get('product_id')}/images", status_code=303)
+
+
+@app.post("/api/image-manager/{image_id}/delete")
+async def image_manager_delete(image_id: str):
+    image = await s201_get_image(image_id)
+    if not image:
+        return JSONResponse(status_code=404, content={"success": False, "error": "Imagem não encontrada."})
+
+    product_id = image.get("product_id")
+    storage_result = await s201_delete_storage_object(
+        image.get("storage_bucket"),
+        image.get("storage_path"),
+    )
+
+    deleted = await store.delete(
+        "product_images",
+        f"id=eq.{quote(image_id, safe='-')}",
+    )
+    if not deleted.get("success"):
+        return JSONResponse(status_code=400, content={
+            "success": False,
+            "error": "Não foi possível remover o registro da imagem.",
+            "database": deleted,
+            "storage": storage_result,
+        })
+
+    new_primary = await s201_refresh_primary(product_id)
+    await s18_history(
+        product_id,
+        "image_deleted",
+        "Imagem removida do Product Master.",
+        payload={
+            "image_id": image_id,
+            "url": image.get("url"),
+            "storage_result": storage_result,
+            "new_primary": new_primary,
+        },
+    )
+    return RedirectResponse(f"/product-master/{product_id}/images", status_code=303)
+
+
+@app.post("/api/image-manager/products/{product_id}/remove-invalid")
+async def image_manager_remove_invalid(product_id: str):
+    result = await store.select(
+        "product_images",
+        f"select=*&product_id=eq.{quote(product_id, safe='-')}"
+    )
+    images = result.get("data") or []
+    removed = []
+    for image in images:
+        url = str(image.get("url") or "")
+        if not url.lower().startswith(("http://", "https://")):
+            await store.delete("product_images", f"id=eq.{quote(str(image.get('id')), safe='-')}")
+            removed.append(image.get("id"))
+    await s201_refresh_primary(product_id)
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "product_id": product_id,
+        "removed_count": len(removed),
+        "removed_ids": removed,
+    }
+
+
+@app.get("/api/image-manager/status")
+async def image_manager_status():
+    result = await store.select("product_images", "select=*&limit=200")
+    images = result.get("data") or []
+    local_paths = [
+        i for i in images
+        if not str(i.get("url") or "").lower().startswith(("http://", "https://"))
+    ]
+    storage_images = [i for i in images if i.get("source") == "supabase_storage"]
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "module": "image_manager_enterprise",
+        "counts": {
+            "images_checked": len(images),
+            "storage_images": len(storage_images),
+            "invalid_or_local_paths": len(local_paths),
+        },
+        "features": [
+            "upload",
+            "delete_database",
+            "delete_storage",
+            "set_main",
+            "move_up",
+            "move_down",
+            "copy_public_url",
+            "validate_public_image",
+        ],
+        "pages": ["/upload-manager", "/product-master"],
     }

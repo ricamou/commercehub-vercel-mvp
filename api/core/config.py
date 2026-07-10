@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint20-upload-manager-supabase-storage"
+APP_VERSION = "enterprise-v5-sprint20-1-image-manager-enterprise"
 
 def env(name, default=""):
     value = os.getenv(name, default)
