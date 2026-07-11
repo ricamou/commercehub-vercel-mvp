@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint27-4-attribute-router-hotfix"
+S13_VERSION = "enterprise-v5-sprint28-marketplace-inspector"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -4597,7 +4597,7 @@ async def listing_details_page(listing_id: str):
 <p><b>Imagens:</b> {len(context['images'])}</p>
 <p><b>Descrição:</b><br>{s19e(listing.get('description') or '-')}</p>
 <a class='btn' href='/product-master/{product.get("id")}/listing'>Editar rascunho</a>
-<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a><a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a><a class='btn' href='/marketplace-intelligence/listing/{listing_id}'>Marketplace Intelligence</a><a class='btn' href='/publishing-lab/listing/{listing_id}'>Publishing Lab</a><a class='btn' href='/marketplace-rules/listing/{listing_id}'>Rules Engine</a>
+<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a><a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a><a class='btn' href='/marketplace-intelligence/listing/{listing_id}'>Marketplace Intelligence</a><a class='btn' href='/publishing-lab/listing/{listing_id}'>Publishing Lab</a><a class='btn' href='/marketplace-rules/listing/{listing_id}'>Rules Engine</a><a class='btn' href='/marketplace-inspector/listing/{listing_id}'>Marketplace Inspector</a>
 </div>
 <div class='card'><h2>Erros</h2><ul>{errors_html}</ul><h2>Alertas</h2><ul>{warnings_html}</ul></div>
 {publish_box}
@@ -8662,3 +8662,392 @@ async def s26_category_discovery(category_id):
         "variation_attributes": variation_attributes,
         "raw_attributes": attrs,
     }
+
+
+# ==========================================================
+# SPRINT 28 - MARKETPLACE INSPECTOR
+# Descobre exatamente o que o Mercado Livre exige antes da publicação.
+# ==========================================================
+
+def s28_json_dict(value):
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def s28_json_list(value):
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, list) else []
+        except Exception:
+            return []
+    return []
+
+
+def s28_attribute_requirement(attr):
+    tags = s28_json_dict(attr.get("tags"))
+    values = s28_json_list(attr.get("values"))
+    attribute_id = str(
+        attr.get("attribute_id")
+        or attr.get("id")
+        or ""
+    ).upper()
+
+    required = bool(
+        attr.get("required")
+        or attr.get("catalog_required")
+        or tags.get("required")
+        or tags.get("catalog_required")
+        or tags.get("conditional_required")
+    )
+
+    if values:
+        accepted_format = "value_id ou valor listado"
+    else:
+        accepted_format = str(attr.get("value_type") or "value_name")
+
+    return {
+        "field": attribute_id,
+        "name": attr.get("name") or attribute_id,
+        "required": required,
+        "catalog_required": bool(attr.get("catalog_required") or tags.get("catalog_required")),
+        "conditional_required": bool(tags.get("conditional_required")),
+        "location": s26_attr_location(attr),
+        "accepted_format": accepted_format,
+        "accepted_values": values,
+        "value_type": attr.get("value_type"),
+        "source": f"/categories/{{category_id}}/attributes",
+    }
+
+
+async def s28_build_payload_preview(context, listing):
+    payload = s19_build_ml_payload(context, listing, mode="user_product")
+    payload["attributes"] = await s21_payload_attributes(
+        context["product"].get("id"),
+        listing.get("category_id"),
+        payload.get("attributes"),
+    )
+    return payload
+
+
+async def s28_conditional_check(category_id, payload):
+    path = f"/categories/{quote(str(category_id), safe='-_')}/attributes/conditional"
+    first = await ml_request(path, method="POST", payload=payload)
+
+    if first.get("success"):
+        return {
+            "success": True,
+            "request_shape": "full_item",
+            "result": first,
+        }
+
+    second = await ml_request(
+        path,
+        method="POST",
+        payload={"attributes": payload.get("attributes") or []},
+    )
+
+    return {
+        "success": bool(second.get("success")),
+        "request_shape": "attributes_only",
+        "result": second if second.get("success") else first,
+        "fallback_result": second,
+    }
+
+
+def s28_conditional_required_ids(conditional):
+    result = conditional.get("result") or {}
+    data = result.get("data") or {}
+    required = data.get("required_attributes") or []
+    ids = []
+
+    for item in required:
+        if isinstance(item, dict) and item.get("id"):
+            ids.append(str(item.get("id")).upper())
+
+    return sorted(set(ids))
+
+
+def s28_current_attribute_ids(payload):
+    ids = {
+        str(item.get("id") or "").upper()
+        for item in (payload.get("attributes") or [])
+        if item.get("id")
+    }
+
+    for variation in payload.get("variations") or []:
+        for item in variation.get("attribute_combinations") or []:
+            if item.get("id"):
+                ids.add(str(item.get("id")).upper())
+        for item in variation.get("attributes") or []:
+            if item.get("id"):
+                ids.add(str(item.get("id")).upper())
+
+    return sorted(ids)
+
+
+async def s28_inspect_listing(listing_id):
+    listing = await s19_get_listing(listing_id)
+    if not listing:
+        return {
+            "success": False,
+            "status_code": 404,
+            "error": "Anúncio não encontrado.",
+        }
+
+    context = await s19_product_context(listing.get("product_id"))
+    if not context:
+        return {
+            "success": False,
+            "status_code": 404,
+            "error": "Produto não encontrado.",
+        }
+
+    category_id = listing.get("category_id")
+
+    category_result = await ml_request(
+        f"/categories/{quote(str(category_id), safe='-_')}"
+    )
+    attrs_result = await ml_request(
+        f"/categories/{quote(str(category_id), safe='-_')}/attributes"
+    )
+    listing_types_result = await ml_request("/sites/MLB/listing_types")
+
+    payload = await s28_build_payload_preview(context, listing)
+    conditional = await s28_conditional_check(category_id, payload)
+
+    category_data = category_result.get("data") or {}
+    raw_attributes = attrs_result.get("data") or []
+    requirements = []
+
+    for attr in raw_attributes:
+        requirement = s28_attribute_requirement(attr)
+        requirement["source"] = f"/categories/{category_id}/attributes"
+        requirements.append(requirement)
+
+    conditional_ids = s28_conditional_required_ids(conditional)
+    current_ids = s28_current_attribute_ids(payload)
+
+    by_id = {item.get("field"): item for item in requirements}
+    for attribute_id in conditional_ids:
+        if attribute_id in by_id:
+            by_id[attribute_id]["required"] = True
+            by_id[attribute_id]["conditional_required"] = True
+            by_id[attribute_id]["source"] = (
+                f"/categories/{category_id}/attributes/conditional"
+            )
+        else:
+            requirements.append({
+                "field": attribute_id,
+                "name": attribute_id,
+                "required": True,
+                "catalog_required": False,
+                "conditional_required": True,
+                "location": "item",
+                "accepted_format": "consultar metadados",
+                "accepted_values": [],
+                "value_type": None,
+                "source": f"/categories/{category_id}/attributes/conditional",
+            })
+
+    missing = sorted(
+        item.get("field")
+        for item in requirements
+        if item.get("required") and item.get("field") not in current_ids
+    )
+
+    invalid_or_unknown = sorted(
+        attribute_id
+        for attribute_id in current_ids
+        if attribute_id not in {
+            str(item.get("field") or "").upper()
+            for item in requirements
+        }
+    )
+
+    exact_requirements = {
+        "category_id": category_id,
+        "category_name": category_data.get("name"),
+        "domain_id": category_data.get("domain_id"),
+        "current_payload_attribute_ids": current_ids,
+        "conditional_required_ids": conditional_ids,
+        "missing_required_ids": missing,
+        "unknown_sent_ids": invalid_or_unknown,
+        "listing_type_id": listing.get("listing_type_id") or "gold_special",
+        "listing_types_available": listing_types_result.get("data") or [],
+        "can_publish": not missing and not invalid_or_unknown,
+        "requirements": requirements,
+    }
+
+    run_id = str(uuid.uuid4())
+    run_payload = {
+        "id": run_id,
+        "company_id": DEFAULT_COMPANY_ID,
+        "marketplace": "mercado_livre",
+        "product_id": listing.get("product_id"),
+        "listing_id": listing.get("id"),
+        "category_id": category_id,
+        "status": "ready" if exact_requirements["can_publish"] else "blocked",
+        "category_snapshot": category_data,
+        "attributes_snapshot": raw_attributes,
+        "conditional_snapshot": conditional,
+        "listing_types_snapshot": listing_types_result.get("data") or [],
+        "payload_snapshot": payload,
+        "requirements_snapshot": exact_requirements,
+    }
+    saved = await store.insert("marketplace_inspector_runs", run_payload)
+
+    if saved.get("success"):
+        for requirement in requirements:
+            await store.insert("marketplace_inspector_findings", {
+                "run_id": run_id,
+                "finding_type": (
+                    "conditional_required"
+                    if requirement.get("conditional_required")
+                    else "required"
+                    if requirement.get("required")
+                    else "optional"
+                ),
+                "field_name": requirement.get("field"),
+                "required": bool(requirement.get("required")),
+                "accepted_format": requirement.get("accepted_format"),
+                "accepted_values": requirement.get("accepted_values") or [],
+                "location": requirement.get("location"),
+                "source_endpoint": requirement.get("source"),
+                "evidence": requirement,
+            })
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "run_id": run_id,
+        "saved": bool(saved.get("success")),
+        "listing": listing,
+        "product": context.get("product"),
+        "category": category_result,
+        "attributes": attrs_result,
+        "conditional": conditional,
+        "listing_types": listing_types_result,
+        "payload_preview": payload,
+        "inspection": exact_requirements,
+    }
+
+
+@app.get("/api/marketplace-inspector/listing/{listing_id}")
+async def marketplace_inspector_api(listing_id: str):
+    result = await s28_inspect_listing(listing_id)
+    if not result.get("success"):
+        return JSONResponse(
+            status_code=int(result.get("status_code") or 400),
+            content=result,
+        )
+    return result
+
+
+@app.get("/marketplace-inspector/listing/{listing_id}", response_class=HTMLResponse)
+async def marketplace_inspector_page(listing_id: str):
+    result = await s28_inspect_listing(listing_id)
+    if not result.get("success"):
+        return HTMLResponse(
+            shell(
+                "Marketplace Inspector",
+                f"<div class='card'><h2>Erro</h2><p>{s19e(result.get('error'))}</p></div>",
+            ),
+            status_code=int(result.get("status_code") or 400),
+        )
+
+    inspection = result.get("inspection") or {}
+    requirements = inspection.get("requirements") or []
+
+    rows = ""
+    for item in requirements:
+        if not item.get("required") and not item.get("conditional_required"):
+            continue
+
+        values = item.get("accepted_values") or []
+        values_text = ", ".join(
+            str(option.get("name") or option.get("id") or "")
+            for option in values[:6]
+            if isinstance(option, dict)
+        )
+
+        rows += f"""
+<tr>
+<td>{s19e(item.get('field'))}</td>
+<td>{s19e(item.get('name'))}</td>
+<td>{'SIM' if item.get('required') else 'NÃO'}</td>
+<td>{'SIM' if item.get('conditional_required') else 'NÃO'}</td>
+<td>{s19e(item.get('location'))}</td>
+<td>{s19e(item.get('accepted_format'))}</td>
+<td>{s19e(values_text or '-')}</td>
+<td>{s19e(item.get('source'))}</td>
+</tr>
+"""
+
+    missing = inspection.get("missing_required_ids") or []
+    unknown = inspection.get("unknown_sent_ids") or []
+
+    missing_html = "".join(
+        f"<li>{s19e(item)}</li>" for item in missing
+    ) or "<li>Nenhum campo obrigatório faltando.</li>"
+
+    unknown_html = "".join(
+        f"<li>{s19e(item)}</li>" for item in unknown
+    ) or "<li>Nenhum atributo desconhecido no payload.</li>"
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Status</span><strong>{'LIBERADO' if inspection.get('can_publish') else 'BLOQUEADO'}</strong></div>
+  <div class='metric'><span>Categoria</span><strong>{s19e(inspection.get('category_id'))}</strong></div>
+  <div class='metric'><span>Condicionais</span><strong>{len(inspection.get('conditional_required_ids') or [])}</strong></div>
+  <div class='metric'><span>Faltando</span><strong>{len(missing)}</strong></div>
+</div>
+
+<div class='card'>
+<h2>Exigências exatas do Mercado Livre</h2>
+<p><b>Categoria:</b> {s19e(inspection.get('category_name') or inspection.get('category_id'))}</p>
+<p><b>Listing type atual:</b> {s19e(inspection.get('listing_type_id'))}</p>
+<table>
+<thead>
+<tr>
+<th>Campo</th>
+<th>Nome</th>
+<th>Obrigatório</th>
+<th>Condicional</th>
+<th>Local</th>
+<th>Formato aceito</th>
+<th>Valores aceitos</th>
+<th>Fonte oficial</th>
+</tr>
+</thead>
+<tbody>{rows}</tbody>
+</table>
+</div>
+
+<div class='card'>
+<h2>Campos que ainda faltam</h2>
+<ul>{missing_html}</ul>
+<h2>Atributos enviados que não existem na categoria</h2>
+<ul>{unknown_html}</ul>
+</div>
+
+<div class='card'>
+<h2>Payload atual analisado</h2>
+<pre>{s19e(json.dumps(result.get('payload_preview') or {}, ensure_ascii=False, indent=2))}</pre>
+</div>
+
+<div class='card'>
+<a class='btn' href='/api/marketplace-inspector/listing/{listing_id}'>Ver JSON técnico completo</a>
+<a class='btn' href='/product-master/{result.get("listing", {}).get("product_id")}/listing'>Voltar ao anúncio</a>
+</div>
+"""
+    return HTMLResponse(shell("Marketplace Inspector", content))

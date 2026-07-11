@@ -1,0 +1,20 @@
+SPRINT 28 — MARKETPLACE INSPECTOR
+
+1. Envie todos os arquivos pelo GitHub Web.
+2. Aguarde o deploy.
+3. Abra /api/health.
+4. Confirme:
+   enterprise-v5-sprint28-marketplace-inspector
+5. No Supabase, abra SQL Editor > New query.
+6. Cole Sprint28_Marketplace_Inspector.sql.
+7. Clique em Run.
+8. Abra o anúncio.
+9. Clique em Marketplace Inspector.
+10. Confira:
+    - Status
+    - Campos obrigatórios
+    - Condicionais
+    - Formato aceito
+    - Fonte oficial
+    - Campos faltantes
+11. Não publique enquanto o Inspector mostrar BLOQUEADO.

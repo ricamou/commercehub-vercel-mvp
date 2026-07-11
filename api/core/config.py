@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint27-4-attribute-router-hotfix"
+APP_VERSION = "enterprise-v5-sprint28-marketplace-inspector"
 
 def env(name, default=""):
     value = os.getenv(name, default)
