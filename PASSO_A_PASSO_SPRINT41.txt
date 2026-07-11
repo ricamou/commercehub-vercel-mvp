@@ -1,0 +1,5 @@
+1. Envie os arquivos.
+2. Confirme /api/health.
+3. Execute a query da Sprint 41.
+4. Abra /marketplace-optimization.
+5. Clique em Analisar todos os anúncios.

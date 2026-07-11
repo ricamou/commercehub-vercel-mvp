@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint40-order-center"
+S13_VERSION = "enterprise-v5-sprint41-marketplace-quality-engine"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -13654,3 +13654,152 @@ async def order_center_detail_page(external_order_id: str):
 </div>
 """
     return HTMLResponse(shell(f"Pedido {external_order_id}", content))
+
+
+# ==========================================================
+# SPRINT 41 - MARKETPLACE QUALITY ENGINE
+# ==========================================================
+
+def s41_quality_level(score):
+    if score >= 90: return "excellent"
+    if score >= 75: return "good"
+    if score >= 50: return "regular"
+    return "basic"
+
+
+def s41_attribute_ids(item):
+    return {str(r.get("id") or "").upper() for r in (item.get("attributes") or []) if isinstance(r, dict) and r.get("id")}
+
+
+def s41_required_attribute_ids(rows):
+    out = set()
+    for row in rows or []:
+        if not isinstance(row, dict): continue
+        tags = row.get("tags") or {}
+        if tags.get("required") or tags.get("catalog_required") or tags.get("conditional_required"):
+            out.add(str(row.get("id") or "").upper())
+    return out
+
+
+def s41_recommendations(objectives):
+    mapping = {
+        "photos": (1, "sync_all_supplier_photos", "Buscar e enviar todas as fotos válidas do fornecedor."),
+        "attributes": (1, "complete_marketplace_attributes", "Cruzar os metadados da categoria com os dados do fornecedor."),
+        "regulatory": (1, "resolve_regulatory_data", "Verificar homologações exigidas pela categoria."),
+        "description": (2, "generate_and_publish_description", "Criar uma descrição completa e publicar no anúncio."),
+        "warranty": (3, "complete_warranty_terms", "Preencher tipo e prazo de garantia quando disponíveis."),
+        "free_shipping": (4, "evaluate_free_shipping", "Avaliar frete grátis conforme margem e regras da empresa."),
+        "installments": (4, "evaluate_installments", "Avaliar condições de parcelamento do anúncio."),
+        "wholesale": (5, "evaluate_wholesale_prices", "Avaliar preços por quantidade."),
+    }
+    actions = []
+    for obj in objectives:
+        if obj.get("completed") or obj.get("code") not in mapping: continue
+        priority, action, message = mapping[obj["code"]]
+        actions.append({"priority": priority, "action": action, "message": message})
+    return sorted(actions, key=lambda x: x["priority"])
+
+
+async def s41_listing_by_external_id(external_item_id):
+    result = await store.select("listings", "select=*&external_id=eq." + quote(str(external_item_id), safe="-_") + "&limit=1")
+    rows = result.get("data") or []
+    return rows[0] if rows else {}
+
+
+async def s41_analyze_item(external_item_id):
+    item_result = await ml_request(f"/items/{quote(str(external_item_id), safe='-_')}")
+    if not item_result.get("success"):
+        return {"success": False, "status_code": item_result.get("status_code") or 400, "error": item_result.get("error") or "Falha ao consultar o anúncio."}
+    item = item_result.get("data") or {}
+    attrs_result = await ml_request(f"/categories/{quote(str(item.get('category_id')), safe='-_')}/attributes")
+    category_attrs = attrs_result.get("data") if attrs_result.get("success") else []
+    category_attrs = category_attrs if isinstance(category_attrs, list) else []
+    sent = s41_attribute_ids(item)
+    required = s41_required_attribute_ids(category_attrs)
+    photos_count = len(item.get("pictures") or [])
+    attributes_filled = len(required & sent)
+    attributes_total = len(required)
+    description_present = bool(item.get("descriptions"))
+    warranty_present = bool(item.get("warranty") or item.get("sale_terms"))
+    free_shipping = bool((item.get("shipping") or {}).get("free_shipping"))
+    installments_ready = str(item.get("listing_type_id") or "") in {"gold_pro", "gold_premium"}
+    wholesale_ready = bool(item.get("differential_pricing"))
+    regulatory_ids = {"ANATEL_HOMOLOGATION_NUMBER","ANATEL_HOMOLOGATION_LABEL","INMETRO_CERTIFICATION"}
+    regulatory_required = bool(required & regulatory_ids)
+    regulatory_ready = (not regulatory_required) or bool(sent & regulatory_ids)
+    objectives = [
+      {"code":"attributes","title":"Características do produto","completed": attributes_total == 0 or attributes_filled >= attributes_total,"impact":"high","details":{"filled":attributes_filled,"required":attributes_total,"missing":sorted(required-sent)}},
+      {"code":"photos","title":"Fotos do produto","completed":photos_count >= 6,"impact":"high","details":{"current":photos_count,"target":6}},
+      {"code":"regulatory","title":"Homologações e certificações","completed":regulatory_ready,"impact":"high","details":{"required":regulatory_required}},
+      {"code":"description","title":"Descrição completa","completed":description_present,"impact":"medium","details":{}},
+      {"code":"free_shipping","title":"Frete grátis","completed":free_shipping,"impact":"medium","details":{}},
+      {"code":"installments","title":"Parcelamento competitivo","completed":installments_ready,"impact":"medium","details":{}},
+      {"code":"wholesale","title":"Preço por quantidade","completed":wholesale_ready,"impact":"low","details":{}},
+      {"code":"warranty","title":"Garantia","completed":warranty_present,"impact":"low","details":{}},
+    ]
+    weights = {"attributes":25,"photos":25,"regulatory":15,"description":10,"free_shipping":10,"installments":5,"wholesale":5,"warranty":5}
+    score = sum(weights[o["code"]] for o in objectives if o["completed"])
+    listing = await s41_listing_by_external_id(external_item_id)
+    recommendations = s41_recommendations(objectives)
+    payload = {"company_id":DEFAULT_COMPANY_ID,"marketplace":"mercado_livre","listing_id":listing.get("id"),"product_id":listing.get("product_id"),"external_item_id":external_item_id,"score":score,"level":s41_quality_level(score),"photos_count":photos_count,"attributes_filled":attributes_filled,"attributes_total":attributes_total,"description_present":description_present,"warranty_present":warranty_present,"free_shipping":free_shipping,"installments_ready":installments_ready,"wholesale_ready":wholesale_ready,"regulatory_ready":regulatory_ready,"objectives":objectives,"recommendations":recommendations,"marketplace_payload":item,"analyzed_at":__import__("datetime").datetime.utcnow().isoformat()}
+    saved = await store.insert("marketplace_quality_reports", payload)
+    return {"success":True,"version":APP_VERSION,"external_item_id":external_item_id,"listing_id":listing.get("id"),"product_id":listing.get("product_id"),"score":score,"level":s41_quality_level(score),"objectives":objectives,"recommendations":recommendations,"saved":bool(saved.get("success")),"save_error":saved.get("error")}
+
+
+async def s41_latest_report(external_item_id):
+    result = await store.select("marketplace_quality_reports", "select=*&external_item_id=eq." + quote(str(external_item_id), safe="-_") + "&order=analyzed_at.desc&limit=1")
+    rows = result.get("data") or []
+    return rows[0] if rows else {}
+
+
+async def s41_published_items(limit=100):
+    result = await store.select("listings", "select=*&external_id=not.is.null&order=published_at.desc&limit=" + str(max(1,min(int(limit or 100),100))))
+    return result.get("data") or []
+
+
+@app.post("/api/marketplace-quality/analyze/{external_item_id}")
+async def marketplace_quality_analyze(external_item_id: str):
+    result = await s41_analyze_item(external_item_id)
+    return JSONResponse(status_code=200 if result.get("success") else int(result.get("status_code") or 400), content=result)
+
+
+@app.post("/api/marketplace-quality/analyze-all")
+async def marketplace_quality_analyze_all(limit: int = 50):
+    results = []
+    for listing in await s41_published_items(limit):
+        if listing.get("external_id"):
+            try: results.append(await s41_analyze_item(listing.get("external_id")))
+            except Exception as exc: results.append({"success":False,"external_item_id":listing.get("external_id"),"error":str(exc)})
+    return {"success":True,"version":APP_VERSION,"processed":len(results),"results":results}
+
+
+@app.get("/api/marketplace-quality/report/{external_item_id}")
+async def marketplace_quality_report(external_item_id: str):
+    report = await s41_latest_report(external_item_id)
+    if not report: return JSONResponse(status_code=404, content={"success":False,"error":"Relatório ainda não gerado."})
+    return {"success":True,"report":report}
+
+
+@app.post("/api/marketplace-optimization/plan/{external_item_id}")
+async def marketplace_optimization_plan(external_item_id: str):
+    analysis = await s41_analyze_item(external_item_id)
+    if not analysis.get("success"): return JSONResponse(status_code=int(analysis.get("status_code") or 400), content=analysis)
+    created = await store.insert("marketplace_optimization_jobs", {"company_id":DEFAULT_COMPANY_ID,"marketplace":"mercado_livre","listing_id":analysis.get("listing_id"),"product_id":analysis.get("product_id"),"external_item_id":external_item_id,"status":"planned","actions":analysis.get("recommendations") or [],"before_score":analysis.get("score")})
+    return {"success":bool(created.get("success")),"external_item_id":external_item_id,"before_score":analysis.get("score"),"actions":analysis.get("recommendations") or [],"message":"Plano de otimização criado. As ações ainda não foram aplicadas.","error":created.get("error")}
+
+
+@app.get("/marketplace-optimization", response_class=HTMLResponse)
+async def marketplace_optimization_page(limit: int = 50):
+    rows_data = []
+    for listing in await s41_published_items(limit):
+        rows_data.append({"listing":listing,"report":await s41_latest_report(listing.get("external_id")) if listing.get("external_id") else {}})
+    total = len(rows_data); excellent = sum(1 for r in rows_data if (r["report"] or {}).get("level")=="excellent"); good = sum(1 for r in rows_data if (r["report"] or {}).get("level")=="good"); basic = total-excellent-good
+    rows = "".join(
+      f"<tr><td>{r['listing'].get('external_id') or '-'}</td><td>{r['listing'].get('title') or r['listing'].get('name') or '-'}</td><td>{(r['report'] or {}).get('score','-')}</td><td>{(r['report'] or {}).get('level','não analisado')}</td><td>{(r['report'] or {}).get('photos_count','-')}</td><td><form method='post' action='/api/marketplace-quality/analyze/{r['listing'].get('external_id')}' style='display:inline'><button class='btn' type='submit'>Analisar</button></form> <form method='post' action='/api/marketplace-optimization/plan/{r['listing'].get('external_id')}' style='display:inline'><button class='btn' type='submit'>Criar plano</button></form></td></tr>" for r in rows_data
+    ) or "<tr><td colspan='6'>Nenhum anúncio publicado encontrado.</td></tr>"
+    content = f"""
+<div class='grid'><div class='metric'><span>Anúncios</span><strong>{total}</strong></div><div class='metric'><span>Excelentes</span><strong>{excellent}</strong></div><div class='metric'><span>Bons</span><strong>{good}</strong></div><div class='metric'><span>Precisam melhorar</span><strong>{basic}</strong></div></div>
+<div class='card'><h2>Análise geral</h2><form method='post' action='/api/marketplace-quality/analyze-all?limit=50'><button class='btn' type='submit'>Analisar todos os anúncios</button></form></div>
+<div class='card'><h2>Marketplace Optimization Center</h2><table><thead><tr><th>Item ML</th><th>Produto</th><th>Score</th><th>Nível</th><th>Fotos</th><th>Ações</th></tr></thead><tbody>{rows}</tbody></table></div>
+"""
+    return HTMLResponse(shell("Marketplace Optimization", content))
