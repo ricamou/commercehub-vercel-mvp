@@ -1,0 +1,1 @@
+Não execute nova query. Esta atualização corrige a lógica do backend.

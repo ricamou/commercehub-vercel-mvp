@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint34-unified-payload-controlled-publish"
+S13_VERSION = "enterprise-v5-sprint35-conditional-identifier-logic"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -9548,6 +9548,8 @@ async def s30_build_readiness(listing_id):
         "official_requirements": inspection,
     }
 
+    readiness = s35_reconcile_identifier_requirements(readiness)
+
     query = (
         "select=*&product_id=eq." + quote(str(product.get("id")), safe="-")
         + "&category_id=eq." + quote(str(category_id), safe="-_")
@@ -9563,11 +9565,11 @@ async def s30_build_readiness(listing_id):
         "listing_id": listing.get("id"),
         "category_id": category_id,
         "status": readiness["status"],
-        "readiness_score": score,
-        "required_fields": required_fields,
-        "completed_fields": completed_fields,
-        "missing_fields": missing_fields,
-        "invalid_fields": invalid_fields,
+        "readiness_score": readiness.get("readiness_score") or 0,
+        "required_fields": readiness.get("required_fields") or [],
+        "completed_fields": readiness.get("completed_fields") or [],
+        "missing_fields": readiness.get("missing_fields") or [],
+        "invalid_fields": readiness.get("invalid_fields") or [],
         "source_map": source_map,
         "payload_preview": payload_preview,
         "official_requirements": inspection,
@@ -11499,28 +11501,15 @@ async def s34_listing_payload(listing_id):
 
 def s34_is_controlled_attempt_allowed(readiness, unified):
     payload = unified.get("payload") or {}
-    identifiers = unified.get("identifiers") or {}
+    identifiers = s35_identifier_requirement_state(payload)
 
-    missing_ids = {
-        str(item.get("field") or "").upper()
-        for item in (readiness.get("missing_fields") or [])
-    }
+    missing = readiness.get("missing_fields") or []
+    invalid = readiness.get("invalid_fields") or []
 
-    invalid_ids = {
-        str(item.get("field") or "").upper()
-        for item in (readiness.get("invalid_fields") or [])
-    }
-
-    # Tentativa controlada somente quando:
-    # - não há valores inválidos;
-    # - o único campo faltante é GTIN;
-    # - EMPTY_GTIN_REASON está no item;
-    # - não enviamos GTIN e motivo simultaneamente.
     return bool(
-        not invalid_ids
-        and missing_ids == {"GTIN"}
-        and identifiers.get("empty_gtin_reason_present")
-        and identifiers.get("empty_gtin_reason_location") == "item.attributes"
+        not missing
+        and not invalid
+        and identifiers.get("satisfied")
         and not identifiers.get("conflict")
         and payload.get("category_id")
         and payload.get("pictures")
@@ -11542,7 +11531,9 @@ async def unified_payload_api(listing_id: str):
         "version": APP_VERSION,
         "listing_id": listing_id,
         "locations": result.get("locations"),
-        "identifiers": result.get("identifiers"),
+        "identifiers": s35_identifier_requirement_state(
+            result.get("payload") or {}
+        ),
         "payload": result.get("payload"),
     }
 
@@ -11571,8 +11562,8 @@ async def controlled_publication_attempt(listing_id: str, request: Request):
                 "success": False,
                 "error": (
                     "A tentativa controlada não foi liberada. "
-                    "Ela só é permitida quando a única pendência é GTIN "
-                    "e EMPTY_GTIN_REASON está corretamente em item.attributes."
+                    "O payload precisa estar sem pendências, sem valores inválidos "
+                    "e conter GTIN válido ou um motivo de ausência aceito."
                 ),
                 "readiness": readiness,
                 "unified_payload": {
@@ -11641,3 +11632,132 @@ async def controlled_publication_attempt(listing_id: str, request: Request):
         "item": item,
         "payload_sent": payload,
     }
+
+
+# ==========================================================
+# SPRINT 35 - CONDITIONAL IDENTIFIER LOGIC
+# GTIN e EMPTY_GTIN_REASON são alternativas condicionais,
+# não dois campos obrigatórios simultâneos.
+# ==========================================================
+
+def s35_identifier_requirement_state(payload):
+    attrs = payload.get("attributes") or []
+    locations = s34_payload_attribute_locations(payload)
+
+    gtin_value = None
+    empty_reason_value = None
+
+    for item in attrs:
+        attr_id = str(item.get("id") or "").upper()
+        if attr_id == "GTIN":
+            gtin_value = item.get("value_name") or item.get("value_id")
+        elif attr_id == "EMPTY_GTIN_REASON":
+            empty_reason_value = item.get("value_id") or item.get("value_name")
+
+    for variation in payload.get("variations") or []:
+        for item in variation.get("attributes") or []:
+            attr_id = str(item.get("id") or "").upper()
+            if attr_id == "GTIN" and not gtin_value:
+                gtin_value = item.get("value_name") or item.get("value_id")
+            elif attr_id == "EMPTY_GTIN_REASON" and not empty_reason_value:
+                empty_reason_value = item.get("value_id") or item.get("value_name")
+
+    valid_gtin = bool(gtin_value and s212_valid_gtin(gtin_value))
+    has_empty_reason = bool(empty_reason_value)
+
+    return {
+        "gtin_value": gtin_value,
+        "valid_gtin": valid_gtin,
+        "gtin_location": locations.get("GTIN"),
+        "empty_gtin_reason_value": empty_reason_value,
+        "has_empty_gtin_reason": has_empty_reason,
+        "empty_gtin_reason_location": locations.get("EMPTY_GTIN_REASON"),
+        "satisfied": valid_gtin or has_empty_reason,
+        "conflict": valid_gtin and has_empty_reason,
+    }
+
+
+def s35_reconcile_identifier_requirements(readiness):
+    payload = readiness.get("payload_preview") or {}
+    state = s35_identifier_requirement_state(payload)
+
+    missing = list(readiness.get("missing_fields") or [])
+    completed = list(readiness.get("completed_fields") or [])
+    required = list(readiness.get("required_fields") or [])
+
+    missing_by_id = {
+        str(item.get("field") or "").upper(): item
+        for item in missing
+    }
+
+    completed_ids = {str(item).upper() for item in completed}
+
+    # GTIN válido satisfaz a condição. EMPTY_GTIN_REASON não deve continuar faltando.
+    if state.get("valid_gtin"):
+        missing_by_id.pop("GTIN", None)
+        missing_by_id.pop("EMPTY_GTIN_REASON", None)
+
+        if "GTIN" not in completed_ids:
+            completed.append("GTIN")
+
+        completed = [
+            item for item in completed
+            if str(item).upper() != "EMPTY_GTIN_REASON"
+        ]
+
+    # Sem GTIN, mas com motivo: a condição de identificador está preenchida.
+    elif state.get("has_empty_gtin_reason"):
+        missing_by_id.pop("GTIN", None)
+        missing_by_id.pop("EMPTY_GTIN_REASON", None)
+
+        if "EMPTY_GTIN_REASON" not in completed_ids:
+            completed.append("EMPTY_GTIN_REASON")
+
+        completed = [
+            item for item in completed
+            if str(item).upper() != "GTIN"
+        ]
+
+    # Sem nenhum dos dois: exibe uma única pendência clara.
+    else:
+        gtin_requirement = missing_by_id.get("GTIN") or {
+            "field": "GTIN_OR_EMPTY_GTIN_REASON",
+            "name": "GTIN ou motivo de ausência de GTIN",
+            "location": "item.attributes ou variations[].attributes",
+            "accepted_format": "GTIN válido ou value_id permitido",
+            "source_endpoint": "/categories/{category_id}/attributes/conditional".format(
+                category_id=readiness.get("category_id") or ""
+            ),
+        }
+
+        missing_by_id.pop("GTIN", None)
+        missing_by_id.pop("EMPTY_GTIN_REASON", None)
+        missing_by_id["GTIN_OR_EMPTY_GTIN_REASON"] = gtin_requirement
+
+    reconciled_missing = list(missing_by_id.values())
+
+    unique_completed = []
+    seen = set()
+    for item in completed:
+        key = str(item).upper()
+        if key not in seen:
+            seen.add(key)
+            unique_completed.append(item)
+
+    readiness["missing_fields"] = reconciled_missing
+    readiness["completed_fields"] = unique_completed
+    readiness["identifier_state"] = state
+
+    total = max(1, len(required))
+    completed_count = max(0, total - len(reconciled_missing))
+    readiness["readiness_score"] = int(round((completed_count / total) * 100))
+
+    readiness["status"] = (
+        "ready"
+        if not reconciled_missing
+        and not (readiness.get("invalid_fields") or [])
+        and not state.get("conflict")
+        else "blocked"
+    )
+
+    return readiness
