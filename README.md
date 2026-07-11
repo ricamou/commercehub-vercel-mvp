@@ -1,10 +1,38 @@
-# Sprint 31.1 — Product Master Hotfix
+# CommerceHub Enterprise V5 — Sprint 32 Marketplace Auto Completer
 
-Correção aplicada:
+## Objetivo
 
-- remove um bloco do GTIN Resolver que foi inserido indevidamente dentro da rota `/product-master`;
-- elimina referências inexistentes a `category_id`, `product_id`, `vals` e `resolver_html`;
-- restaura a listagem normal do Product Master;
-- mantém o GTIN Discovery Engine da Sprint 31.
+Consultar o que o Mercado Livre exige e preencher automaticamente os atributos usando os dados importados do fornecedor.
 
-Não é necessário executar nova query no Supabase.
+## Fluxo
+
+1. Marketplace Inspector descobre os campos obrigatórios.
+2. Auto Completer lê Product Master e payload bruto da Hayamax.
+3. Aplica regras de mapeamento.
+4. Valida o formato.
+5. Salva os atributos do Mercado Livre.
+6. Atualiza a Prontidão para Publicação.
+
+## Mapeamentos iniciais
+
+- marca → BRAND
+- modelo/nome → MODEL
+- ean/gtin/barcode/código de barras → GTIN
+- cor → COLOR
+- RGB → WITH_LIGHTS
+- bluetooth → WITH_BLUETOOTH
+- wireless → IS_WIRELESS
+- peso e dimensões
+- MPN/código do fabricante
+
+## Instalação
+
+1. Envie todos os arquivos pelo GitHub Web.
+2. Aguarde o deploy.
+3. Confirme `/api/health`.
+4. Versão esperada:
+   `enterprise-v5-sprint32-marketplace-auto-completer`
+5. Execute `Sprint32_Marketplace_Auto_Completer.sql`.
+6. Abra o anúncio.
+7. Clique em `Auto Completar`.
+8. Confira os campos preenchidos e os que ainda faltam.

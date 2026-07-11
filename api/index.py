@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint31-1-product-master-hotfix"
+S13_VERSION = "enterprise-v5-sprint32-marketplace-auto-completer"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -4546,7 +4546,7 @@ async def listing_details_page(listing_id: str):
 <p><b>Imagens:</b> {len(context['images'])}</p>
 <p><b>Descrição:</b><br>{s19e(listing.get('description') or '-')}</p>
 <a class='btn' href='/product-master/{product.get("id")}/listing'>Editar rascunho</a>
-<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a><a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a><a class='btn' href='/marketplace-intelligence/listing/{listing_id}'>Marketplace Intelligence</a><a class='btn' href='/publishing-lab/listing/{listing_id}'>Publishing Lab</a><a class='btn' href='/marketplace-rules/listing/{listing_id}'>Rules Engine</a><a class='btn' href='/marketplace-inspector/listing/{listing_id}'>Marketplace Inspector</a><a class='btn' href='/marketplace-knowledge/listing/{listing_id}'>Knowledge Engine</a><a class='btn' href='/publication-readiness/listing/{listing_id}'>Prontidão para Publicação</a><a class='btn' href='/gtin-discovery/listing/{listing_id}'>Descobrir GTIN</a>
+<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a><a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a><a class='btn' href='/marketplace-intelligence/listing/{listing_id}'>Marketplace Intelligence</a><a class='btn' href='/publishing-lab/listing/{listing_id}'>Publishing Lab</a><a class='btn' href='/marketplace-rules/listing/{listing_id}'>Rules Engine</a><a class='btn' href='/marketplace-inspector/listing/{listing_id}'>Marketplace Inspector</a><a class='btn' href='/marketplace-knowledge/listing/{listing_id}'>Knowledge Engine</a><a class='btn' href='/publication-readiness/listing/{listing_id}'>Prontidão para Publicação</a><a class='btn' href='/gtin-discovery/listing/{listing_id}'>Descobrir GTIN</a><a class='btn' href='/marketplace-auto-completer/listing/{listing_id}'>Auto Completar</a>
 </div>
 <div class='card'><h2>Erros</h2><ul>{errors_html}</ul><h2>Alertas</h2><ul>{warnings_html}</ul></div>
 {publish_box}
@@ -9442,7 +9442,7 @@ async def s30_build_readiness(listing_id):
     product = context.get("product") or {}
     category_id = listing.get("category_id")
 
-    # Antes de calcular prontidão, tenta localizar e salvar GTIN automaticamente.
+    # Antes de calcular prontidão, tenta localizar GTIN e completar atributos automaticamente.
     try:
         discovery = await s31_discover_for_listing(listing_id)
         if discovery.get("status") == "found":
@@ -10315,3 +10315,436 @@ async def gtin_discovery_page(listing_id: str):
 </div>
 """
     return HTMLResponse(shell("GTIN Discovery Engine", content))
+
+
+# ==========================================================
+# SPRINT 32 - MARKETPLACE AUTO COMPLETER
+# Preenche automaticamente atributos exigidos pelo Mercado Livre.
+# ==========================================================
+
+def s32_normalize_key(value):
+    import unicodedata
+    text = str(value or "").strip().lower()
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = text.replace(" ", "_").replace("-", "_").replace("/", "_")
+    while "__" in text:
+        text = text.replace("__", "_")
+    return text.strip("_")
+
+
+def s32_flatten(value, prefix="", output=None):
+    if output is None:
+        output = {}
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            norm_key = s32_normalize_key(key)
+            path = f"{prefix}.{norm_key}" if prefix else norm_key
+            if isinstance(item, (dict, list)):
+                s32_flatten(item, path, output)
+            else:
+                output[path] = item
+                output.setdefault(norm_key, item)
+
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            s32_flatten(item, f"{prefix}[{index}]", output)
+
+    return output
+
+
+def s32_transform(value, transform_type, config=None):
+    config = config or {}
+    transform_type = str(transform_type or "direct").lower()
+
+    if value is None:
+        return None
+
+    if transform_type == "digits":
+        return "".join(ch for ch in str(value) if ch.isdigit())
+
+    if transform_type == "boolean":
+        if isinstance(value, bool):
+            return "Sim" if value else "Não"
+        text = str(value).strip().lower()
+        truthy = {"1", "true", "sim", "yes", "y", "s", "rgb", "ativo", "com"}
+        falsy = {"0", "false", "nao", "não", "no", "n", "inativo", "sem"}
+        if text in truthy:
+            return "Sim"
+        if text in falsy:
+            return "Não"
+        return str(value)
+
+    if transform_type == "number":
+        text = str(value).strip().replace(",", ".")
+        match = re.search(r"-?\d+(?:\.\d+)?", text)
+        return match.group(0) if match else None
+
+    return str(value).strip() if isinstance(value, str) else value
+
+
+async def s32_mapping_rules(supplier, category_id):
+    supplier = str(supplier or "").strip().lower()
+
+    query = (
+        "select=*&marketplace=eq.mercado_livre"
+        + "&active=eq.true"
+        + "&order=priority.asc,confidence.desc"
+    )
+    result = await store.select("ml_attribute_mapping_rules", query)
+    rows = result.get("data") or []
+
+    output = []
+    for row in rows:
+        row_supplier = str(row.get("supplier") or "").strip().lower()
+        row_category = str(row.get("category_id") or "").strip()
+
+        if row_supplier and row_supplier != supplier:
+            continue
+        if row_category and row_category != str(category_id or ""):
+            continue
+
+        output.append(row)
+
+    return output
+
+
+def s32_supplier_name(context):
+    supplier = context.get("supplier") or {}
+    if isinstance(supplier, dict):
+        return (
+            supplier.get("name")
+            or supplier.get("slug")
+            or supplier.get("code")
+            or "hayamax"
+        )
+    return str(supplier or "hayamax")
+
+
+async def s32_product_source_data(context):
+    product = context.get("product") or {}
+    raw_payload = await s31_supplier_raw_payload(product)
+
+    combined = {
+        "product": product,
+        "supplier_raw_payload": raw_payload,
+    }
+
+    return s32_flatten(combined)
+
+
+def s32_find_source_value(flattened, source_field):
+    source_field = s32_normalize_key(source_field)
+
+    if source_field in flattened:
+        return flattened.get(source_field), source_field
+
+    candidates = [
+        key for key in flattened
+        if key.endswith("." + source_field)
+        or key.endswith("_" + source_field)
+    ]
+
+    if candidates:
+        candidates.sort(key=len)
+        key = candidates[0]
+        return flattened.get(key), key
+
+    return None, None
+
+
+async def s32_existing_attributes(product_id, category_id):
+    try:
+        return await s21_product_values(product_id, category_id)
+    except Exception:
+        return {}
+
+
+async def s32_save_attribute(product_id, category_id, attribute_id, value, source, confidence):
+    attribute_id = str(attribute_id or "").upper()
+
+    delete_query = (
+        "product_id=eq."
+        + quote(str(product_id), safe="-")
+        + "&marketplace=eq.mercado_livre"
+        + "&category_id=eq."
+        + quote(str(category_id), safe="-_")
+        + "&attribute_id=eq."
+        + quote(attribute_id, safe="_-")
+    )
+
+    try:
+        await store.delete("product_marketplace_attributes", delete_query)
+    except Exception:
+        pass
+
+    payload = {
+        "company_id": DEFAULT_COMPANY_ID,
+        "product_id": product_id,
+        "marketplace": "mercado_livre",
+        "category_id": category_id,
+        "attribute_id": attribute_id,
+        "value_id": None,
+        "value_name": str(value),
+        "source": source,
+        "confidence": confidence,
+        "status": "active",
+        "raw_data": {
+            "auto_completer": "sprint32",
+        },
+    }
+
+    return await store.insert("product_marketplace_attributes", payload)
+
+
+async def s32_auto_complete_listing(listing_id):
+    listing = await s19_get_listing(listing_id)
+    if not listing:
+        return {
+            "success": False,
+            "status_code": 404,
+            "error": "Anúncio não encontrado.",
+        }
+
+    context = await s19_product_context(listing.get("product_id"))
+    if not context:
+        return {
+            "success": False,
+            "status_code": 404,
+            "error": "Produto não encontrado.",
+        }
+
+    product = context.get("product") or {}
+    product_id = product.get("id")
+    category_id = listing.get("category_id")
+    supplier = s32_supplier_name(context).lower()
+
+    inspection_result = await s28_inspect_listing(listing_id)
+    if not inspection_result.get("success"):
+        return inspection_result
+
+    requirements = (
+        inspection_result.get("inspection", {}).get("requirements")
+        or []
+    )
+
+    required_by_id = {
+        str(item.get("field") or "").upper(): item
+        for item in requirements
+        if item.get("required")
+    }
+
+    existing = await s32_existing_attributes(product_id, category_id)
+    flattened = await s32_product_source_data(context)
+    mappings = await s32_mapping_rules(supplier, category_id)
+
+    applied = []
+    completed = []
+    missing = []
+
+    for attribute_id, requirement in required_by_id.items():
+        existing_row = existing.get(attribute_id) or existing.get(attribute_id.lower()) or {}
+        existing_value = existing_row.get("value_name") or existing_row.get("value_id")
+
+        if s30_value_present(existing_value):
+            completed.append({
+                "field": attribute_id,
+                "value": existing_value,
+                "source": existing_row.get("source") or "existing_attribute",
+                "location": requirement.get("location"),
+            })
+            continue
+
+        matched = None
+
+        for rule in mappings:
+            if str(rule.get("target_attribute_id") or "").upper() != attribute_id:
+                continue
+
+            raw_value, source_path = s32_find_source_value(
+                flattened,
+                rule.get("source_field"),
+            )
+
+            transformed = s32_transform(
+                raw_value,
+                rule.get("transform_type"),
+                rule.get("transform_config"),
+            )
+
+            if not s30_value_present(transformed):
+                continue
+
+            if attribute_id == "GTIN" and not s212_valid_gtin(transformed):
+                continue
+
+            matched = {
+                "field": attribute_id,
+                "value": transformed,
+                "source_field": rule.get("source_field"),
+                "source_path": source_path,
+                "transform_type": rule.get("transform_type"),
+                "confidence": rule.get("confidence") or 100,
+                "location": requirement.get("location"),
+            }
+            break
+
+        if matched:
+            save_result = await s32_save_attribute(
+                product_id,
+                category_id,
+                attribute_id,
+                matched.get("value"),
+                "marketplace_auto_completer",
+                matched.get("confidence") or 100,
+            )
+
+            matched["saved"] = bool(save_result.get("success"))
+            applied.append(matched)
+            completed.append({
+                "field": attribute_id,
+                "value": matched.get("value"),
+                "source": "marketplace_auto_completer",
+                "location": requirement.get("location"),
+            })
+        else:
+            missing.append({
+                "field": attribute_id,
+                "name": requirement.get("name"),
+                "location": requirement.get("location"),
+                "accepted_format": requirement.get("accepted_format"),
+                "source_endpoint": requirement.get("source"),
+            })
+
+    readiness = await s30_build_readiness(listing_id)
+
+    run_payload = {
+        "company_id": DEFAULT_COMPANY_ID,
+        "product_id": product_id,
+        "listing_id": listing_id,
+        "category_id": category_id,
+        "supplier": supplier,
+        "status": "ready" if not missing else "blocked",
+        "completed_count": len(completed),
+        "missing_count": len(missing),
+        "completed_fields": completed,
+        "missing_fields": missing,
+        "detected_source_fields": flattened,
+        "applied_mappings": applied,
+        "payload_preview": readiness.get("payload_preview") or {},
+    }
+
+    saved_run = await store.insert("ml_auto_completion_runs", run_payload)
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "status": "ready" if not missing else "blocked",
+        "supplier": supplier,
+        "completed_fields": completed,
+        "missing_fields": missing,
+        "applied_mappings": applied,
+        "readiness": readiness,
+        "saved": bool(saved_run.get("success")),
+    }
+
+
+@app.get("/api/marketplace-auto-completer/listing/{listing_id}")
+async def marketplace_auto_completer_api(listing_id: str):
+    result = await s32_auto_complete_listing(listing_id)
+
+    if not result.get("success"):
+        return JSONResponse(
+            status_code=int(result.get("status_code") or 400),
+            content=result,
+        )
+
+    return result
+
+
+@app.get("/marketplace-auto-completer/listing/{listing_id}", response_class=HTMLResponse)
+async def marketplace_auto_completer_page(listing_id: str):
+    result = await s32_auto_complete_listing(listing_id)
+
+    if not result.get("success"):
+        return HTMLResponse(
+            shell(
+                "Marketplace Auto Completer",
+                f"<div class='card'><h2>Erro</h2><p>{s19e(result.get('error'))}</p></div>",
+            ),
+            status_code=int(result.get("status_code") or 400),
+        )
+
+    applied_rows = "".join(
+        f"<tr>"
+        f"<td>{s19e(item.get('field'))}</td>"
+        f"<td>{s19e(item.get('value'))}</td>"
+        f"<td>{s19e(item.get('source_path') or item.get('source_field'))}</td>"
+        f"<td>{s19e(item.get('location'))}</td>"
+        f"<td>{s19e(item.get('confidence') or 0)}%</td>"
+        f"<td>{'SIM' if item.get('saved') else 'NÃO'}</td>"
+        f"</tr>"
+        for item in result.get("applied_mappings") or []
+    ) or "<tr><td colspan='6'>Nenhum novo campo preenchido automaticamente.</td></tr>"
+
+    missing_rows = "".join(
+        f"<tr>"
+        f"<td>{s19e(item.get('field'))}</td>"
+        f"<td>{s19e(item.get('name'))}</td>"
+        f"<td>{s19e(item.get('location'))}</td>"
+        f"<td>{s19e(item.get('accepted_format'))}</td>"
+        f"<td>{s19e(item.get('source_endpoint'))}</td>"
+        f"</tr>"
+        for item in result.get("missing_fields") or []
+    ) or "<tr><td colspan='5'>Nenhum campo obrigatório faltando.</td></tr>"
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Status</span><strong>{'PRONTO' if result.get('status') == 'ready' else 'BLOQUEADO'}</strong></div>
+  <div class='metric'><span>Fornecedor</span><strong>{s19e(result.get('supplier'))}</strong></div>
+  <div class='metric'><span>Preenchidos</span><strong>{len(result.get('completed_fields') or [])}</strong></div>
+  <div class='metric'><span>Faltando</span><strong>{len(result.get('missing_fields') or [])}</strong></div>
+</div>
+
+<div class='card'>
+<h2>Campos preenchidos automaticamente</h2>
+<table>
+<thead>
+<tr>
+<th>Campo</th>
+<th>Valor</th>
+<th>Origem</th>
+<th>Local</th>
+<th>Confiança</th>
+<th>Salvo</th>
+</tr>
+</thead>
+<tbody>{applied_rows}</tbody>
+</table>
+</div>
+
+<div class='card'>
+<h2>Campos obrigatórios que ainda faltam</h2>
+<table>
+<thead>
+<tr>
+<th>Campo</th>
+<th>Nome</th>
+<th>Local</th>
+<th>Formato</th>
+<th>Fonte oficial</th>
+</tr>
+</thead>
+<tbody>{missing_rows}</tbody>
+</table>
+</div>
+
+<div class='card'>
+<a class='btn' href='/publication-readiness/listing/{listing_id}'>Prontidão para Publicação</a>
+<a class='btn' href='/api/marketplace-auto-completer/listing/{listing_id}'>Ver JSON técnico</a>
+<a class='btn' href='/product-master/{result.get("readiness", {}).get("product_id")}/listing'>Voltar ao anúncio</a>
+</div>
+"""
+
+    return HTMLResponse(shell("Marketplace Auto Completer", content))
