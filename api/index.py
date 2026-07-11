@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint25-1-auto-learning-preflight"
+S13_VERSION = "enterprise-v5-sprint26-publishing-lab"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -4568,7 +4568,7 @@ async def listing_details_page(listing_id: str):
 <h2>Publicação controlada</h2>
 <p>Esta ação cria um anúncio real na conta conectada do Mercado Livre.</p>
 <p><b>Modo manual:</b> digite <code>PUBLICAR</code> para publicar agora.</p>
-<form method='post' action='/api/listing-engine/{listing_id}/publish'>
+<form method='post' action='/api/publishing-lab/listing/{listing_id}/publish'>
 <label>Confirmação</label><input name='confirmation' placeholder='PUBLICAR' required>
 <button type='submit'>Publicar agora no Mercado Livre</button>
 </form>
@@ -4597,7 +4597,7 @@ async def listing_details_page(listing_id: str):
 <p><b>Imagens:</b> {len(context['images'])}</p>
 <p><b>Descrição:</b><br>{s19e(listing.get('description') or '-')}</p>
 <a class='btn' href='/product-master/{product.get("id")}/listing'>Editar rascunho</a>
-<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a><a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a><a class='btn' href='/marketplace-intelligence/listing/{listing_id}'>Marketplace Intelligence</a>
+<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a><a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a><a class='btn' href='/marketplace-intelligence/listing/{listing_id}'>Marketplace Intelligence</a><a class='btn' href='/publishing-lab/listing/{listing_id}'>Publishing Lab</a>
 </div>
 <div class='card'><h2>Erros</h2><ul>{errors_html}</ul><h2>Alertas</h2><ul>{warnings_html}</ul></div>
 {publish_box}
@@ -7531,3 +7531,192 @@ async def marketplace_intelligence_refresh_page(listing_id: str):
         f"/marketplace-intelligence/listing/{listing_id}",
         status_code=303,
     )
+
+
+# ==========================================================
+# SPRINT 26 - PUBLISHING LAB
+# Descoberta, comparação, simulação e publicação controlada.
+# ==========================================================
+
+def s26_location(attr):
+    tags = attr.get("tags") or {}
+    return "variation" if (
+        attr.get("allow_variations")
+        or tags.get("allow_variations")
+        or tags.get("variation_attribute")
+        or tags.get("defines_picture")
+    ) else "item"
+
+
+async def s26_discover(category_id):
+    await s21_sync_category(category_id)
+    attrs = await s21_category_attrs(category_id)
+    item, variation, required = [], [], []
+    for attr in attrs:
+        row = {
+            "attribute_id": attr.get("attribute_id"),
+            "name": attr.get("name"),
+            "required": bool(attr.get("required") or attr.get("catalog_required")),
+            "value_type": attr.get("value_type"),
+            "location": s26_location(attr),
+        }
+        (variation if row["location"] == "variation" else item).append(row)
+        if row["required"]:
+            required.append(row)
+    return {
+        "category_id": category_id,
+        "attributes_count": len(attrs),
+        "item_attributes": item,
+        "variation_attributes": variation,
+        "required_attributes": required,
+        "official_ids": [str(a.get("attribute_id") or "").upper() for a in attrs],
+    }
+
+
+async def s26_payload(context, listing):
+    payload = s19_build_ml_payload(context, listing, mode="user_product")
+    payload["attributes"] = await s21_payload_attributes(
+        context["product"].get("id"),
+        listing.get("category_id"),
+        payload.get("attributes")
+    )
+    discovery = await s26_discover(listing.get("category_id"))
+    variation_ids = {str(x.get("attribute_id") or "").upper() for x in discovery["variation_attributes"]}
+    item_attrs, variation_attrs = [], []
+    for attr in payload.get("attributes") or []:
+        (variation_attrs if str(attr.get("id") or "").upper() in variation_ids else item_attrs).append(attr)
+    payload["attributes"] = item_attrs
+    if variation_attrs:
+        payload["variations"] = [{
+            "price": payload.get("price"),
+            "available_quantity": payload.get("available_quantity"),
+            "attribute_combinations": variation_attrs,
+            "picture_ids": [],
+        }]
+    return payload, discovery, variation_attrs
+
+
+async def s26_simulate(context, listing):
+    payload, discovery, variation_attrs = await s26_payload(context, listing)
+    preflight = await s24_metadata_preflight(context, listing)
+    intelligence = await s25_intelligence_assessment(context, listing)
+    sent = {str(x.get("id") or "").upper() for x in payload.get("attributes") or []}
+    official = set(discovery.get("official_ids") or [])
+    conditional = set(preflight.get("conditional_attribute_ids") or [])
+    blockers = list(preflight.get("blockers") or [])
+    warnings = list(preflight.get("warnings") or [])
+    unknown = sorted(sent - official)
+    missing = sorted(conditional - sent)
+    for aid in unknown:
+        blockers.append({"code":"unknown_attribute","message":f"Atributo {aid} não existe na categoria.","attribute":aid})
+    for aid in missing:
+        blockers.append({"code":"conditional_required_missing","message":f"Atributo condicional {aid} está faltando.","attribute":aid})
+    if variation_attrs:
+        warnings.append({"code":"variation_payload_generated","message":"Atributos de variação foram movidos para attribute_combinations.","attributes":[x.get("id") for x in variation_attrs]})
+    score=max(0,100-min(80,len(blockers)*20)-min(20,len(warnings)*5))
+    return {
+        "success": not blockers,
+        "status": "ready" if not blockers else "blocked",
+        "score": score,
+        "payload": payload,
+        "discovery": discovery,
+        "preflight": preflight,
+        "intelligence": intelligence,
+        "blockers": blockers,
+        "warnings": warnings,
+        "recommendations": intelligence.get("recommendations") or [],
+        "comparison": {
+            "sent_attribute_ids": sorted(sent),
+            "unknown_attribute_ids": unknown,
+            "missing_conditional_ids": missing,
+        },
+    }
+
+
+async def s26_store_run(listing, result):
+    run_id=str(uuid.uuid4())
+    saved=await store.insert("publishing_lab_runs", {
+        "id": run_id,
+        "company_id": DEFAULT_COMPANY_ID,
+        "marketplace": "mercado_livre",
+        "product_id": listing.get("product_id"),
+        "listing_id": listing.get("id"),
+        "category_id": listing.get("category_id"),
+        "status": result.get("status"),
+        "score": result.get("score") or 0,
+        "payload_preview": result.get("payload") or {},
+        "metadata_snapshot": result.get("discovery") or {},
+        "conditional_snapshot": result.get("preflight") or {},
+        "intelligence_snapshot": result.get("intelligence") or {},
+        "blockers": result.get("blockers") or [],
+        "warnings": result.get("warnings") or [],
+        "recommendations": result.get("recommendations") or [],
+    })
+    return {"run_id":run_id,"saved":bool(saved.get("success"))}
+
+
+@app.get("/api/publishing-lab/listing/{listing_id}")
+async def publishing_lab_api(listing_id: str):
+    listing=await s19_get_listing(listing_id)
+    if not listing:
+        return JSONResponse(status_code=404,content={"success":False,"error":"Anúncio não encontrado."})
+    context=await s19_product_context(listing.get("product_id"))
+    result=await s26_simulate(context, listing)
+    run=await s26_store_run(listing,result)
+    return {"version":APP_VERSION,**result,**run}
+
+
+@app.get("/publishing-lab/listing/{listing_id}", response_class=HTMLResponse)
+async def publishing_lab_page(listing_id: str):
+    listing=await s19_get_listing(listing_id)
+    if not listing:
+        return HTMLResponse(shell("Publishing Lab","<div class='card'>Anúncio não encontrado.</div>"),status_code=404)
+    context=await s19_product_context(listing.get("product_id"))
+    result=await s26_simulate(context,listing)
+    run=await s26_store_run(listing,result)
+    blockers=''.join(f"<li><b>{s19e(x.get('code'))}</b>: {s19e(x.get('message'))}</li>" for x in result.get('blockers') or []) or '<li>Nenhum bloqueio.</li>'
+    warnings=''.join(f"<li><b>{s19e(x.get('code'))}</b>: {s19e(x.get('message'))}</li>" for x in result.get('warnings') or []) or '<li>Nenhum alerta.</li>'
+    cmp=result.get('comparison') or {}; disc=result.get('discovery') or {}
+    content=f"""
+<div class='grid'>
+<div class='metric'><span>Status</span><strong>{'PRONTO' if result.get('success') else 'BLOQUEADO'}</strong></div>
+<div class='metric'><span>Score</span><strong>{result.get('score')}</strong></div>
+<div class='metric'><span>Atributos oficiais</span><strong>{disc.get('attributes_count')}</strong></div>
+<div class='metric'><span>Run</span><strong>{s19e((run.get('run_id') or '')[:8])}</strong></div>
+</div>
+<div class='card'><h2>Bloqueios</h2><ul>{blockers}</ul><h2>Alertas</h2><ul>{warnings}</ul></div>
+<div class='card'><h2>Comparador</h2><p><b>Enviados:</b> {s19e(', '.join(cmp.get('sent_attribute_ids') or []))}</p><p><b>Condicionais faltando:</b> {s19e(', '.join(cmp.get('missing_conditional_ids') or []))}</p><p><b>Desconhecidos:</b> {s19e(', '.join(cmp.get('unknown_attribute_ids') or []))}</p></div>
+<div class='card'><h2>Estrutura</h2><p><b>Item:</b> {len(disc.get('item_attributes') or [])}</p><p><b>Variação:</b> {len(disc.get('variation_attributes') or [])}</p><p><b>Obrigatórios:</b> {len(disc.get('required_attributes') or [])}</p></div>
+<div class='card'><a class='btn' href='/api/publishing-lab/listing/{listing_id}'>Relatório JSON</a><a class='btn' href='/product-master/{listing.get('product_id')}/listing'>Voltar ao anúncio</a></div>
+"""
+    return HTMLResponse(shell("Publishing Lab",content))
+
+
+@app.post("/api/publishing-lab/listing/{listing_id}/publish")
+async def publishing_lab_publish(listing_id: str, request: Request):
+    listing=await s19_get_listing(listing_id)
+    if not listing:
+        return JSONResponse(status_code=404,content={"success":False,"error":"Anúncio não encontrado."})
+    form=await request.form()
+    if str(form.get("confirmation") or "").strip().upper() != "PUBLICAR":
+        return JSONResponse(status_code=400,content={"success":False,"error":"Digite PUBLICAR para confirmar."})
+    context=await s19_product_context(listing.get("product_id"))
+    simulation=await s26_simulate(context,listing)
+    if not simulation.get("success"):
+        return JSONResponse(status_code=422,content={"success":False,"error":"Publishing Lab bloqueou a publicação.","simulation":simulation})
+    payload=simulation.get("payload") or {}
+    result=await ml_request("/items",method="POST",payload=payload)
+    if not result.get("success"):
+        try:
+            await s25_record_error(context,listing,result,payload)
+        except Exception:
+            pass
+        return JSONResponse(status_code=400,content={"success":False,"error":"Mercado Livre recusou o payload do Publishing Lab.","result":result,"payload_sent":payload})
+    item=result.get("data") or {}
+    await store.update("listings",f"id=eq.{quote(str(listing_id),safe='-')}",{
+        "external_id":item.get("id"),"permalink":item.get("permalink"),"item_url":item.get("permalink"),
+        "status":item.get("status") or "active","validation_status":"published","last_error":None,
+        "payload":payload,"published_at":__import__('datetime').datetime.utcnow().isoformat(),
+        "last_synced_at":__import__('datetime').datetime.utcnow().isoformat(),
+    })
+    return RedirectResponse(f"/listing-engine/{listing_id}",status_code=303)

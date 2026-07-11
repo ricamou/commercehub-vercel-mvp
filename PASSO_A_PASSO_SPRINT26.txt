@@ -1,0 +1,5 @@
+1. Suba os arquivos.
+2. Confirme /api/health = enterprise-v5-sprint26-publishing-lab.
+3. Execute Sprint26_Publishing_Lab.sql.
+4. Abra o anúncio > Publishing Lab.
+5. Publique somente quando PRONTO.
