@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint26-publishing-lab"
+S13_VERSION = "enterprise-v5-sprint27-marketplace-rules-engine"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -4597,7 +4597,7 @@ async def listing_details_page(listing_id: str):
 <p><b>Imagens:</b> {len(context['images'])}</p>
 <p><b>Descrição:</b><br>{s19e(listing.get('description') or '-')}</p>
 <a class='btn' href='/product-master/{product.get("id")}/listing'>Editar rascunho</a>
-<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a><a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a><a class='btn' href='/marketplace-intelligence/listing/{listing_id}'>Marketplace Intelligence</a><a class='btn' href='/publishing-lab/listing/{listing_id}'>Publishing Lab</a>
+<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a><a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a><a class='btn' href='/marketplace-intelligence/listing/{listing_id}'>Marketplace Intelligence</a><a class='btn' href='/publishing-lab/listing/{listing_id}'>Publishing Lab</a><a class='btn' href='/marketplace-rules/listing/{listing_id}'>Rules Engine</a>
 </div>
 <div class='card'><h2>Erros</h2><ul>{errors_html}</ul><h2>Alertas</h2><ul>{warnings_html}</ul></div>
 {publish_box}
@@ -7720,3 +7720,383 @@ async def publishing_lab_publish(listing_id: str, request: Request):
         "last_synced_at":__import__('datetime').datetime.utcnow().isoformat(),
     })
     return RedirectResponse(f"/listing-engine/{listing_id}",status_code=303)
+
+
+# ==========================================================
+# SPRINT 27 - MARKETPLACE RULES ENGINE
+# Converte metadados oficiais e condicionais em árvore de decisão.
+# ==========================================================
+
+def s27_sha256(value):
+    import hashlib
+    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def s27_dedupe_issues(items):
+    output = []
+    seen = set()
+    for item in items or []:
+        code = str(item.get("code") or "")
+        attribute = str(item.get("attribute") or "")
+        attrs = tuple(sorted(str(x) for x in (item.get("attributes") or [])))
+        message = str(item.get("message") or "")
+        key = (code, attribute, attrs, message)
+        if key in seen:
+            continue
+        seen.add(key)
+        output.append(item)
+    return output
+
+
+def s27_metadata_required(attr):
+    tags = attr.get("tags") or {}
+    return bool(
+        attr.get("required")
+        or attr.get("catalog_required")
+        or tags.get("required")
+        or tags.get("catalog_required")
+        or tags.get("conditional_required")
+    )
+
+
+def s27_value_strategy(attr):
+    values = attr.get("values") or []
+    value_type = str(attr.get("value_type") or "").lower()
+    if values:
+        return "value_id_preferred"
+    if value_type in {"boolean", "list"}:
+        return "value_id_preferred"
+    return "value_name"
+
+
+def s27_attribute_contract(attr):
+    aid = str(attr.get("attribute_id") or "").upper()
+    return {
+        "id": aid,
+        "name": attr.get("name"),
+        "required": s27_metadata_required(attr),
+        "catalog_required": bool(attr.get("catalog_required")),
+        "conditional_required": bool((attr.get("tags") or {}).get("conditional_required")),
+        "location": s26_attr_location(attr),
+        "value_strategy": s27_value_strategy(attr),
+        "value_type": attr.get("value_type"),
+        "allowed_values": attr.get("values") or [],
+    }
+
+
+async def s27_build_contract(context, listing):
+    product = context.get("product") or {}
+    category_id = listing.get("category_id")
+
+    discovery = await s26_category_discovery(category_id)
+    preflight = await s24_metadata_preflight(context, listing)
+    intelligence = await s25_intelligence_assessment(context, listing)
+
+    attrs = discovery.get("raw_attributes") or []
+    contracts = {
+        str(attr.get("attribute_id") or "").upper(): s27_attribute_contract(attr)
+        for attr in attrs
+        if attr.get("attribute_id")
+    }
+
+    conditional_ids = {
+        str(x).upper()
+        for x in (preflight.get("conditional_attribute_ids") or [])
+    }
+
+    for aid in conditional_ids:
+        if aid in contracts:
+            contracts[aid]["conditional_required"] = True
+            contracts[aid]["required"] = True
+
+    sent_ids = {
+        str(x).upper()
+        for x in (preflight.get("sent_attribute_ids") or [])
+    }
+
+    decisions = []
+    required_actions = []
+
+    for aid, contract in contracts.items():
+        present = aid in sent_ids
+        if contract.get("required") and not present:
+            action = {
+                "action": "provide_attribute",
+                "attribute_id": aid,
+                "message": f"Informe o atributo obrigatório {aid}.",
+                "location": contract.get("location"),
+                "value_strategy": contract.get("value_strategy"),
+            }
+            required_actions.append(action)
+            decisions.append({
+                "rule_key": f"REQUIRE_{aid}",
+                "input_state": {"present": present},
+                "outcome": "blocked",
+                "required_actions": [action],
+                "explanation": f"{aid} é obrigatório para este payload.",
+                "confidence": 100,
+            })
+
+    gtin_contract = contracts.get("GTIN") or {}
+    empty_contract = contracts.get("EMPTY_GTIN_REASON") or {}
+    values = await s21_product_values(product.get("id"), category_id)
+    gtin_row = values.get("GTIN") or values.get("gtin") or {}
+    reason_row = values.get("EMPTY_GTIN_REASON") or values.get("empty_gtin_reason") or {}
+
+    gtin_value = gtin_row.get("value_name") or gtin_row.get("value_id")
+    has_valid_gtin = s212_valid_gtin(gtin_value)
+    has_reason = bool(reason_row.get("value_id") or reason_row.get("value_name"))
+    gtin_conditional = "GTIN" in conditional_ids
+    learned_gtin_required = any(
+        str(row.get("rule_key") or "").upper() == "GTIN_REQUIRED"
+        for row in (intelligence.get("rules") or [])
+    )
+
+    if gtin_conditional or learned_gtin_required:
+        if not has_valid_gtin:
+            required_actions.append({
+                "action": "provide_real_gtin",
+                "attribute_id": "GTIN",
+                "message": "Informe um GTIN real e válido do produto.",
+                "location": gtin_contract.get("location") or "item",
+                "value_strategy": "value_name",
+            })
+
+        decisions.append({
+            "rule_key": "GTIN_RESOLUTION",
+            "input_state": {
+                "gtin_valid": has_valid_gtin,
+                "empty_gtin_reason_present": has_reason,
+                "empty_gtin_reason_supported": bool(empty_contract),
+                "conditional_requires_gtin": gtin_conditional,
+                "learned_requires_gtin": learned_gtin_required,
+            },
+            "outcome": "ready" if has_valid_gtin else "blocked",
+            "required_actions": [] if has_valid_gtin else [{
+                "action": "provide_real_gtin",
+                "attribute_id": "GTIN",
+            }],
+            "explanation": (
+                "GTIN válido presente."
+                if has_valid_gtin
+                else "A validação condicional ou o aprendizado real exige GTIN; "
+                     "EMPTY_GTIN_REASON não substitui o código neste caso."
+            ),
+            "confidence": 100,
+        })
+
+    payload_contract = {
+        "category_id": category_id,
+        "family_name_required": True,
+        "attribute_contracts": contracts,
+        "item_attribute_ids": sorted(
+            aid for aid, c in contracts.items() if c.get("location") == "item"
+        ),
+        "variation_attribute_ids": sorted(
+            aid for aid, c in contracts.items() if c.get("location") == "variation"
+        ),
+        "conditional_attribute_ids": sorted(conditional_ids),
+    }
+
+    decision_tree = {
+        "status": "ready" if not required_actions else "blocked",
+        "required_actions": required_actions,
+        "decisions": decisions,
+        "gtin": {
+            "valid": has_valid_gtin,
+            "empty_reason_present": has_reason,
+            "conditional_required": gtin_conditional,
+            "learned_required": learned_gtin_required,
+        },
+    }
+
+    fingerprint = s27_sha256({
+        "category_id": category_id,
+        "brand": product.get("brand"),
+        "payload_contract": payload_contract,
+        "conditional_ids": sorted(conditional_ids),
+    })
+
+    return {
+        "success": not required_actions,
+        "category_id": category_id,
+        "brand": product.get("brand"),
+        "fingerprint": fingerprint,
+        "decision_tree": decision_tree,
+        "official_metadata": discovery,
+        "conditional_metadata": preflight.get("conditional_validation"),
+        "payload_contract": payload_contract,
+        "required_actions": required_actions,
+        "decisions": decisions,
+    }
+
+
+async def s27_save_contract(context, listing, result):
+    product = context.get("product") or {}
+    payload = {
+        "company_id": DEFAULT_COMPANY_ID,
+        "marketplace": "mercado_livre",
+        "category_id": listing.get("category_id"),
+        "brand": product.get("brand"),
+        "domain_id": None,
+        "fingerprint": result.get("fingerprint"),
+        "decision_tree": result.get("decision_tree") or {},
+        "official_metadata": result.get("official_metadata") or {},
+        "conditional_metadata": result.get("conditional_metadata") or {},
+        "payload_contract": result.get("payload_contract") or {},
+        "active": True,
+    }
+    saved = await store.upsert(
+        "marketplace_rule_snapshots",
+        payload,
+        "marketplace,category_id,brand,domain_id,fingerprint"
+    )
+
+    snapshot_rows = saved.get("data") or []
+    snapshot = snapshot_rows[0] if snapshot_rows else {}
+    snapshot_id = snapshot.get("id")
+
+    if snapshot_id:
+        for decision in result.get("decisions") or []:
+            await store.insert("marketplace_rule_decisions", {
+                "snapshot_id": snapshot_id,
+                "rule_key": decision.get("rule_key"),
+                "input_state": decision.get("input_state") or {},
+                "outcome": decision.get("outcome"),
+                "required_actions": decision.get("required_actions") or [],
+                "explanation": decision.get("explanation"),
+                "confidence": decision.get("confidence") or 100,
+            })
+
+    return {
+        "success": bool(saved.get("success")),
+        "snapshot_id": snapshot_id,
+        "result": saved,
+    }
+
+
+async def s27_rules_engine(context, listing):
+    contract = await s27_build_contract(context, listing)
+    saved = await s27_save_contract(context, listing, contract)
+
+    simulation = await s26_simulate_listing(context, listing)
+    simulation["blockers"] = s27_dedupe_issues(simulation.get("blockers"))
+    simulation["warnings"] = s27_dedupe_issues(simulation.get("warnings"))
+
+    for action in contract.get("required_actions") or []:
+        simulation["blockers"].append({
+            "code": "rules_engine_required_action",
+            "message": action.get("message"),
+            "attribute": action.get("attribute_id"),
+            "location": action.get("location"),
+        })
+
+    simulation["blockers"] = s27_dedupe_issues(simulation.get("blockers"))
+    simulation["success"] = len(simulation["blockers"]) == 0
+    simulation["status"] = "ready" if simulation["success"] else "blocked"
+    simulation["score"] = max(
+        0,
+        100
+        - min(80, len(simulation["blockers"]) * 20)
+        - min(20, len(simulation.get("warnings") or []) * 5)
+    )
+
+    return {
+        "success": simulation["success"],
+        "version": APP_VERSION,
+        "contract": contract,
+        "simulation": simulation,
+        "snapshot_id": saved.get("snapshot_id"),
+        "saved": saved.get("success"),
+    }
+
+
+@app.get("/api/marketplace-rules/listing/{listing_id}")
+async def marketplace_rules_api(listing_id: str):
+    listing = await s19_get_listing(listing_id)
+    if not listing:
+        return JSONResponse(status_code=404, content={
+            "success": False,
+            "error": "Anúncio não encontrado.",
+        })
+
+    context = await s19_product_context(listing.get("product_id"))
+    if not context:
+        return JSONResponse(status_code=404, content={
+            "success": False,
+            "error": "Produto não encontrado.",
+        })
+
+    return await s27_rules_engine(context, listing)
+
+
+@app.get("/marketplace-rules/listing/{listing_id}", response_class=HTMLResponse)
+async def marketplace_rules_page(listing_id: str):
+    listing = await s19_get_listing(listing_id)
+    if not listing:
+        return HTMLResponse(
+            shell("Marketplace Rules Engine", "<div class='card'>Anúncio não encontrado.</div>"),
+            status_code=404,
+        )
+
+    context = await s19_product_context(listing.get("product_id"))
+    result = await s27_rules_engine(context, listing)
+    contract = result.get("contract") or {}
+    simulation = result.get("simulation") or {}
+    tree = contract.get("decision_tree") or {}
+
+    actions_html = "".join(
+        f"<li><b>{s19e(item.get('attribute_id') or item.get('action'))}</b>: "
+        f"{s19e(item.get('message'))} "
+        f"<small>({s19e(item.get('location') or 'item')})</small></li>"
+        for item in (contract.get("required_actions") or [])
+    ) or "<li>Nenhuma ação obrigatória.</li>"
+
+    decisions_html = "".join(
+        f"""<tr>
+<td>{s19e(item.get('rule_key'))}</td>
+<td>{s19e(item.get('outcome'))}</td>
+<td>{s19e(item.get('explanation'))}</td>
+<td>{s19e(item.get('confidence'))}%</td>
+</tr>"""
+        for item in (contract.get("decisions") or [])
+    ) or "<tr><td colspan='4'>Nenhuma decisão.</td></tr>"
+
+    payload_contract = contract.get("payload_contract") or {}
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Status</span><strong>{'PRONTO' if result.get('success') else 'BLOQUEADO'}</strong></div>
+  <div class='metric'><span>Score</span><strong>{simulation.get('score')}</strong></div>
+  <div class='metric'><span>Snapshot</span><strong>{s19e((result.get('snapshot_id') or '')[:8])}</strong></div>
+  <div class='metric'><span>Categoria</span><strong>{s19e(contract.get('category_id'))}</strong></div>
+</div>
+
+<div class='card'>
+<h2>Ações obrigatórias</h2>
+<ul>{actions_html}</ul>
+</div>
+
+<div class='card'>
+<h2>Árvore de decisão</h2>
+<table>
+<thead><tr><th>Regra</th><th>Resultado</th><th>Explicação</th><th>Confiança</th></tr></thead>
+<tbody>{decisions_html}</tbody>
+</table>
+</div>
+
+<div class='card'>
+<h2>Contrato do payload</h2>
+<p><b>Atributos de item:</b> {len(payload_contract.get('item_attribute_ids') or [])}</p>
+<p><b>Atributos de variação:</b> {len(payload_contract.get('variation_attribute_ids') or [])}</p>
+<p><b>Condicionais:</b> {s19e(', '.join(payload_contract.get('conditional_attribute_ids') or []))}</p>
+</div>
+
+<div class='card'>
+<a class='btn' href='/publishing-lab/listing/{listing_id}'>Publishing Lab</a>
+<a class='btn' href='/api/marketplace-rules/listing/{listing_id}'>Ver JSON técnico</a>
+<a class='btn' href='/product-master/{listing.get("product_id")}/listing'>Voltar ao anúncio</a>
+</div>
+"""
+    return HTMLResponse(shell("Marketplace Rules Engine", content))

@@ -1,0 +1,17 @@
+SPRINT 27 — MARKETPLACE RULES ENGINE
+
+1. Envie os arquivos pelo GitHub Web.
+2. Aguarde o deploy.
+3. Abra /api/health.
+4. Confirme:
+   enterprise-v5-sprint27-marketplace-rules-engine
+5. Execute Sprint27_Marketplace_Rules_Engine.sql no Supabase.
+6. Abra o anúncio.
+7. Clique em Rules Engine.
+8. Confira:
+   - ações obrigatórias;
+   - árvore de decisão;
+   - contrato do payload;
+   - atributos de item e variação.
+9. Corrija os dados faltantes.
+10. Volte ao Publishing Lab.
