@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint32-marketplace-auto-completer"
+APP_VERSION = "enterprise-v5-sprint33-gtin-intelligence-engine"
 
 def env(name, default=""):
     value = os.getenv(name, default)

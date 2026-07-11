@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint32-marketplace-auto-completer"
+S13_VERSION = "enterprise-v5-sprint33-gtin-intelligence-engine"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -4546,7 +4546,7 @@ async def listing_details_page(listing_id: str):
 <p><b>Imagens:</b> {len(context['images'])}</p>
 <p><b>Descrição:</b><br>{s19e(listing.get('description') or '-')}</p>
 <a class='btn' href='/product-master/{product.get("id")}/listing'>Editar rascunho</a>
-<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a><a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a><a class='btn' href='/marketplace-intelligence/listing/{listing_id}'>Marketplace Intelligence</a><a class='btn' href='/publishing-lab/listing/{listing_id}'>Publishing Lab</a><a class='btn' href='/marketplace-rules/listing/{listing_id}'>Rules Engine</a><a class='btn' href='/marketplace-inspector/listing/{listing_id}'>Marketplace Inspector</a><a class='btn' href='/marketplace-knowledge/listing/{listing_id}'>Knowledge Engine</a><a class='btn' href='/publication-readiness/listing/{listing_id}'>Prontidão para Publicação</a><a class='btn' href='/gtin-discovery/listing/{listing_id}'>Descobrir GTIN</a><a class='btn' href='/marketplace-auto-completer/listing/{listing_id}'>Auto Completar</a>
+<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a><a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a><a class='btn' href='/marketplace-intelligence/listing/{listing_id}'>Marketplace Intelligence</a><a class='btn' href='/publishing-lab/listing/{listing_id}'>Publishing Lab</a><a class='btn' href='/marketplace-rules/listing/{listing_id}'>Rules Engine</a><a class='btn' href='/marketplace-inspector/listing/{listing_id}'>Marketplace Inspector</a><a class='btn' href='/marketplace-knowledge/listing/{listing_id}'>Knowledge Engine</a><a class='btn' href='/publication-readiness/listing/{listing_id}'>Prontidão para Publicação</a><a class='btn' href='/gtin-discovery/listing/{listing_id}'>Descobrir GTIN</a><a class='btn' href='/gtin-intelligence/listing/{listing_id}'>GTIN Intelligence</a><a class='btn' href='/marketplace-auto-completer/listing/{listing_id}'>Auto Completar</a>
 </div>
 <div class='card'><h2>Erros</h2><ul>{errors_html}</ul><h2>Alertas</h2><ul>{warnings_html}</ul></div>
 {publish_box}
@@ -9444,7 +9444,7 @@ async def s30_build_readiness(listing_id):
 
     # Antes de calcular prontidão, tenta localizar GTIN e completar atributos automaticamente.
     try:
-        discovery = await s31_discover_for_listing(listing_id)
+        discovery = await s33_discover_for_listing(listing_id)
         if discovery.get("status") == "found":
             context = await s19_product_context(listing.get("product_id"))
             product = context.get("product") or product
@@ -10748,3 +10748,475 @@ async def marketplace_auto_completer_page(listing_id: str):
 """
 
     return HTMLResponse(shell("Marketplace Auto Completer", content))
+
+
+# ==========================================================
+# SPRINT 33 - GTIN INTELLIGENCE ENGINE
+# Amplia a descoberta com catálogo do Mercado Livre e score de correspondência.
+# ==========================================================
+
+def s33_text(value):
+    import unicodedata
+    text = str(value or "").strip().lower()
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = re.sub(r"[^a-z0-9]+", " ", text)
+    return " ".join(text.split())
+
+
+def s33_tokens(value):
+    return {
+        token for token in s33_text(value).split()
+        if len(token) >= 2
+    }
+
+
+def s33_similarity(left, right):
+    a = s33_tokens(left)
+    b = s33_tokens(right)
+    if not a or not b:
+        return 0.0
+    return round((len(a & b) / len(a | b)) * 100, 2)
+
+
+def s33_extract_gtins(value, path="root", output=None):
+    if output is None:
+        output = []
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            key_text = s32_normalize_key(key)
+            new_path = f"{path}.{key}"
+
+            if key_text in s31_candidate_keys() or key_text in {
+                "product_identifier",
+                "universal_product_code",
+                "identifier",
+            }:
+                candidate = s31_digits(item)
+                if candidate:
+                    output.append({
+                        "gtin": candidate,
+                        "path": new_path,
+                        "key": key_text,
+                    })
+
+            s33_extract_gtins(item, new_path, output)
+
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            s33_extract_gtins(item, f"{path}[{index}]", output)
+
+    return output
+
+
+def s33_query_terms(product):
+    brand = str(product.get("brand") or "").strip()
+    model = str(product.get("model") or "").strip()
+    name = str(product.get("name") or "").strip()
+    mpn = str(
+        product.get("mpn")
+        or product.get("manufacturer_part_number")
+        or ""
+    ).strip()
+    sku = str(product.get("sku") or "").strip()
+
+    terms = []
+
+    for value in (
+        f"{brand} {model}",
+        f"{brand} {name}",
+        f"{brand} {mpn}",
+        mpn,
+        sku,
+    ):
+        value = " ".join(value.split())
+        if value and value not in terms:
+            terms.append(value)
+
+    return terms[:5]
+
+
+async def s33_ml_catalog_search(product, category_id):
+    terms = s33_query_terms(product)
+    all_candidates = []
+    attempts = []
+
+    for term in terms:
+        params = {
+            "site_id": "MLB",
+            "q": term,
+            "limit": 20,
+        }
+
+        result = await ml_request(
+            "/products/search",
+            params=params,
+        )
+
+        attempts.append({
+            "term": term,
+            "success": bool(result.get("success")),
+            "status_code": result.get("status_code"),
+            "error": result.get("error"),
+        })
+
+        if not result.get("success"):
+            continue
+
+        data = result.get("data") or {}
+        rows = (
+            data.get("results")
+            if isinstance(data, dict)
+            else data
+        ) or []
+
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+
+            title = (
+                row.get("name")
+                or row.get("title")
+                or row.get("short_description")
+                or ""
+            )
+            catalog_product_id = row.get("id") or row.get("catalog_product_id")
+
+            gtins = s33_extract_gtins(row)
+
+            for gtin_item in gtins:
+                gtin = s31_digits(gtin_item.get("gtin"))
+                valid = s212_valid_gtin(gtin)
+
+                brand_score = s33_similarity(
+                    product.get("brand"),
+                    row.get("brand") or title,
+                )
+                model_score = s33_similarity(
+                    product.get("model") or product.get("name"),
+                    row.get("model") or title,
+                )
+                title_score = s33_similarity(
+                    product.get("name"),
+                    title,
+                )
+
+                score = round(
+                    min(
+                        100,
+                        brand_score * 0.30
+                        + model_score * 0.40
+                        + title_score * 0.30
+                    ),
+                    2,
+                )
+
+                all_candidates.append({
+                    "provider": "mercado_livre_catalog",
+                    "gtin": gtin,
+                    "valid": valid,
+                    "brand": row.get("brand"),
+                    "model": row.get("model"),
+                    "title": title,
+                    "catalog_product_id": catalog_product_id,
+                    "match_score": score,
+                    "query_term": term,
+                    "path": gtin_item.get("path"),
+                    "evidence": row,
+                })
+
+    # Remove GTINs duplicados, mantendo o maior score.
+    deduped = {}
+    for candidate in all_candidates:
+        gtin = candidate.get("gtin")
+        if not gtin:
+            continue
+        current = deduped.get(gtin)
+        if not current or candidate.get("match_score", 0) > current.get("match_score", 0):
+            deduped[gtin] = candidate
+
+    candidates = sorted(
+        deduped.values(),
+        key=lambda item: (
+            bool(item.get("valid")),
+            item.get("match_score") or 0,
+        ),
+        reverse=True,
+    )
+
+    selected = next(
+        (
+            item for item in candidates
+            if item.get("valid")
+            and float(item.get("match_score") or 0) >= 80
+        ),
+        None,
+    )
+
+    return {
+        "success": True,
+        "terms": terms,
+        "attempts": attempts,
+        "candidates": candidates,
+        "selected": selected,
+    }
+
+
+async def s33_save_run(product, listing, internal_result, catalog_result):
+    selected = catalog_result.get("selected") or {}
+    status = (
+        "found_internal"
+        if internal_result.get("status") == "found"
+        else "found_catalog"
+        if selected
+        else "not_found"
+    )
+
+    payload = {
+        "company_id": DEFAULT_COMPANY_ID,
+        "product_id": product.get("id"),
+        "listing_id": listing.get("id"),
+        "category_id": listing.get("category_id"),
+        "status": status,
+        "query_terms": catalog_result.get("terms") or [],
+        "internal_result": internal_result or {},
+        "ml_catalog_result": {
+            "attempts": catalog_result.get("attempts") or [],
+        },
+        "candidates": catalog_result.get("candidates") or [],
+        "selected_candidate": selected,
+        "confidence": (
+            100
+            if internal_result.get("status") == "found"
+            else selected.get("match_score") or 0
+        ),
+    }
+
+    saved = await store.insert("gtin_intelligence_runs", payload)
+    rows = saved.get("data") or []
+    if isinstance(rows, dict):
+        rows = [rows]
+    run_id = (rows[0] if rows else {}).get("id")
+
+    if run_id:
+        for candidate in catalog_result.get("candidates") or []:
+            await store.insert("gtin_intelligence_candidates", {
+                "run_id": run_id,
+                "provider": candidate.get("provider"),
+                "gtin": candidate.get("gtin"),
+                "brand": candidate.get("brand"),
+                "model": candidate.get("model"),
+                "title": candidate.get("title"),
+                "catalog_product_id": candidate.get("catalog_product_id"),
+                "match_score": candidate.get("match_score") or 0,
+                "valid_gtin": bool(candidate.get("valid")),
+                "selected": bool(
+                    selected
+                    and candidate.get("gtin") == selected.get("gtin")
+                ),
+                "evidence": candidate.get("evidence") or {},
+            })
+
+    return {
+        "success": bool(saved.get("success")),
+        "run_id": run_id,
+    }
+
+
+async def s33_discover_for_listing(listing_id):
+    listing = await s19_get_listing(listing_id)
+    if not listing:
+        return {
+            "success": False,
+            "status_code": 404,
+            "error": "Anúncio não encontrado.",
+        }
+
+    context = await s19_product_context(listing.get("product_id"))
+    if not context:
+        return {
+            "success": False,
+            "status_code": 404,
+            "error": "Produto não encontrado.",
+        }
+
+    product = context.get("product") or {}
+
+    # Primeiro, reaproveita toda a inteligência interna da Sprint 31.
+    internal_result = await s31_discover_for_listing(listing_id)
+
+    if internal_result.get("status") == "found":
+        catalog_result = {
+            "success": True,
+            "terms": [],
+            "attempts": [],
+            "candidates": [],
+            "selected": None,
+        }
+
+        saved_run = await s33_save_run(
+            product,
+            listing,
+            internal_result,
+            catalog_result,
+        )
+
+        return {
+            "success": True,
+            "version": APP_VERSION,
+            "status": "found",
+            "gtin": internal_result.get("gtin"),
+            "source": internal_result.get("source"),
+            "confidence": internal_result.get("confidence") or 100,
+            "internal_result": internal_result,
+            "catalog_result": catalog_result,
+            "saved_run": saved_run,
+        }
+
+    catalog_result = await s33_ml_catalog_search(
+        product,
+        listing.get("category_id"),
+    )
+    selected = catalog_result.get("selected")
+
+    saved_run = await s33_save_run(
+        product,
+        listing,
+        internal_result,
+        catalog_result,
+    )
+
+    if selected:
+        save_result = await s31_save_gtin(
+            product,
+            selected.get("gtin"),
+            "mercado_livre_catalog",
+            selected.get("match_score") or 80,
+            selected,
+        )
+
+        return {
+            "success": True,
+            "version": APP_VERSION,
+            "status": "found",
+            "gtin": selected.get("gtin"),
+            "source": "mercado_livre_catalog",
+            "confidence": selected.get("match_score") or 80,
+            "internal_result": internal_result,
+            "catalog_result": catalog_result,
+            "saved": save_result,
+            "saved_run": saved_run,
+        }
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "status": "not_found",
+        "gtin": None,
+        "source": None,
+        "confidence": 0,
+        "message": (
+            "Nenhum GTIN confiável foi encontrado nas fontes internas "
+            "nem no catálogo consultado do Mercado Livre."
+        ),
+        "internal_result": internal_result,
+        "catalog_result": catalog_result,
+        "saved_run": saved_run,
+    }
+
+
+@app.get("/api/gtin-intelligence/listing/{listing_id}")
+async def gtin_intelligence_api(listing_id: str):
+    result = await s33_discover_for_listing(listing_id)
+
+    if not result.get("success"):
+        return JSONResponse(
+            status_code=int(result.get("status_code") or 400),
+            content=result,
+        )
+
+    return result
+
+
+@app.get("/gtin-intelligence/listing/{listing_id}", response_class=HTMLResponse)
+async def gtin_intelligence_page(listing_id: str):
+    result = await s33_discover_for_listing(listing_id)
+
+    if not result.get("success"):
+        return HTMLResponse(
+            shell(
+                "GTIN Intelligence Engine",
+                f"<div class='card'><h2>Erro</h2><p>{s19e(result.get('error'))}</p></div>",
+            ),
+            status_code=int(result.get("status_code") or 400),
+        )
+
+    catalog = result.get("catalog_result") or {}
+    candidates = catalog.get("candidates") or []
+
+    candidate_rows = "".join(
+        f"<tr>"
+        f"<td>{s19e(item.get('gtin'))}</td>"
+        f"<td>{s19e(item.get('title') or '-')}</td>"
+        f"<td>{s19e(item.get('catalog_product_id') or '-')}</td>"
+        f"<td>{'SIM' if item.get('valid') else 'NÃO'}</td>"
+        f"<td>{s19e(item.get('match_score') or 0)}%</td>"
+        f"</tr>"
+        for item in candidates[:20]
+    ) or "<tr><td colspan='5'>Nenhum candidato encontrado.</td></tr>"
+
+    attempts_rows = "".join(
+        f"<tr>"
+        f"<td>{s19e(item.get('term'))}</td>"
+        f"<td>{'SIM' if item.get('success') else 'NÃO'}</td>"
+        f"<td>{s19e(item.get('status_code') or '-')}</td>"
+        f"<td>{s19e(item.get('error') or '-')}</td>"
+        f"</tr>"
+        for item in catalog.get("attempts") or []
+    ) or "<tr><td colspan='4'>Nenhuma consulta externa executada.</td></tr>"
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Status</span><strong>{'ENCONTRADO' if result.get('status') == 'found' else 'NÃO ENCONTRADO'}</strong></div>
+  <div class='metric'><span>GTIN</span><strong>{s19e(result.get('gtin') or '-')}</strong></div>
+  <div class='metric'><span>Origem</span><strong>{s19e(result.get('source') or '-')}</strong></div>
+  <div class='metric'><span>Confiança</span><strong>{s19e(result.get('confidence') or 0)}%</strong></div>
+</div>
+
+<div class='card'>
+<h2>Consultas ao catálogo do Mercado Livre</h2>
+<table>
+<thead><tr><th>Termo</th><th>Sucesso</th><th>Status</th><th>Erro</th></tr></thead>
+<tbody>{attempts_rows}</tbody>
+</table>
+</div>
+
+<div class='card'>
+<h2>Candidatos encontrados</h2>
+<table>
+<thead>
+<tr>
+<th>GTIN</th>
+<th>Produto</th>
+<th>Catalog Product ID</th>
+<th>GTIN válido</th>
+<th>Correspondência</th>
+</tr>
+</thead>
+<tbody>{candidate_rows}</tbody>
+</table>
+</div>
+
+<div class='card'>
+<p>{s19e(result.get('message') or 'GTIN encontrado e salvo automaticamente.')}</p>
+</div>
+
+<div class='card'>
+<a class='btn' href='/publication-readiness/listing/{listing_id}'>Atualizar Prontidão</a>
+<a class='btn' href='/api/gtin-intelligence/listing/{listing_id}'>Ver JSON técnico</a>
+<a class='btn' href='/product-master/{(await s19_get_listing(listing_id)).get("product_id")}/listing'>Voltar ao anúncio</a>
+</div>
+"""
+
+    return HTMLResponse(shell("GTIN Intelligence Engine", content))

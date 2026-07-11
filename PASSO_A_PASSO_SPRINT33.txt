@@ -1,0 +1,17 @@
+SPRINT 33 — GTIN INTELLIGENCE ENGINE
+
+1. Envie os arquivos pelo GitHub Web.
+2. Aguarde o deploy.
+3. Abra /api/health.
+4. Confirme:
+   enterprise-v5-sprint33-gtin-intelligence-engine
+5. Execute Sprint33_GTIN_Intelligence_Engine.sql no Supabase.
+6. Abra o anúncio.
+7. Clique em GTIN Intelligence.
+8. Confira:
+   - termos consultados;
+   - candidatos;
+   - validade do GTIN;
+   - score de correspondência;
+   - candidato selecionado.
+9. Clique em Atualizar Prontidão.

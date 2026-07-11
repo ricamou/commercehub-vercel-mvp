@@ -1,29 +1,24 @@
-# CommerceHub Enterprise V5 — Sprint 32 Marketplace Auto Completer
+# CommerceHub Enterprise V5 — Sprint 33 GTIN Intelligence Engine
 
 ## Objetivo
 
-Consultar o que o Mercado Livre exige e preencher automaticamente os atributos usando os dados importados do fornecedor.
+Ampliar a descoberta de GTIN usando:
 
-## Fluxo
+1. fontes internas já implementadas;
+2. consultas ao catálogo do Mercado Livre;
+3. comparação por marca, modelo, nome, MPN e SKU;
+4. validação matemática do GTIN;
+5. score mínimo de 80% antes de salvar automaticamente.
 
-1. Marketplace Inspector descobre os campos obrigatórios.
-2. Auto Completer lê Product Master e payload bruto da Hayamax.
-3. Aplica regras de mapeamento.
-4. Valida o formato.
-5. Salva os atributos do Mercado Livre.
-6. Atualiza a Prontidão para Publicação.
+## Segurança
 
-## Mapeamentos iniciais
+O sistema não salva o primeiro resultado encontrado.
+Ele só seleciona automaticamente quando:
 
-- marca → BRAND
-- modelo/nome → MODEL
-- ean/gtin/barcode/código de barras → GTIN
-- cor → COLOR
-- RGB → WITH_LIGHTS
-- bluetooth → WITH_BLUETOOTH
-- wireless → IS_WIRELESS
-- peso e dimensões
-- MPN/código do fabricante
+- o GTIN possui formato e dígito verificador válidos;
+- a correspondência entre produto importado e catálogo é de pelo menos 80%.
+
+Resultados abaixo desse nível aparecem apenas como candidatos.
 
 ## Instalação
 
@@ -31,8 +26,8 @@ Consultar o que o Mercado Livre exige e preencher automaticamente os atributos u
 2. Aguarde o deploy.
 3. Confirme `/api/health`.
 4. Versão esperada:
-   `enterprise-v5-sprint32-marketplace-auto-completer`
-5. Execute `Sprint32_Marketplace_Auto_Completer.sql`.
+   `enterprise-v5-sprint33-gtin-intelligence-engine`
+5. Execute a query da Sprint 33 no Supabase.
 6. Abra o anúncio.
-7. Clique em `Auto Completar`.
-8. Confira os campos preenchidos e os que ainda faltam.
+7. Clique em `GTIN Intelligence`.
+8. Depois clique em `Atualizar Prontidão`.
