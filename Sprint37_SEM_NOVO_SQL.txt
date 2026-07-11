@@ -1,0 +1,1 @@
+Não execute nova query. Esta versão adiciona diagnóstico em tempo real.

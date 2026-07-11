@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint36-seller-diagnostics"
+S13_VERSION = "enterprise-v5-sprint37-seller-eligibility-inspector"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -4547,6 +4547,7 @@ async def listing_details_page(listing_id: str):
 <p><b>Descrição:</b><br>{s19e(listing.get('description') or '-')}</p>
 <a class='btn' href='/product-master/{product.get("id")}/listing'>Editar rascunho</a>
 <a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a><a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a><a class='btn' href='/marketplace-intelligence/listing/{listing_id}'>Marketplace Intelligence</a><a class='btn' href='/publishing-lab/listing/{listing_id}'>Publishing Lab</a><a class='btn' href='/marketplace-rules/listing/{listing_id}'>Rules Engine</a><a class='btn' href='/marketplace-inspector/listing/{listing_id}'>Marketplace Inspector</a><a class='btn' href='/marketplace-knowledge/listing/{listing_id}'>Knowledge Engine</a><a class='btn' href='/publication-readiness/listing/{listing_id}'>Prontidão para Publicação</a><a class='btn' href='/gtin-discovery/listing/{listing_id}'>Descobrir GTIN</a><a class='btn' href='/gtin-intelligence/listing/{listing_id}'>GTIN Intelligence</a><a class='btn' href='/marketplace-auto-completer/listing/{listing_id}'>Auto Completar</a><a class='btn' href='/seller-diagnostics'>Diagnóstico do vendedor</a>
+<a class='btn' href='/seller-eligibility/listing/{listing_id}'>Elegibilidade para este anúncio</a>
 </div>
 <div class='card'><h2>Erros</h2><ul>{errors_html}</ul><h2>Alertas</h2><ul>{warnings_html}</ul></div>
 {publish_box}
@@ -12067,3 +12068,377 @@ async def seller_diagnostics_page():
 </div>
 """
     return HTMLResponse(shell("Diagnóstico do vendedor", content))
+
+
+# ==========================================================
+# SPRINT 37 - SELLER ELIGIBILITY INSPECTOR
+# Aprofunda o diagnóstico por usuário, categoria e tipo de anúncio.
+# ==========================================================
+
+def s37_bool_label(value):
+    return "SIM" if value else "NÃO"
+
+
+def s37_status_flags(user):
+    status = user.get("status") or {}
+    tags = {str(item).lower() for item in (user.get("tags") or [])}
+
+    blocking_statuses = {
+        "blocked",
+        "inactive",
+        "suspended",
+        "disabled",
+    }
+
+    site_status = str(status.get("site_status") or "").lower()
+
+    return {
+        "site_status": site_status or None,
+        "site_status_blocking": site_status in blocking_statuses,
+        "mercado_pago_account_type": user.get("mercado_pago_account_type"),
+        "seller": "seller" in tags or "normal" in tags,
+        "business": "business" in tags,
+        "normal": "normal" in tags,
+        "user_product_seller": "user_product_seller" in tags,
+        "messages_as_seller": "messages_as_seller" in tags,
+        "tags": sorted(tags),
+    }
+
+
+async def s37_safe_ml_get(path, params=None):
+    try:
+        result = await ml_request(path, params=params or {})
+        return {
+            "success": bool(result.get("success")),
+            "status_code": result.get("status_code"),
+            "data": result.get("data"),
+            "error": result.get("error"),
+            "raw": result.get("raw"),
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "status_code": 0,
+            "data": None,
+            "error": str(exc),
+            "raw": "",
+        }
+
+
+async def s37_category_listing_eligibility(user_id, category_id, listing_type_id):
+    available_types = await s37_safe_ml_get(
+        f"/users/{user_id}/available_listing_types",
+        params={"category_id": category_id},
+    )
+
+    selected_type = await s37_safe_ml_get(
+        f"/users/{user_id}/available_listing_type/{listing_type_id}",
+        params={"category_id": category_id},
+    )
+
+    types_data = available_types.get("data") or []
+    available_ids = set()
+
+    if isinstance(types_data, list):
+        for row in types_data:
+            if isinstance(row, dict):
+                value = row.get("id") or row.get("listing_type_id")
+                if value:
+                    available_ids.add(str(value))
+            elif row:
+                available_ids.add(str(row))
+
+    selected_allowed = None
+    selected_data = selected_type.get("data")
+
+    if selected_type.get("success"):
+        if isinstance(selected_data, dict):
+            selected_allowed = selected_data.get("available")
+            if selected_allowed is None:
+                selected_allowed = selected_data.get("allowed")
+            if selected_allowed is None:
+                selected_allowed = True
+        else:
+            selected_allowed = True
+    elif available_ids:
+        selected_allowed = listing_type_id in available_ids
+
+    return {
+        "available_listing_types_request": available_types,
+        "selected_listing_type_request": selected_type,
+        "available_ids": sorted(available_ids),
+        "selected_listing_type_id": listing_type_id,
+        "selected_allowed": selected_allowed,
+    }
+
+
+async def s37_existing_seller_items(user_id):
+    result = await s37_safe_ml_get(
+        f"/users/{user_id}/items/search",
+        params={"limit": 1},
+    )
+
+    data = result.get("data") or {}
+    total = None
+
+    if isinstance(data, dict):
+        paging = data.get("paging") or {}
+        total = paging.get("total")
+        if total is None:
+            total = data.get("total")
+
+    return {
+        "request": result,
+        "total": total,
+        "has_existing_items": bool(total and int(total) > 0),
+    }
+
+
+def s37_interpret_eligibility(base, eligibility, items):
+    user = base.get("user") or {}
+    flags = s37_status_flags(user)
+
+    blockers = list(base.get("blockers") or [])
+    warnings = list(base.get("warnings") or [])
+    findings = []
+
+    selected_allowed = eligibility.get("selected_allowed")
+
+    if flags.get("site_status_blocking"):
+        blockers.append({
+            "code": "blocking_site_status",
+            "message": f"Status impeditivo da conta: {flags.get('site_status')}.",
+        })
+
+    if selected_allowed is False:
+        blockers.append({
+            "code": "listing_type_not_available",
+            "message": (
+                "O tipo de anúncio escolhido não está disponível para "
+                "este vendedor nesta categoria."
+            ),
+        })
+    elif selected_allowed is True:
+        findings.append({
+            "code": "listing_type_available",
+            "message": "O tipo de anúncio escolhido está disponível para a categoria.",
+        })
+    else:
+        warnings.append({
+            "code": "listing_type_inconclusive",
+            "message": (
+                "A API não confirmou de forma conclusiva a disponibilidade "
+                "do tipo de anúncio para esta conta e categoria."
+            ),
+        })
+
+    total = items.get("total")
+    if total is not None:
+        if items.get("has_existing_items"):
+            findings.append({
+                "code": "seller_has_items",
+                "message": f"A conta já possui {total} anúncio(s) registrado(s).",
+            })
+        else:
+            warnings.append({
+                "code": "first_listing_onboarding",
+                "message": (
+                    "A conta não possui anúncios. O Mercado Livre pode exigir "
+                    "a conclusão do primeiro anúncio ou onboarding pelo site."
+                ),
+            })
+
+    if not flags.get("user_product_seller"):
+        warnings.append({
+            "code": "user_product_seller_tag_absent",
+            "message": (
+                "A tag user_product_seller não apareceu na conta. Isso não prova "
+                "bloqueio, mas é compatível com habilitação incompleta para o fluxo "
+                "de publicação de produtos."
+            ),
+        })
+    else:
+        findings.append({
+            "code": "user_product_seller_tag",
+            "message": "A conta possui a tag user_product_seller.",
+        })
+
+    can_list = not blockers and selected_allowed is not False
+
+    if blockers:
+        diagnosis = "blocked_by_detected_rule"
+    elif not items.get("has_existing_items"):
+        diagnosis = "probable_first_listing_onboarding"
+    elif selected_allowed is None:
+        diagnosis = "marketplace_restriction_not_exposed"
+    else:
+        diagnosis = "no_public_api_blocker_found"
+
+    return {
+        "can_list": can_list,
+        "diagnosis": diagnosis,
+        "flags": flags,
+        "blockers": blockers,
+        "warnings": warnings,
+        "findings": findings,
+    }
+
+
+async def s37_listing_diagnostics(listing_id):
+    listing = await s19_get_listing(listing_id)
+    if not listing:
+        return {
+            "success": False,
+            "status_code": 404,
+            "error": "Anúncio não encontrado.",
+        }
+
+    base = await s36_seller_diagnostics()
+    if not base.get("success"):
+        return base
+
+    user_id = (base.get("user") or {}).get("id")
+    category_id = listing.get("category_id")
+    listing_type_id = listing.get("listing_type_id") or "gold_special"
+
+    if not user_id:
+        return {
+            "success": False,
+            "status_code": 422,
+            "error": "A API não retornou o ID do usuário autenticado.",
+        }
+
+    eligibility = await s37_category_listing_eligibility(
+        user_id,
+        category_id,
+        listing_type_id,
+    )
+    items = await s37_existing_seller_items(user_id)
+
+    interpretation = s37_interpret_eligibility(
+        base,
+        eligibility,
+        items,
+    )
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "listing_id": listing_id,
+        "user_id": user_id,
+        "category_id": category_id,
+        "listing_type_id": listing_type_id,
+        "status": "ready" if interpretation.get("can_list") else "blocked",
+        "base_diagnostics": base,
+        "eligibility": eligibility,
+        "seller_items": items,
+        "interpretation": interpretation,
+        "next_action": (
+            "Entre no Mercado Livre com esta mesma conta e conclua o primeiro "
+            "anúncio pelo site, incluindo qualquer confirmação de endereço, "
+            "telefone, identidade, dados fiscais ou termos apresentada."
+            if interpretation.get("diagnosis") == "probable_first_listing_onboarding"
+            else (
+                "Corrija os bloqueios listados e execute novamente o diagnóstico."
+                if interpretation.get("blockers")
+                else (
+                    "A API pública não expôs um bloqueio específico. Abra uma "
+                    "solicitação no suporte do Mercado Livre informando o erro "
+                    "seller.unable_to_list e o ID do usuário autenticado."
+                )
+            )
+        ),
+    }
+
+
+@app.get("/api/seller-eligibility/listing/{listing_id}")
+async def seller_eligibility_api(listing_id: str):
+    result = await s37_listing_diagnostics(listing_id)
+
+    if not result.get("success"):
+        return JSONResponse(
+            status_code=int(result.get("status_code") or 400),
+            content=result,
+        )
+
+    return result
+
+
+@app.get("/seller-eligibility/listing/{listing_id}", response_class=HTMLResponse)
+async def seller_eligibility_page(listing_id: str):
+    result = await s37_listing_diagnostics(listing_id)
+
+    if not result.get("success"):
+        return HTMLResponse(
+            shell(
+                "Elegibilidade do vendedor",
+                f"<div class='card'><h2>Erro</h2><p>{result.get('error')}</p></div>",
+            ),
+            status_code=int(result.get("status_code") or 400),
+        )
+
+    interpretation = result.get("interpretation") or {}
+    eligibility = result.get("eligibility") or {}
+    items = result.get("seller_items") or {}
+
+    blockers_html = "".join(
+        f"<li><b>{row.get('code')}</b>: {row.get('message')}</li>"
+        for row in interpretation.get("blockers") or []
+    ) or "<li>Nenhum bloqueio explícito encontrado.</li>"
+
+    warnings_html = "".join(
+        f"<li><b>{row.get('code')}</b>: {row.get('message')}</li>"
+        for row in interpretation.get("warnings") or []
+    ) or "<li>Nenhum alerta.</li>"
+
+    findings_html = "".join(
+        f"<li><b>{row.get('code')}</b>: {row.get('message')}</li>"
+        for row in interpretation.get("findings") or []
+    ) or "<li>Nenhuma confirmação adicional.</li>"
+
+    flags = interpretation.get("flags") or {}
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Status</span><strong>{'APTO' if interpretation.get('can_list') else 'BLOQUEADO'}</strong></div>
+  <div class='metric'><span>Categoria</span><strong>{result.get('category_id')}</strong></div>
+  <div class='metric'><span>Tipo</span><strong>{result.get('listing_type_id')}</strong></div>
+  <div class='metric'><span>Anúncios existentes</span><strong>{items.get('total') if items.get('total') is not None else '-'}</strong></div>
+</div>
+
+<div class='card'>
+<h2>Elegibilidade específica</h2>
+<table>
+<thead><tr><th>Verificação</th><th>Resultado</th></tr></thead>
+<tbody>
+<tr><td>Tipo de anúncio disponível</td><td>{s37_bool_label(eligibility.get('selected_allowed')) if eligibility.get('selected_allowed') is not None else 'INCONCLUSIVO'}</td></tr>
+<tr><td>Status da conta</td><td>{flags.get('site_status') or '-'}</td></tr>
+<tr><td>Tag user_product_seller</td><td>{s37_bool_label(flags.get('user_product_seller'))}</td></tr>
+<tr><td>Conta business</td><td>{s37_bool_label(flags.get('business'))}</td></tr>
+<tr><td>Diagnóstico</td><td>{interpretation.get('diagnosis')}</td></tr>
+</tbody>
+</table>
+</div>
+
+<div class='card'>
+<h2>Bloqueios</h2>
+<ul>{blockers_html}</ul>
+<h2>Alertas</h2>
+<ul>{warnings_html}</ul>
+<h2>Confirmações</h2>
+<ul>{findings_html}</ul>
+</div>
+
+<div class='card'>
+<h2>Próxima ação</h2>
+<p>{result.get('next_action')}</p>
+</div>
+
+<div class='card'>
+<a class='btn' href='/api/seller-eligibility/listing/{listing_id}'>Ver JSON técnico</a>
+<a class='btn' href='/seller-diagnostics'>Diagnóstico geral</a>
+<a class='btn' href='/publication-readiness/listing/{listing_id}'>Voltar à prontidão</a>
+</div>
+"""
+
+    return HTMLResponse(shell("Elegibilidade do vendedor", content))
