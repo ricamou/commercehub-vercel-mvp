@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint27-1-rules-engine-hotfix"
+S13_VERSION = "enterprise-v5-sprint27-2-rules-engine-runtime-hotfix"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -7539,7 +7539,7 @@ async def marketplace_intelligence_refresh_page(listing_id: str):
 # ==========================================================
 
 def s26_location(attr):
-    tags = attr.get("tags") or {}
+    tags = s272_dict(attr.get("tags"))
     return "variation" if (
         attr.get("allow_variations")
         or tags.get("allow_variations")
@@ -7733,6 +7733,30 @@ def s27_sha256(value):
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
+def s272_dict(value):
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def s272_list(value):
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, list) else []
+        except Exception:
+            return []
+    return []
+
+
 def s27_dedupe_issues(items):
     output = []
     seen = set()
@@ -7750,7 +7774,7 @@ def s27_dedupe_issues(items):
 
 
 def s27_metadata_required(attr):
-    tags = attr.get("tags") or {}
+    tags = s272_dict(attr.get("tags"))
     return bool(
         attr.get("required")
         or attr.get("catalog_required")
@@ -7761,7 +7785,7 @@ def s27_metadata_required(attr):
 
 
 def s27_value_strategy(attr):
-    values = attr.get("values") or []
+    values = s272_list(attr.get("values"))
     value_type = str(attr.get("value_type") or "").lower()
     if values:
         return "value_id_preferred"
@@ -7788,17 +7812,54 @@ def s27_attribute_contract(attr):
 async def s27_build_contract(context, listing):
     product = context.get("product") or {}
     category_id = listing.get("category_id")
+    diagnostics = []
 
-    discovery = await s26_category_discovery(category_id)
-    preflight = await s24_metadata_preflight(context, listing)
-    intelligence = await s25_intelligence_assessment(context, listing)
+    try:
+        discovery = await s26_category_discovery(category_id)
+    except Exception as exc:
+        diagnostics.append({"stage": "category_discovery", "error": str(exc)})
+        discovery = {
+            "success": False,
+            "category_id": category_id,
+            "raw_attributes": [],
+            "item_attributes": [],
+            "variation_attributes": [],
+            "required_attributes": [],
+        }
+
+    try:
+        preflight = await s24_metadata_preflight(context, listing)
+    except Exception as exc:
+        diagnostics.append({"stage": "metadata_preflight", "error": str(exc)})
+        preflight = {
+            "success": False,
+            "conditional_attribute_ids": [],
+            "sent_attribute_ids": [],
+            "conditional_validation": {},
+            "blockers": [],
+            "warnings": [],
+        }
+
+    try:
+        intelligence = await s25_intelligence_assessment(context, listing)
+    except Exception as exc:
+        diagnostics.append({"stage": "intelligence_assessment", "error": str(exc)})
+        intelligence = {"success": False, "rules": [], "blockers": [], "recommendations": []}
 
     attrs = discovery.get("raw_attributes") or []
-    contracts = {
-        str(attr.get("attribute_id") or "").upper(): s27_attribute_contract(attr)
-        for attr in attrs
-        if attr.get("attribute_id")
-    }
+    contracts = {}
+
+    for attr in attrs:
+        try:
+            aid = str(attr.get("attribute_id") or "").upper()
+            if aid:
+                contracts[aid] = s27_attribute_contract(attr)
+        except Exception as exc:
+            diagnostics.append({
+                "stage": "attribute_contract",
+                "attribute_id": str(attr.get("attribute_id") or ""),
+                "error": str(exc),
+            })
 
     conditional_ids = {
         str(x).upper()
@@ -7840,7 +7901,13 @@ async def s27_build_contract(context, listing):
 
     gtin_contract = contracts.get("GTIN") or {}
     empty_contract = contracts.get("EMPTY_GTIN_REASON") or {}
-    values = await s21_product_values(product.get("id"), category_id)
+
+    try:
+        values = await s21_product_values(product.get("id"), category_id)
+    except Exception as exc:
+        diagnostics.append({"stage": "product_values", "error": str(exc)})
+        values = {}
+
     gtin_row = values.get("GTIN") or values.get("gtin") or {}
     reason_row = values.get("EMPTY_GTIN_REASON") or values.get("empty_gtin_reason") or {}
 
@@ -7851,6 +7918,7 @@ async def s27_build_contract(context, listing):
     learned_gtin_required = any(
         str(row.get("rule_key") or "").upper() == "GTIN_REQUIRED"
         for row in (intelligence.get("rules") or [])
+        if isinstance(row, dict)
     )
 
     if gtin_conditional or learned_gtin_required:
@@ -7909,6 +7977,7 @@ async def s27_build_contract(context, listing):
             "conditional_required": gtin_conditional,
             "learned_required": learned_gtin_required,
         },
+        "diagnostics": diagnostics,
     }
 
     fingerprint = s27_sha256({
@@ -7929,6 +7998,7 @@ async def s27_build_contract(context, listing):
         "payload_contract": payload_contract,
         "required_actions": required_actions,
         "decisions": decisions,
+        "diagnostics": diagnostics,
     }
 
 
@@ -8073,7 +8143,20 @@ async def marketplace_rules_api(listing_id: str):
             "error": "Produto não encontrado.",
         })
 
-    return await s27_rules_engine(context, listing)
+    try:
+        return await s27_rules_engine(context, listing)
+    except Exception as exc:
+        return JSONResponse(
+            status_code=200,
+            content={
+                "success": False,
+                "version": APP_VERSION,
+                "error": "Rules Engine runtime error",
+                "error_type": type(exc).__name__,
+                "detail": str(exc),
+                "listing_id": listing_id,
+            },
+        )
 
 
 @app.get("/marketplace-rules/listing/{listing_id}", response_class=HTMLResponse)
@@ -8086,7 +8169,24 @@ async def marketplace_rules_page(listing_id: str):
         )
 
     context = await s19_product_context(listing.get("product_id"))
-    result = await s27_rules_engine(context, listing)
+
+    try:
+        result = await s27_rules_engine(context, listing)
+    except Exception as exc:
+        detail = s19e(str(exc))
+        error_type = s19e(type(exc).__name__)
+        content = f"""
+<div class='card'>
+<h2>Rules Engine — diagnóstico</h2>
+<p><b>Tipo:</b> {error_type}</p>
+<p><b>Detalhe:</b> {detail}</p>
+<p>Abra o JSON técnico para copiar o diagnóstico completo.</p>
+<a class='btn' href='/api/marketplace-rules/listing/{listing_id}'>Ver JSON técnico</a>
+<a class='btn' href='/product-master/{listing.get("product_id")}/listing'>Voltar ao anúncio</a>
+</div>
+"""
+        return HTMLResponse(shell("Marketplace Rules Engine", content), status_code=200)
+
     contract = result.get("contract") or {}
     simulation = result.get("simulation") or {}
     tree = contract.get("decision_tree") or {}
@@ -8136,6 +8236,9 @@ async def marketplace_rules_page(listing_id: str):
 <p><b>Atributos de item:</b> {len(payload_contract.get('item_attribute_ids') or [])}</p>
 <p><b>Atributos de variação:</b> {len(payload_contract.get('variation_attribute_ids') or [])}</p>
 <p><b>Condicionais:</b> {s19e(', '.join(payload_contract.get('conditional_attribute_ids') or []))}</p>
+<p><b>Snapshot salvo:</b> {'SIM' if result.get('saved') else 'NÃO'}</p>
+<p><b>Erro ao salvar:</b> {s19e(result.get('save_error') or '-')}</p>
+<p><b>Diagnósticos:</b> {s19e(json.dumps(contract.get('diagnostics') or [], ensure_ascii=False))}</p>
 </div>
 
 <div class='card'>

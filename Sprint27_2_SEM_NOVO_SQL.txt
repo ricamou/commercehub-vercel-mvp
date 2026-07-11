@@ -1,0 +1,1 @@
+Não execute nova query. Use as tabelas existentes da Sprint 27.

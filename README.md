@@ -1,13 +1,11 @@
-# Sprint 27.1 — Rules Engine Hotfix
+# Sprint 27.2 — Rules Engine Runtime Hotfix
 
 Correções:
+- normaliza campos JSON que chegam como texto;
+- protege todas as etapas do Rules Engine;
+- a página não retorna mais Internal Server Error;
+- o endpoint JSON mostra tipo e detalhe do erro;
+- falha no snapshot não impede a análise;
+- diagnóstico aparece diretamente na tela.
 
-- remove o upsert incompatível com índice único baseado em COALESCE;
-- usa SELECT + UPDATE/INSERT;
-- trata corretamente brand e domain_id nulos;
-- evita duplicar decisões a cada abertura da tela;
-- uma falha ao salvar snapshot não derruba mais a página;
-- mantém o Rules Engine funcionando mesmo se houver erro de persistência.
-
-Não é necessário executar nova query.
-Use as tabelas já criadas na Sprint 27.
+Não execute nova query no Supabase.
