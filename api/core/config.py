@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint33-1-gtin-routing-hotfix"
+APP_VERSION = "enterprise-v5-sprint34-unified-payload-controlled-publish"
 
 def env(name, default=""):
     value = os.getenv(name, default)

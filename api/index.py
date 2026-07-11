@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint33-1-gtin-routing-hotfix"
+S13_VERSION = "enterprise-v5-sprint34-unified-payload-controlled-publish"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -8679,14 +8679,8 @@ def s28_attribute_requirement(attr):
 
 
 async def s28_build_payload_preview(context, listing):
-    payload = s19_build_ml_payload(context, listing, mode="user_product")
-    payload["attributes"] = await s21_payload_attributes(
-        context["product"].get("id"),
-        listing.get("category_id"),
-        payload.get("attributes"),
-    )
-    routed = await s331_apply_identifier_routing(context, listing, payload)
-    return routed.get("payload") or payload
+    built = await s34_build_unified_payload(context, listing)
+    return built.get("payload") or {}
 
 
 async def s28_conditional_check(category_id, payload):
@@ -9516,27 +9510,22 @@ async def s30_build_readiness(listing_id):
 
         completed_fields.append(field_name)
 
-    payload_preview = inspection_result.get("payload_preview") or {}
+    unified = await s34_build_unified_payload(context, listing)
+    payload_preview = unified.get("payload") or {}
 
-    # Recalcula e roteia GTIN/EMPTY_GTIN_REASON conforme a estrutura do anúncio.
-    gtin_value = s30_product_field_value(product, "GTIN")
-    if gtin_value and s212_valid_gtin(gtin_value):
-        payload_preview.setdefault("attributes", [])
-        payload_preview["attributes"] = s331_remove_ids(
-            payload_preview.get("attributes") or [],
-            {"GTIN", "EMPTY_GTIN_REASON"}
-        )
-        payload_preview["attributes"].append({
-            "id": "GTIN",
-            "value_name": str(gtin_value),
-        })
-
-    routed = await s331_apply_identifier_routing(
-        context,
-        listing,
-        payload_preview,
-    )
-    payload_preview = routed.get("payload") or payload_preview
+    # A localização exibida agora vem do payload real, não apenas dos metadados.
+    actual_locations = unified.get("locations") or {}
+    for field_name, info in source_map.items():
+        if field_name in actual_locations:
+            info["location"] = actual_locations.get(field_name)
+        elif field_name == "GTIN":
+            info["location"] = (
+                "variations[].attributes"
+                if payload_preview.get("variations")
+                else "item.attributes"
+            )
+        elif field_name == "EMPTY_GTIN_REASON":
+            info["location"] = "item.attributes"
 
     total = max(1, len(required_fields))
     score = int(round((len(completed_fields) / total) * 100))
@@ -9690,6 +9679,10 @@ async def publication_readiness_page(listing_id: str):
 <div class='card'>
 <a class='btn' href='/marketplace-inspector/listing/{listing_id}'>Marketplace Inspector</a>
 <a class='btn' href='/api/publication-readiness/listing/{listing_id}'>Ver JSON técnico</a>
+<a class='btn' href='/api/unified-payload/listing/{listing_id}'>Ver payload unificado</a>
+<form method='post' action='/api/publication-readiness/listing/{listing_id}/controlled-attempt' style='display:inline'>
+<button class='btn' type='submit'>Tentar publicação controlada</button>
+</form>
 <a class='btn' href='/product-master/{result.get("product_id")}/listing'>Voltar ao anúncio</a>
 </div>
 """
@@ -9716,11 +9709,10 @@ async def publication_readiness_publish(listing_id: str, request: Request):
             },
         )
 
-    listing = await s19_get_listing(listing_id)
-    context = await s19_product_context(listing.get("product_id"))
-    payload = readiness.get("payload_preview") or {}
-    routed = await s331_apply_identifier_routing(context, listing, payload)
-    payload = routed.get("payload") or payload
+    unified = await s34_listing_payload(listing_id)
+    listing = unified.get("listing") or {}
+    context = unified.get("context") or {}
+    payload = unified.get("payload") or {}
 
     result = await ml_request("/items", method="POST", payload=payload)
 
@@ -11399,4 +11391,253 @@ async def identifier_routing_api(listing_id: str):
         "listing_id": listing_id,
         "category_id": listing.get("category_id"),
         "routing": routed,
+    }
+
+
+# ==========================================================
+# SPRINT 34 - UNIFIED PAYLOAD + CONTROLLED PUBLISH
+# Um único construtor para Inspector, Readiness e publicação.
+# ==========================================================
+
+def s34_payload_attribute_locations(payload):
+    locations = {}
+
+    for item in payload.get("attributes") or []:
+        attribute_id = str(item.get("id") or "").upper()
+        if attribute_id:
+            locations[attribute_id] = "item.attributes"
+
+    for index, variation in enumerate(payload.get("variations") or []):
+        for item in variation.get("attribute_combinations") or []:
+            attribute_id = str(item.get("id") or "").upper()
+            if attribute_id:
+                locations[attribute_id] = (
+                    f"variations[{index}].attribute_combinations"
+                )
+
+        for item in variation.get("attributes") or []:
+            attribute_id = str(item.get("id") or "").upper()
+            if attribute_id:
+                locations[attribute_id] = (
+                    f"variations[{index}].attributes"
+                )
+
+    return locations
+
+
+def s34_identifier_state(payload):
+    locations = s34_payload_attribute_locations(payload)
+
+    gtin_present = "GTIN" in locations
+    empty_reason_present = "EMPTY_GTIN_REASON" in locations
+
+    return {
+        "gtin_present": gtin_present,
+        "gtin_location": locations.get("GTIN"),
+        "empty_gtin_reason_present": empty_reason_present,
+        "empty_gtin_reason_location": locations.get("EMPTY_GTIN_REASON"),
+        "conflict": gtin_present and empty_reason_present,
+    }
+
+
+async def s34_build_unified_payload(context, listing):
+    product = context.get("product") or {}
+
+    payload = s19_build_ml_payload(
+        context,
+        listing,
+        mode="user_product",
+    )
+
+    payload["attributes"] = await s21_payload_attributes(
+        product.get("id"),
+        listing.get("category_id"),
+        payload.get("attributes"),
+    )
+
+    routed = await s331_apply_identifier_routing(
+        context,
+        listing,
+        payload,
+    )
+    payload = routed.get("payload") or payload
+
+    locations = s34_payload_attribute_locations(payload)
+    identifiers = s34_identifier_state(payload)
+
+    return {
+        "success": True,
+        "payload": payload,
+        "locations": locations,
+        "identifiers": identifiers,
+        "routing": routed,
+    }
+
+
+async def s34_listing_payload(listing_id):
+    listing = await s19_get_listing(listing_id)
+    if not listing:
+        return {
+            "success": False,
+            "status_code": 404,
+            "error": "Anúncio não encontrado.",
+        }
+
+    context = await s19_product_context(listing.get("product_id"))
+    if not context:
+        return {
+            "success": False,
+            "status_code": 404,
+            "error": "Produto não encontrado.",
+        }
+
+    built = await s34_build_unified_payload(context, listing)
+    built["listing"] = listing
+    built["context"] = context
+    return built
+
+
+def s34_is_controlled_attempt_allowed(readiness, unified):
+    payload = unified.get("payload") or {}
+    identifiers = unified.get("identifiers") or {}
+
+    missing_ids = {
+        str(item.get("field") or "").upper()
+        for item in (readiness.get("missing_fields") or [])
+    }
+
+    invalid_ids = {
+        str(item.get("field") or "").upper()
+        for item in (readiness.get("invalid_fields") or [])
+    }
+
+    # Tentativa controlada somente quando:
+    # - não há valores inválidos;
+    # - o único campo faltante é GTIN;
+    # - EMPTY_GTIN_REASON está no item;
+    # - não enviamos GTIN e motivo simultaneamente.
+    return bool(
+        not invalid_ids
+        and missing_ids == {"GTIN"}
+        and identifiers.get("empty_gtin_reason_present")
+        and identifiers.get("empty_gtin_reason_location") == "item.attributes"
+        and not identifiers.get("conflict")
+        and payload.get("category_id")
+        and payload.get("pictures")
+    )
+
+
+@app.get("/api/unified-payload/listing/{listing_id}")
+async def unified_payload_api(listing_id: str):
+    result = await s34_listing_payload(listing_id)
+
+    if not result.get("success"):
+        return JSONResponse(
+            status_code=int(result.get("status_code") or 400),
+            content=result,
+        )
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "listing_id": listing_id,
+        "locations": result.get("locations"),
+        "identifiers": result.get("identifiers"),
+        "payload": result.get("payload"),
+    }
+
+
+@app.post("/api/publication-readiness/listing/{listing_id}/controlled-attempt")
+async def controlled_publication_attempt(listing_id: str, request: Request):
+    readiness = await s30_build_readiness(listing_id)
+    unified = await s34_listing_payload(listing_id)
+
+    if not readiness.get("success"):
+        return JSONResponse(
+            status_code=int(readiness.get("status_code") or 400),
+            content=readiness,
+        )
+
+    if not unified.get("success"):
+        return JSONResponse(
+            status_code=int(unified.get("status_code") or 400),
+            content=unified,
+        )
+
+    if not s34_is_controlled_attempt_allowed(readiness, unified):
+        return JSONResponse(
+            status_code=422,
+            content={
+                "success": False,
+                "error": (
+                    "A tentativa controlada não foi liberada. "
+                    "Ela só é permitida quando a única pendência é GTIN "
+                    "e EMPTY_GTIN_REASON está corretamente em item.attributes."
+                ),
+                "readiness": readiness,
+                "unified_payload": {
+                    "locations": unified.get("locations"),
+                    "identifiers": unified.get("identifiers"),
+                    "payload": unified.get("payload"),
+                },
+            },
+        )
+
+    listing = unified.get("listing") or {}
+    context = unified.get("context") or {}
+    payload = unified.get("payload") or {}
+
+    result = await ml_request(
+        "/items",
+        method="POST",
+        payload=payload,
+    )
+
+    if not result.get("success"):
+        try:
+            await s25_record_error(
+                context,
+                listing,
+                result,
+                payload,
+            )
+        except Exception:
+            pass
+
+        return JSONResponse(
+            status_code=int(result.get("status_code") or 400),
+            content={
+                "success": False,
+                "attempt_type": "controlled_publish",
+                "error": "O Mercado Livre recusou a tentativa controlada.",
+                "result": result,
+                "payload_sent": payload,
+                "identifier_locations": unified.get("locations"),
+            },
+        )
+
+    item = result.get("data") or {}
+
+    await store.update(
+        "listings",
+        "id=eq." + quote(str(listing_id), safe="-"),
+        {
+            "external_id": item.get("id"),
+            "permalink": item.get("permalink"),
+            "item_url": item.get("permalink"),
+            "status": item.get("status") or "active",
+            "validation_status": "published",
+            "last_error": None,
+            "payload": payload,
+            "published_at": __import__("datetime").datetime.utcnow().isoformat(),
+            "last_synced_at": __import__("datetime").datetime.utcnow().isoformat(),
+        },
+    )
+
+    return {
+        "success": True,
+        "attempt_type": "controlled_publish",
+        "message": "Produto publicado com sucesso.",
+        "item": item,
+        "payload_sent": payload,
     }

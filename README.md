@@ -1,18 +1,33 @@
-# CommerceHub Enterprise V5 — Sprint 33.1 GTIN Routing Hotfix
+# CommerceHub Enterprise V5 — Sprint 34
 
-## Correções
+## Unified Payload + Controlled Publish
 
-- sem variações: `GTIN` em `item.attributes`;
-- com variações: `GTIN` em `variations[].attributes`;
-- `GTIN` nunca em `attribute_combinations`;
-- `EMPTY_GTIN_REASON` permanece em `item.attributes`;
-- `GTIN` e `EMPTY_GTIN_REASON` nunca são enviados juntos;
-- roteamento aplicado no Inspector, Readiness e imediatamente antes do POST `/items`.
+Esta versão cria um único construtor de payload para:
+
+- Marketplace Inspector;
+- Prontidão para Publicação;
+- publicação normal;
+- tentativa controlada.
+
+## Tentativa controlada
+
+A tentativa somente é liberada quando:
+
+- a única pendência é GTIN;
+- não existe valor inválido;
+- `EMPTY_GTIN_REASON` está em `item.attributes`;
+- GTIN e EMPTY_GTIN_REASON não são enviados juntos;
+- categoria e imagem estão presentes.
+
+## Rotas
+
+- `/api/unified-payload/listing/{listing_id}`
+- `/api/publication-readiness/listing/{listing_id}/controlled-attempt`
 
 ## Versão
 
-`enterprise-v5-sprint33-1-gtin-routing-hotfix`
+`enterprise-v5-sprint34-unified-payload-controlled-publish`
 
-## SQL
+## Supabase
 
-Não é necessário executar nova query.
+Não precisa criar nova query.
