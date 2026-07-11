@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint29-marketplace-knowledge-engine"
+APP_VERSION = "enterprise-v5-sprint30-publication-readiness-pipeline"
 
 def env(name, default=""):
     value = os.getenv(name, default)

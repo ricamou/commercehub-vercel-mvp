@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint29-marketplace-knowledge-engine"
+S13_VERSION = "enterprise-v5-sprint30-publication-readiness-pipeline"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -4568,7 +4568,7 @@ async def listing_details_page(listing_id: str):
 <h2>Publicação controlada</h2>
 <p>Esta ação cria um anúncio real na conta conectada do Mercado Livre.</p>
 <p><b>Modo manual:</b> digite <code>PUBLICAR</code> para publicar agora.</p>
-<form method='post' action='/api/publishing-lab/listing/{listing_id}/publish'>
+<form method='post' action='/api/publication-readiness/listing/{listing_id}/publish'>
 <label>Confirmação</label><input name='confirmation' placeholder='PUBLICAR' required>
 <button type='submit'>Publicar agora no Mercado Livre</button>
 </form>
@@ -4597,7 +4597,7 @@ async def listing_details_page(listing_id: str):
 <p><b>Imagens:</b> {len(context['images'])}</p>
 <p><b>Descrição:</b><br>{s19e(listing.get('description') or '-')}</p>
 <a class='btn' href='/product-master/{product.get("id")}/listing'>Editar rascunho</a>
-<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a><a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a><a class='btn' href='/marketplace-intelligence/listing/{listing_id}'>Marketplace Intelligence</a><a class='btn' href='/publishing-lab/listing/{listing_id}'>Publishing Lab</a><a class='btn' href='/marketplace-rules/listing/{listing_id}'>Rules Engine</a><a class='btn' href='/marketplace-inspector/listing/{listing_id}'>Marketplace Inspector</a><a class='btn' href='/marketplace-knowledge/listing/{listing_id}'>Knowledge Engine</a>
+<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a><a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a><a class='btn' href='/marketplace-intelligence/listing/{listing_id}'>Marketplace Intelligence</a><a class='btn' href='/publishing-lab/listing/{listing_id}'>Publishing Lab</a><a class='btn' href='/marketplace-rules/listing/{listing_id}'>Rules Engine</a><a class='btn' href='/marketplace-inspector/listing/{listing_id}'>Marketplace Inspector</a><a class='btn' href='/marketplace-knowledge/listing/{listing_id}'>Knowledge Engine</a><a class='btn' href='/publication-readiness/listing/{listing_id}'>Prontidão para Publicação</a>
 </div>
 <div class='card'><h2>Erros</h2><ul>{errors_html}</ul><h2>Alertas</h2><ul>{warnings_html}</ul></div>
 {publish_box}
@@ -9431,3 +9431,365 @@ async def marketplace_knowledge_page(listing_id: str):
 </div>
 """
     return HTMLResponse(shell("Marketplace Knowledge Engine", content))
+
+
+# ==========================================================
+# SPRINT 30 - PUBLICATION READINESS PIPELINE
+# Integra importação, requisitos oficiais e bloqueio pré-publicação.
+# ==========================================================
+
+def s30_value_present(value):
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, dict)):
+        return bool(value)
+    return True
+
+
+def s30_product_field_value(product, field_name):
+    field_name = str(field_name or "").upper()
+
+    mapping = {
+        "BRAND": product.get("brand"),
+        "MODEL": product.get("model") or product.get("name"),
+        "GTIN": product.get("ean") or product.get("gtin"),
+        "SELLER_SKU": product.get("sku"),
+        "MPN": product.get("mpn") or product.get("manufacturer_part_number"),
+        "WEIGHT": product.get("weight"),
+        "HEIGHT": product.get("height"),
+        "WIDTH": product.get("width"),
+        "LENGTH": product.get("length"),
+    }
+
+    return mapping.get(field_name)
+
+
+async def s30_attribute_values(product_id, category_id):
+    try:
+        return await s21_product_values(product_id, category_id)
+    except Exception:
+        return {}
+
+
+async def s30_build_readiness(listing_id):
+    listing = await s19_get_listing(listing_id)
+    if not listing:
+        return {
+            "success": False,
+            "status_code": 404,
+            "error": "Anúncio não encontrado.",
+        }
+
+    context = await s19_product_context(listing.get("product_id"))
+    if not context:
+        return {
+            "success": False,
+            "status_code": 404,
+            "error": "Produto não encontrado.",
+        }
+
+    product = context.get("product") or {}
+    category_id = listing.get("category_id")
+
+    inspection_result = await s28_inspect_listing(listing_id)
+    if not inspection_result.get("success"):
+        return inspection_result
+
+    inspection = inspection_result.get("inspection") or {}
+    requirements = inspection.get("requirements") or []
+    values = await s30_attribute_values(product.get("id"), category_id)
+
+    required_fields = []
+    completed_fields = []
+    missing_fields = []
+    invalid_fields = []
+    source_map = {}
+
+    for requirement in requirements:
+        field_name = str(requirement.get("field") or "").upper()
+        if not requirement.get("required"):
+            continue
+
+        required_fields.append(field_name)
+
+        attribute_row = values.get(field_name) or values.get(field_name.lower()) or {}
+        value = (
+            attribute_row.get("value_name")
+            or attribute_row.get("value_id")
+            or s30_product_field_value(product, field_name)
+        )
+
+        source = "manual"
+        if attribute_row:
+            source = attribute_row.get("source") or "product_marketplace_attributes"
+        elif s30_product_field_value(product, field_name) is not None:
+            source = "product_master"
+
+        source_map[field_name] = {
+            "source": source,
+            "value": value,
+            "location": requirement.get("location"),
+            "accepted_format": requirement.get("accepted_format"),
+            "source_endpoint": requirement.get("source"),
+        }
+
+        if not s30_value_present(value):
+            missing_fields.append({
+                "field": field_name,
+                "name": requirement.get("name"),
+                "location": requirement.get("location"),
+                "accepted_format": requirement.get("accepted_format"),
+                "accepted_values": requirement.get("accepted_values") or [],
+                "source_endpoint": requirement.get("source"),
+            })
+            continue
+
+        if field_name == "GTIN" and not s212_valid_gtin(value):
+            invalid_fields.append({
+                "field": "GTIN",
+                "value": value,
+                "message": "GTIN inválido. Use um código real de 8, 12, 13 ou 14 dígitos.",
+                "source_endpoint": requirement.get("source"),
+            })
+            continue
+
+        completed_fields.append(field_name)
+
+    payload_preview = inspection_result.get("payload_preview") or {}
+
+    # Recalcula GTIN no payload com base no valor real encontrado no Product Master.
+    gtin_value = s30_product_field_value(product, "GTIN")
+    if gtin_value and s212_valid_gtin(gtin_value):
+        attrs = [
+            item for item in (payload_preview.get("attributes") or [])
+            if str(item.get("id") or "").upper() not in {"GTIN", "EMPTY_GTIN_REASON"}
+        ]
+        attrs.append({"id": "GTIN", "value_name": str(gtin_value)})
+        payload_preview["attributes"] = attrs
+
+    total = max(1, len(required_fields))
+    score = int(round((len(completed_fields) / total) * 100))
+    ready = not missing_fields and not invalid_fields
+
+    readiness = {
+        "success": True,
+        "version": APP_VERSION,
+        "product_id": product.get("id"),
+        "listing_id": listing.get("id"),
+        "category_id": category_id,
+        "status": "ready" if ready else "blocked",
+        "readiness_score": score,
+        "required_fields": required_fields,
+        "completed_fields": completed_fields,
+        "missing_fields": missing_fields,
+        "invalid_fields": invalid_fields,
+        "source_map": source_map,
+        "payload_preview": payload_preview,
+        "official_requirements": inspection,
+    }
+
+    query = (
+        "select=*&product_id=eq." + quote(str(product.get("id")), safe="-")
+        + "&category_id=eq." + quote(str(category_id), safe="-_")
+        + "&limit=1"
+    )
+    existing_result = await store.select("ml_publication_readiness", query)
+    rows = existing_result.get("data") or []
+    existing = rows[0] if rows else None
+
+    payload = {
+        "company_id": DEFAULT_COMPANY_ID,
+        "product_id": product.get("id"),
+        "listing_id": listing.get("id"),
+        "category_id": category_id,
+        "status": readiness["status"],
+        "readiness_score": score,
+        "required_fields": required_fields,
+        "completed_fields": completed_fields,
+        "missing_fields": missing_fields,
+        "invalid_fields": invalid_fields,
+        "source_map": source_map,
+        "payload_preview": payload_preview,
+        "official_requirements": inspection,
+        "last_checked_at": __import__("datetime").datetime.utcnow().isoformat(),
+    }
+
+    if existing:
+        saved = await store.update(
+            "ml_publication_readiness",
+            "id=eq." + quote(str(existing.get("id")), safe="-"),
+            payload,
+        )
+    else:
+        saved = await store.insert("ml_publication_readiness", payload)
+
+    readiness["saved"] = bool(saved.get("success"))
+    readiness["save_error"] = saved.get("error") if not saved.get("success") else None
+
+    return readiness
+
+
+@app.get("/api/publication-readiness/listing/{listing_id}")
+async def publication_readiness_api(listing_id: str):
+    result = await s30_build_readiness(listing_id)
+    if not result.get("success"):
+        return JSONResponse(
+            status_code=int(result.get("status_code") or 400),
+            content=result,
+        )
+    return result
+
+
+@app.get("/publication-readiness/listing/{listing_id}", response_class=HTMLResponse)
+async def publication_readiness_page(listing_id: str):
+    result = await s30_build_readiness(listing_id)
+    if not result.get("success"):
+        return HTMLResponse(
+            shell(
+                "Prontidão para Publicação",
+                f"<div class='card'><h2>Erro</h2><p>{s19e(result.get('error'))}</p></div>",
+            ),
+            status_code=int(result.get("status_code") or 400),
+        )
+
+    missing_html = "".join(
+        f"<tr><td>{s19e(item.get('field'))}</td>"
+        f"<td>{s19e(item.get('name'))}</td>"
+        f"<td>{s19e(item.get('location'))}</td>"
+        f"<td>{s19e(item.get('accepted_format'))}</td>"
+        f"<td>{s19e(item.get('source_endpoint'))}</td></tr>"
+        for item in result.get("missing_fields") or []
+    ) or "<tr><td colspan='5'>Nenhum campo obrigatório faltando.</td></tr>"
+
+    invalid_html = "".join(
+        f"<li><b>{s19e(item.get('field'))}</b>: {s19e(item.get('message'))}</li>"
+        for item in result.get("invalid_fields") or []
+    ) or "<li>Nenhum campo inválido.</li>"
+
+    source_rows = "".join(
+        f"<tr><td>{s19e(field)}</td>"
+        f"<td>{s19e(info.get('source'))}</td>"
+        f"<td>{s19e(info.get('value'))}</td>"
+        f"<td>{s19e(info.get('location'))}</td></tr>"
+        for field, info in (result.get("source_map") or {}).items()
+    )
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Status</span><strong>{'PRONTO' if result.get('status') == 'ready' else 'BLOQUEADO'}</strong></div>
+  <div class='metric'><span>Score</span><strong>{result.get('readiness_score')}%</strong></div>
+  <div class='metric'><span>Obrigatórios</span><strong>{len(result.get('required_fields') or [])}</strong></div>
+  <div class='metric'><span>Faltando</span><strong>{len(result.get('missing_fields') or [])}</strong></div>
+</div>
+
+<div class='card'>
+<h2>Campos obrigatórios que ainda faltam</h2>
+<table>
+<thead>
+<tr>
+<th>Campo</th>
+<th>Nome</th>
+<th>Local</th>
+<th>Formato aceito</th>
+<th>Fonte oficial</th>
+</tr>
+</thead>
+<tbody>{missing_html}</tbody>
+</table>
+</div>
+
+<div class='card'>
+<h2>Campos inválidos</h2>
+<ul>{invalid_html}</ul>
+</div>
+
+<div class='card'>
+<h2>Origem dos dados preenchidos</h2>
+<table>
+<thead><tr><th>Campo</th><th>Origem</th><th>Valor</th><th>Local</th></tr></thead>
+<tbody>{source_rows}</tbody>
+</table>
+</div>
+
+<div class='card'>
+<h2>Payload preparado</h2>
+<pre>{s19e(json.dumps(result.get('payload_preview') or {}, ensure_ascii=False, indent=2))}</pre>
+</div>
+
+<div class='card'>
+<a class='btn' href='/marketplace-inspector/listing/{listing_id}'>Marketplace Inspector</a>
+<a class='btn' href='/api/publication-readiness/listing/{listing_id}'>Ver JSON técnico</a>
+<a class='btn' href='/product-master/{result.get("product_id")}/listing'>Voltar ao anúncio</a>
+</div>
+"""
+    return HTMLResponse(shell("Prontidão para Publicação", content))
+
+
+@app.post("/api/publication-readiness/listing/{listing_id}/publish")
+async def publication_readiness_publish(listing_id: str, request: Request):
+    readiness = await s30_build_readiness(listing_id)
+
+    if not readiness.get("success"):
+        return JSONResponse(
+            status_code=int(readiness.get("status_code") or 400),
+            content=readiness,
+        )
+
+    if readiness.get("status") != "ready":
+        return JSONResponse(
+            status_code=422,
+            content={
+                "success": False,
+                "error": "Produto ainda não está pronto para publicação.",
+                "readiness": readiness,
+            },
+        )
+
+    listing = await s19_get_listing(listing_id)
+    context = await s19_product_context(listing.get("product_id"))
+    payload = readiness.get("payload_preview") or {}
+
+    result = await ml_request("/items", method="POST", payload=payload)
+
+    if not result.get("success"):
+        try:
+            await s25_record_error(context, listing, result, payload)
+        except Exception:
+            pass
+
+        return JSONResponse(
+            status_code=int(result.get("status_code") or 400),
+            content={
+                "success": False,
+                "error": "Mercado Livre recusou o payload preparado.",
+                "result": result,
+                "payload_sent": payload,
+            },
+        )
+
+    item = result.get("data") or {}
+
+    await store.update(
+        "listings",
+        "id=eq." + quote(str(listing_id), safe="-"),
+        {
+            "external_id": item.get("id"),
+            "permalink": item.get("permalink"),
+            "item_url": item.get("permalink"),
+            "status": item.get("status") or "active",
+            "validation_status": "published",
+            "last_error": None,
+            "payload": payload,
+            "published_at": __import__("datetime").datetime.utcnow().isoformat(),
+            "last_synced_at": __import__("datetime").datetime.utcnow().isoformat(),
+        },
+    )
+
+    return {
+        "success": True,
+        "message": "Produto publicado com sucesso.",
+        "item": item,
+        "payload_sent": payload,
+    }

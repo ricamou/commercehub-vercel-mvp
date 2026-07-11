@@ -1,20 +1,30 @@
-# CommerceHub Enterprise V5 — Sprint 29 Marketplace Knowledge Engine
+# CommerceHub Enterprise V5 — Sprint 30 Publication Readiness Pipeline
 
 ## Objetivo
 
-Consolidar em uma base persistente as regras oficiais descobertas pelo Marketplace Inspector.
+Garantir que todo produto importado tenha todas as informações exigidas pelo Mercado Livre antes de publicar.
 
-## O que esta versão faz
+## Fluxo
 
-- cria perfil por categoria + marca + domínio;
-- salva fingerprint das regras;
-- consolida atributos obrigatórios e condicionais;
-- registra local correto: item ou variation;
-- registra formato e valores aceitos;
-- consolida política de GTIN;
-- diferencia presença de EMPTY_GTIN_REASON de substituição efetiva do GTIN;
-- gera recomendações comprovadas;
-- preserva as fontes oficiais consultadas.
+1. Produto importado do fornecedor.
+2. Categoria do Mercado Livre definida.
+3. Marketplace Inspector consulta requisitos oficiais.
+4. CommerceHub compara requisitos com Product Master e atributos.
+5. Dados disponíveis são preenchidos automaticamente.
+6. Campos faltantes ou inválidos são exibidos.
+7. Botão Publicar só envia quando o status estiver PRONTO.
+
+## Recursos
+
+- score de prontidão;
+- campos obrigatórios;
+- campos preenchidos;
+- campos faltantes;
+- campos inválidos;
+- origem de cada valor;
+- payload preparado;
+- bloqueio de publicação incompleta;
+- publicação real quando aprovado.
 
 ## Instalação
 
@@ -22,8 +32,7 @@ Consolidar em uma base persistente as regras oficiais descobertas pelo Marketpla
 2. Aguarde o deploy.
 3. Confirme `/api/health`.
 4. Versão esperada:
-   `enterprise-v5-sprint29-marketplace-knowledge-engine`
-5. Execute `Sprint29_Marketplace_Knowledge_Engine.sql`.
+   `enterprise-v5-sprint30-publication-readiness-pipeline`
+5. Execute `Sprint30_Publication_Readiness_Pipeline.sql`.
 6. Abra o anúncio.
-7. Clique em `Knowledge Engine`.
-8. Use apenas as recomendações comprovadas antes de ajustar o CommerceHub.
+7. Clique em `Prontidão para Publicação`.

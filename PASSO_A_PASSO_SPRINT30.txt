@@ -1,0 +1,20 @@
+SPRINT 30 — PUBLICATION READINESS PIPELINE
+
+1. Envie todos os arquivos pelo GitHub Web.
+2. Aguarde o deploy.
+3. Abra /api/health.
+4. Confirme:
+   enterprise-v5-sprint30-publication-readiness-pipeline
+5. No Supabase, abra SQL Editor > New query.
+6. Cole Sprint30_Publication_Readiness_Pipeline.sql.
+7. Clique em Run.
+8. Abra o anúncio.
+9. Clique em Prontidão para Publicação.
+10. Confira:
+    - status;
+    - score;
+    - campos faltantes;
+    - campos inválidos;
+    - origem dos dados;
+    - payload preparado.
+11. Publique somente quando estiver PRONTO.
