@@ -1,0 +1,1 @@
+Não execute nova query. Esta versão altera apenas a montagem do payload.

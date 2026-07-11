@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint33-gtin-intelligence-engine"
+S13_VERSION = "enterprise-v5-sprint33-1-gtin-routing-hotfix"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -8685,7 +8685,8 @@ async def s28_build_payload_preview(context, listing):
         listing.get("category_id"),
         payload.get("attributes"),
     )
-    return payload
+    routed = await s331_apply_identifier_routing(context, listing, payload)
+    return routed.get("payload") or payload
 
 
 async def s28_conditional_check(category_id, payload):
@@ -9517,15 +9518,25 @@ async def s30_build_readiness(listing_id):
 
     payload_preview = inspection_result.get("payload_preview") or {}
 
-    # Recalcula GTIN no payload com base no valor real encontrado no Product Master.
+    # Recalcula e roteia GTIN/EMPTY_GTIN_REASON conforme a estrutura do anúncio.
     gtin_value = s30_product_field_value(product, "GTIN")
     if gtin_value and s212_valid_gtin(gtin_value):
-        attrs = [
-            item for item in (payload_preview.get("attributes") or [])
-            if str(item.get("id") or "").upper() not in {"GTIN", "EMPTY_GTIN_REASON"}
-        ]
-        attrs.append({"id": "GTIN", "value_name": str(gtin_value)})
-        payload_preview["attributes"] = attrs
+        payload_preview.setdefault("attributes", [])
+        payload_preview["attributes"] = s331_remove_ids(
+            payload_preview.get("attributes") or [],
+            {"GTIN", "EMPTY_GTIN_REASON"}
+        )
+        payload_preview["attributes"].append({
+            "id": "GTIN",
+            "value_name": str(gtin_value),
+        })
+
+    routed = await s331_apply_identifier_routing(
+        context,
+        listing,
+        payload_preview,
+    )
+    payload_preview = routed.get("payload") or payload_preview
 
     total = max(1, len(required_fields))
     score = int(round((len(completed_fields) / total) * 100))
@@ -9708,6 +9719,8 @@ async def publication_readiness_publish(listing_id: str, request: Request):
     listing = await s19_get_listing(listing_id)
     context = await s19_product_context(listing.get("product_id"))
     payload = readiness.get("payload_preview") or {}
+    routed = await s331_apply_identifier_routing(context, listing, payload)
+    payload = routed.get("payload") or payload
 
     result = await ml_request("/items", method="POST", payload=payload)
 
@@ -11220,3 +11233,170 @@ async def gtin_intelligence_page(listing_id: str):
 """
 
     return HTMLResponse(shell("GTIN Intelligence Engine", content))
+
+
+# ==========================================================
+# SPRINT 33.1 - GTIN ROUTING HOTFIX
+# Corrige o local do GTIN conforme item sem variações ou com variações.
+# ==========================================================
+
+def s331_attr_id(item):
+    return str((item or {}).get("id") or "").upper()
+
+
+def s331_remove_ids(items, ids):
+    ids = {str(x).upper() for x in ids}
+    return [
+        item for item in (items or [])
+        if s331_attr_id(item) not in ids
+    ]
+
+
+def s331_has_real_variations(payload):
+    variations = payload.get("variations") or []
+    if not variations:
+        return False
+
+    return any(
+        bool(variation.get("attribute_combinations") or [])
+        for variation in variations
+    )
+
+
+def s331_find_gtin(attributes):
+    for item in attributes or []:
+        if s331_attr_id(item) == "GTIN":
+            value = item.get("value_name") or item.get("value_id")
+            if value:
+                return str(value)
+    return None
+
+
+def s331_find_empty_gtin_reason(attributes):
+    for item in attributes or []:
+        if s331_attr_id(item) == "EMPTY_GTIN_REASON":
+            if item.get("value_id"):
+                return {"id": "EMPTY_GTIN_REASON", "value_id": item.get("value_id")}
+            if item.get("value_name"):
+                return {"id": "EMPTY_GTIN_REASON", "value_name": item.get("value_name")}
+    return None
+
+
+def s331_route_product_identifiers(payload, product_values=None):
+    product_values = product_values or {}
+    item_attributes = list(payload.get("attributes") or [])
+
+    gtin = s331_find_gtin(item_attributes)
+    empty_reason = s331_find_empty_gtin_reason(item_attributes)
+
+    if not gtin:
+        row = product_values.get("GTIN") or product_values.get("gtin") or {}
+        gtin = row.get("value_name") or row.get("value_id")
+
+    if not empty_reason:
+        row = (
+            product_values.get("EMPTY_GTIN_REASON")
+            or product_values.get("empty_gtin_reason")
+            or {}
+        )
+        if row.get("value_id"):
+            empty_reason = {"id": "EMPTY_GTIN_REASON", "value_id": row.get("value_id")}
+        elif row.get("value_name"):
+            empty_reason = {"id": "EMPTY_GTIN_REASON", "value_name": row.get("value_name")}
+
+    item_attributes = s331_remove_ids(
+        item_attributes,
+        {"GTIN", "EMPTY_GTIN_REASON"}
+    )
+    payload["attributes"] = item_attributes
+
+    if gtin and s212_valid_gtin(gtin):
+        empty_reason = None
+    else:
+        gtin = None
+
+    has_variations = s331_has_real_variations(payload)
+
+    if has_variations:
+        for variation in payload.get("variations") or []:
+            variation["attributes"] = s331_remove_ids(
+                variation.get("attributes") or [],
+                {"GTIN", "EMPTY_GTIN_REASON"}
+            )
+            variation["attribute_combinations"] = s331_remove_ids(
+                variation.get("attribute_combinations") or [],
+                {"GTIN", "EMPTY_GTIN_REASON"}
+            )
+
+            if gtin:
+                variation["attributes"].append({
+                    "id": "GTIN",
+                    "value_name": str(gtin),
+                })
+
+        if empty_reason:
+            payload["attributes"].append(empty_reason)
+
+    else:
+        payload.pop("variations", None)
+
+        if gtin:
+            payload["attributes"].append({
+                "id": "GTIN",
+                "value_name": str(gtin),
+            })
+        elif empty_reason:
+            payload["attributes"].append(empty_reason)
+
+    return {
+        "payload": payload,
+        "has_variations": has_variations,
+        "gtin": gtin,
+        "empty_gtin_reason": empty_reason,
+        "routing": (
+            "variations[].attributes"
+            if has_variations and gtin
+            else "item.attributes"
+        ),
+    }
+
+
+async def s331_apply_identifier_routing(context, listing, payload):
+    product = context.get("product") or {}
+    try:
+        values = await s21_product_values(
+            product.get("id"),
+            listing.get("category_id"),
+        )
+    except Exception:
+        values = {}
+
+    return s331_route_product_identifiers(payload, values)
+
+
+@app.get("/api/identifier-routing/listing/{listing_id}")
+async def identifier_routing_api(listing_id: str):
+    listing = await s19_get_listing(listing_id)
+    if not listing:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "error": "Anúncio não encontrado."},
+        )
+
+    context = await s19_product_context(listing.get("product_id"))
+    payload = s19_build_ml_payload(context, listing, mode="user_product")
+    payload["attributes"] = await s21_payload_attributes(
+        context["product"].get("id"),
+        listing.get("category_id"),
+        payload.get("attributes"),
+    )
+
+    routed = await s331_apply_identifier_routing(context, listing, payload)
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "listing_id": listing_id,
+        "category_id": listing.get("category_id"),
+        "routing": routed,
+    }
