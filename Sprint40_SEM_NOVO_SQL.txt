@@ -1,0 +1,1 @@
+Não execute nova query. Esta versão reutiliza as tabelas da Sprint 39.

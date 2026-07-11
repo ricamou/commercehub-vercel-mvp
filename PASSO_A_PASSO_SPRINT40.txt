@@ -1,0 +1,17 @@
+SPRINT 40 — ORDER CENTER
+
+1. Envie todos os arquivos pelo GitHub Web.
+2. Aguarde o deploy.
+3. Confirme em /api/health:
+   enterprise-v5-sprint40-order-center
+4. Não crie nova query.
+5. Abra /order-center.
+6. Clique em Sincronizar pedidos agora.
+7. Quando houver uma compra, abra o número do pedido para ver:
+   - cliente;
+   - itens;
+   - fornecedor;
+   - pagamento;
+   - NF;
+   - rastreamento;
+   - linha do tempo.

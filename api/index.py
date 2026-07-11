@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint39-order-orchestrator"
+S13_VERSION = "enterprise-v5-sprint40-order-center"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -13276,3 +13276,381 @@ async def order_orchestrator_page():
 </div>
 """
     return HTMLResponse(shell("Order Orchestrator", content))
+
+
+# ==========================================================
+# SPRINT 40 - ORDER CENTER
+# Painel operacional de pedidos, sincronização e linha do tempo.
+# ==========================================================
+
+def s40_money(value, currency="BRL"):
+    try:
+        number = float(value or 0)
+    except Exception:
+        number = 0.0
+    prefix = "R$" if currency == "BRL" else currency
+    return f"{prefix} {number:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+
+def s40_order_stage(order_row, jobs):
+    payment = str(order_row.get("payment_status") or "").lower()
+    order_status = str(order_row.get("status") or "").lower()
+    job_statuses = {str(job.get("status") or "").lower() for job in jobs}
+
+    if order_status in {"cancelled", "canceled"}:
+        return "cancelado"
+    if payment not in {"approved", "paid"}:
+        return "aguardando_pagamento"
+    if "shipped" in job_statuses:
+        return "enviado"
+    if "confirmed" in job_statuses:
+        return "confirmado_fornecedor"
+    if "sent" in job_statuses:
+        return "enviado_fornecedor"
+    if jobs:
+        return "aguardando_fornecedor"
+    return "recebido"
+
+
+async def s40_order_jobs(order_id):
+    result = await store.select(
+        "supplier_order_jobs",
+        "select=*&marketplace_order_id=eq."
+        + quote(str(order_id), safe="-")
+        + "&order=created_at.asc"
+    )
+    return result.get("data") or []
+
+
+async def s40_order_items(order_id):
+    result = await store.select(
+        "marketplace_order_items",
+        "select=*&order_id=eq."
+        + quote(str(order_id), safe="-")
+        + "&order=created_at.asc"
+    )
+    return result.get("data") or []
+
+
+async def s40_order_events(order_id):
+    result = await store.select(
+        "order_event_log",
+        "select=*&marketplace_order_id=eq."
+        + quote(str(order_id), safe="-")
+        + "&order=created_at.asc"
+    )
+    return result.get("data") or []
+
+
+async def s40_order_summary(order_row):
+    jobs = await s40_order_jobs(order_row.get("id"))
+    items = await s40_order_items(order_row.get("id"))
+
+    return {
+        **order_row,
+        "stage": s40_order_stage(order_row, jobs),
+        "jobs": jobs,
+        "items": items,
+        "items_count": sum(int(item.get("quantity") or 0) for item in items),
+        "suppliers": sorted({
+            str(item.get("supplier") or "desconhecido")
+            for item in items
+        }),
+    }
+
+
+async def s40_recent_orders(limit=50):
+    result = await store.select(
+        "marketplace_orders",
+        "select=*&order=created_at.desc&limit="
+        + str(max(1, min(int(limit or 50), 100)))
+    )
+    rows = result.get("data") or []
+
+    output = []
+    for row in rows:
+        output.append(await s40_order_summary(row))
+    return output
+
+
+async def s40_find_order_by_external_id(external_order_id):
+    result = await store.select(
+        "marketplace_orders",
+        "select=*&marketplace=eq.mercado_livre&external_order_id=eq."
+        + quote(str(external_order_id), safe="-_")
+        + "&limit=1"
+    )
+    rows = result.get("data") or []
+    return rows[0] if rows else {}
+
+
+async def s40_sync_recent_orders(limit=50):
+    token = await get_token()
+    user_id = token.get("user_id")
+    if not user_id:
+        return {
+            "success": False,
+            "status_code": 401,
+            "error": "Usuário Mercado Livre não identificado.",
+        }
+
+    result = await ml_request(
+        "/orders/search",
+        params={
+            "seller": user_id,
+            "sort": "date_desc",
+            "limit": max(1, min(int(limit or 50), 50)),
+        },
+    )
+
+    if not result.get("success"):
+        return {
+            "success": False,
+            "status_code": result.get("status_code") or 400,
+            "error": result.get("error") or "Falha ao consultar pedidos.",
+            "result": result,
+        }
+
+    data = result.get("data") or {}
+    orders = data.get("results") or []
+    synced = []
+    failed = []
+
+    for order in orders:
+        external_id = order.get("id") if isinstance(order, dict) else None
+        if not external_id:
+            continue
+
+        try:
+            ingestion = await s39_ingest_order(external_id)
+            if ingestion.get("success"):
+                synced.append({
+                    "external_order_id": external_id,
+                    "status": ingestion.get("status"),
+                })
+            else:
+                failed.append({
+                    "external_order_id": external_id,
+                    "error": ingestion.get("error"),
+                })
+        except Exception as exc:
+            failed.append({
+                "external_order_id": external_id,
+                "error": str(exc),
+            })
+
+    return {
+        "success": True,
+        "found": len(orders),
+        "synced": synced,
+        "failed": failed,
+    }
+
+
+@app.post("/api/order-center/sync")
+async def order_center_sync(limit: int = 50):
+    result = await s40_sync_recent_orders(limit)
+    return JSONResponse(
+        status_code=200 if result.get("success") else int(result.get("status_code") or 400),
+        content=result,
+    )
+
+
+@app.get("/api/order-center/orders")
+async def order_center_orders(limit: int = 50):
+    orders = await s40_recent_orders(limit)
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "orders": orders,
+        "count": len(orders),
+    }
+
+
+@app.get("/api/order-center/orders/{external_order_id}")
+async def order_center_order_detail(external_order_id: str):
+    order = await s40_find_order_by_external_id(external_order_id)
+    if not order:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "error": "Pedido não encontrado."},
+        )
+
+    summary = await s40_order_summary(order)
+    events = await s40_order_events(order.get("id"))
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "order": summary,
+        "events": events,
+    }
+
+
+@app.get("/order-center", response_class=HTMLResponse)
+async def order_center_page(limit: int = 50):
+    orders = await s40_recent_orders(limit)
+
+    counters = {
+        "total": len(orders),
+        "waiting": sum(1 for item in orders if item.get("stage") == "aguardando_pagamento"),
+        "supplier": sum(
+            1 for item in orders
+            if item.get("stage") in {
+                "recebido",
+                "aguardando_fornecedor",
+                "enviado_fornecedor",
+                "confirmado_fornecedor",
+            }
+        ),
+        "shipped": sum(1 for item in orders if item.get("stage") == "enviado"),
+    }
+
+    rows = "".join(
+        f"<tr>"
+        f"<td><a href='/order-center/{item.get('external_order_id')}'>{item.get('external_order_id')}</a></td>"
+        f"<td>{item.get('buyer_id') or '-'}</td>"
+        f"<td>{item.get('items_count') or 0}</td>"
+        f"<td>{', '.join(item.get('suppliers') or []) or '-'}</td>"
+        f"<td>{s40_money(item.get('total_amount'), item.get('currency_id') or 'BRL')}</td>"
+        f"<td>{item.get('payment_status') or '-'}</td>"
+        f"<td>{item.get('stage')}</td>"
+        f"<td>{item.get('date_created') or item.get('created_at') or '-'}</td>"
+        f"</tr>"
+        for item in orders
+    ) or "<tr><td colspan='8'>Nenhum pedido recebido.</td></tr>"
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Total</span><strong>{counters['total']}</strong></div>
+  <div class='metric'><span>Aguardando pagamento</span><strong>{counters['waiting']}</strong></div>
+  <div class='metric'><span>Em atendimento</span><strong>{counters['supplier']}</strong></div>
+  <div class='metric'><span>Enviados</span><strong>{counters['shipped']}</strong></div>
+</div>
+
+<div class='card'>
+<h2>Sincronização</h2>
+<p>Busque os pedidos mais recentes da conta Mercado Livre e grave-os no CommerceHub.</p>
+<form method='post' action='/api/order-center/sync?limit=50' style='display:inline'>
+<button class='btn' type='submit'>Sincronizar pedidos agora</button>
+</form>
+<a class='btn' href='/api/order-center/orders'>Ver JSON técnico</a>
+</div>
+
+<div class='card'>
+<h2>Pedidos</h2>
+<table>
+<thead>
+<tr>
+<th>Pedido ML</th>
+<th>Comprador</th>
+<th>Itens</th>
+<th>Fornecedor</th>
+<th>Total</th>
+<th>Pagamento</th>
+<th>Etapa</th>
+<th>Data</th>
+</tr>
+</thead>
+<tbody>{rows}</tbody>
+</table>
+</div>
+"""
+
+    return HTMLResponse(shell("Order Center", content))
+
+
+@app.get("/order-center/{external_order_id}", response_class=HTMLResponse)
+async def order_center_detail_page(external_order_id: str):
+    order = await s40_find_order_by_external_id(external_order_id)
+    if not order:
+        return HTMLResponse(
+            shell(
+                "Pedido",
+                "<div class='card'><h2>Pedido não encontrado</h2></div>",
+            ),
+            status_code=404,
+        )
+
+    summary = await s40_order_summary(order)
+    events = await s40_order_events(order.get("id"))
+    buyer = s39_safe_dict(order.get("buyer_data"))
+    shipping = s39_safe_dict(order.get("shipping_data"))
+
+    item_rows = "".join(
+        f"<tr>"
+        f"<td>{item.get('title') or '-'}</td>"
+        f"<td>{item.get('quantity') or 0}</td>"
+        f"<td>{item.get('supplier') or '-'}</td>"
+        f"<td>{item.get('supplier_sku') or '-'}</td>"
+        f"<td>{s40_money(item.get('unit_price'))}</td>"
+        f"</tr>"
+        for item in summary.get("items") or []
+    ) or "<tr><td colspan='5'>Nenhum item.</td></tr>"
+
+    job_rows = "".join(
+        f"<tr>"
+        f"<td>{job.get('supplier') or '-'}</td>"
+        f"<td>{job.get('status') or '-'}</td>"
+        f"<td>{job.get('dispatch_mode') or '-'}</td>"
+        f"<td>{job.get('supplier_order_id') or '-'}</td>"
+        f"<td>{job.get('invoice_number') or '-'}</td>"
+        f"<td>{job.get('tracking_code') or '-'}</td>"
+        f"</tr>"
+        for job in summary.get("jobs") or []
+    ) or "<tr><td colspan='6'>Nenhum job criado.</td></tr>"
+
+    event_rows = "".join(
+        f"<tr>"
+        f"<td>{event.get('created_at') or '-'}</td>"
+        f"<td>{event.get('event_type') or '-'}</td>"
+        f"<td>{event.get('source') or '-'}</td>"
+        f"</tr>"
+        for event in events
+    ) or "<tr><td colspan='3'>Nenhum evento registrado.</td></tr>"
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Pedido</span><strong>{external_order_id}</strong></div>
+  <div class='metric'><span>Etapa</span><strong>{summary.get('stage')}</strong></div>
+  <div class='metric'><span>Pagamento</span><strong>{summary.get('payment_status') or '-'}</strong></div>
+  <div class='metric'><span>Total</span><strong>{s40_money(summary.get('total_amount'), summary.get('currency_id') or 'BRL')}</strong></div>
+</div>
+
+<div class='card'>
+<h2>Cliente e entrega</h2>
+<p><b>Comprador:</b> {buyer.get('first_name') or '-'} {buyer.get('last_name') or ''}</p>
+<p><b>Buyer ID:</b> {buyer.get('id') or summary.get('buyer_id') or '-'}</p>
+<p><b>Shipment ID:</b> {summary.get('shipment_id') or shipping.get('id') or '-'}</p>
+</div>
+
+<div class='card'>
+<h2>Itens</h2>
+<table>
+<thead><tr><th>Produto</th><th>Qtd.</th><th>Fornecedor</th><th>SKU</th><th>Preço</th></tr></thead>
+<tbody>{item_rows}</tbody>
+</table>
+</div>
+
+<div class='card'>
+<h2>Atendimento do fornecedor</h2>
+<table>
+<thead><tr><th>Fornecedor</th><th>Status</th><th>Modo</th><th>Pedido fornecedor</th><th>NF</th><th>Rastreio</th></tr></thead>
+<tbody>{job_rows}</tbody>
+</table>
+</div>
+
+<div class='card'>
+<h2>Linha do tempo</h2>
+<table>
+<thead><tr><th>Data</th><th>Evento</th><th>Origem</th></tr></thead>
+<tbody>{event_rows}</tbody>
+</table>
+</div>
+
+<div class='card'>
+<a class='btn' href='/api/order-center/orders/{external_order_id}'>Ver JSON técnico</a>
+<a class='btn' href='/order-center'>Voltar aos pedidos</a>
+</div>
+"""
+    return HTMLResponse(shell(f"Pedido {external_order_id}", content))
