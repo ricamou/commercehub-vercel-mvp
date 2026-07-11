@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint27-marketplace-rules-engine"
+APP_VERSION = "enterprise-v5-sprint27-1-rules-engine-hotfix"
 
 def env(name, default=""):
     value = os.getenv(name, default)

@@ -1,0 +1,1 @@
+Não execute nova query. As tabelas da Sprint 27 já estão corretas.

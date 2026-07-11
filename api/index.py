@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint27-marketplace-rules-engine"
+S13_VERSION = "enterprise-v5-sprint27-1-rules-engine-hotfix"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -7934,30 +7934,66 @@ async def s27_build_contract(context, listing):
 
 async def s27_save_contract(context, listing, result):
     product = context.get("product") or {}
+    category_id = str(listing.get("category_id") or "")
+    brand = str(product.get("brand") or "").strip()
+    fingerprint = str(result.get("fingerprint") or "")
+
     payload = {
         "company_id": DEFAULT_COMPANY_ID,
         "marketplace": "mercado_livre",
-        "category_id": listing.get("category_id"),
-        "brand": product.get("brand"),
+        "category_id": category_id,
+        "brand": brand or None,
         "domain_id": None,
-        "fingerprint": result.get("fingerprint"),
+        "fingerprint": fingerprint,
         "decision_tree": result.get("decision_tree") or {},
         "official_metadata": result.get("official_metadata") or {},
         "conditional_metadata": result.get("conditional_metadata") or {},
         "payload_contract": result.get("payload_contract") or {},
         "active": True,
     }
-    saved = await store.upsert(
-        "marketplace_rule_snapshots",
-        payload,
-        "marketplace,category_id,brand,domain_id,fingerprint"
+
+    # Não usa on_conflict com colunas nullable/expression index.
+    # O PostgREST não consegue resolver esse tipo de índice como constraint.
+    query = (
+        "select=*&marketplace=eq.mercado_livre"
+        + "&category_id=eq." + quote(category_id, safe="-_")
+        + "&fingerprint=eq." + quote(fingerprint, safe="")
+        + ("&brand=eq." + quote(brand, safe="-_ ") if brand else "&brand=is.null")
+        + "&domain_id=is.null&limit=1"
     )
 
-    snapshot_rows = saved.get("data") or []
-    snapshot = snapshot_rows[0] if snapshot_rows else {}
-    snapshot_id = snapshot.get("id")
+    existing_result = await store.select("marketplace_rule_snapshots", query)
+    existing_rows = existing_result.get("data") or []
+    existing = existing_rows[0] if existing_rows else None
 
+    if existing:
+        snapshot_id = existing.get("id")
+        saved = await store.update(
+            "marketplace_rule_snapshots",
+            "id=eq." + quote(str(snapshot_id), safe="-"),
+            payload,
+        )
+    else:
+        saved = await store.insert("marketplace_rule_snapshots", payload)
+        rows = saved.get("data") or []
+        if isinstance(rows, dict):
+            rows = [rows]
+        snapshot_id = (rows[0] if rows else {}).get("id")
+
+    if not saved.get("success"):
+        return {
+            "success": False,
+            "snapshot_id": snapshot_id if 'snapshot_id' in locals() else None,
+            "result": saved,
+            "error": saved.get("error") or saved.get("raw"),
+        }
+
+    # Evita multiplicar as mesmas decisões a cada abertura da página.
     if snapshot_id:
+        await store.delete(
+            "marketplace_rule_decisions",
+            "snapshot_id=eq." + quote(str(snapshot_id), safe="-")
+        )
         for decision in result.get("decisions") or []:
             await store.insert("marketplace_rule_decisions", {
                 "snapshot_id": snapshot_id,
@@ -7970,7 +8006,7 @@ async def s27_save_contract(context, listing, result):
             })
 
     return {
-        "success": bool(saved.get("success")),
+        "success": True,
         "snapshot_id": snapshot_id,
         "result": saved,
     }
@@ -7978,7 +8014,15 @@ async def s27_save_contract(context, listing, result):
 
 async def s27_rules_engine(context, listing):
     contract = await s27_build_contract(context, listing)
-    saved = await s27_save_contract(context, listing, contract)
+
+    try:
+        saved = await s27_save_contract(context, listing, contract)
+    except Exception as exc:
+        saved = {
+            "success": False,
+            "snapshot_id": None,
+            "error": str(exc),
+        }
 
     simulation = await s26_simulate_listing(context, listing)
     simulation["blockers"] = s27_dedupe_issues(simulation.get("blockers"))
@@ -8009,6 +8053,7 @@ async def s27_rules_engine(context, listing):
         "simulation": simulation,
         "snapshot_id": saved.get("snapshot_id"),
         "saved": saved.get("success"),
+        "save_error": saved.get("error") if not saved.get("success") else None,
     }
 
 
