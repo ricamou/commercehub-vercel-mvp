@@ -1,11 +1,15 @@
-# Sprint 27.2 — Rules Engine Runtime Hotfix
+# Sprint 27.3 — Missing Simulator Hotfix
 
-Correções:
-- normaliza campos JSON que chegam como texto;
-- protege todas as etapas do Rules Engine;
-- a página não retorna mais Internal Server Error;
-- o endpoint JSON mostra tipo e detalhe do erro;
-- falha no snapshot não impede a análise;
-- diagnóstico aparece diretamente na tela.
+Erro corrigido:
+
+`NameError: name 's26_simulate_listing' is not defined`
+
+A função de simulação da Sprint 26 não estava presente no arquivo final usado pela
+Sprint 27. Esta versão restaura o simulador e inclui fallbacks para:
+
+- s26_simulate_listing
+- s26_build_payload
+- s26_compare_payload
+- s26_category_discovery
 
 Não execute nova query no Supabase.

@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint27-2-rules-engine-runtime-hotfix"
+S13_VERSION = "enterprise-v5-sprint27-3-missing-simulator-hotfix"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -7722,6 +7722,97 @@ async def publishing_lab_publish(listing_id: str, request: Request):
     return RedirectResponse(f"/listing-engine/{listing_id}",status_code=303)
 
 
+
+
+# ==========================================================
+# SPRINT 27.3 - MISSING SIMULATOR HOTFIX
+# Implementação compatível de s26_simulate_listing.
+# ==========================================================
+
+async def s26_simulate_listing(context, listing):
+    build = await s26_build_payload(context, listing)
+    payload = build.get("payload") or {}
+    discovery = build.get("discovery") or {}
+
+    try:
+        preflight = await s24_metadata_preflight(context, listing)
+    except Exception as exc:
+        preflight = {
+            "success": False,
+            "official_attribute_ids": [],
+            "conditional_attribute_ids": [],
+            "blockers": [],
+            "warnings": [{
+                "code": "preflight_runtime_error",
+                "message": str(exc),
+            }],
+        }
+
+    try:
+        intelligence = await s25_intelligence_assessment(context, listing)
+    except Exception as exc:
+        intelligence = {
+            "success": False,
+            "blockers": [],
+            "warnings": [],
+            "recommendations": [{
+                "action": "inspect_runtime",
+                "message": str(exc),
+            }],
+        }
+
+    conditional_ids = preflight.get("conditional_attribute_ids") or []
+    official_ids = preflight.get("official_attribute_ids") or []
+
+    comparison = s26_compare_payload(payload, official_ids, conditional_ids)
+
+    blockers = list(preflight.get("blockers") or [])
+    warnings = list(preflight.get("warnings") or [])
+    recommendations = list(intelligence.get("recommendations") or [])
+
+    for aid in comparison.get("unknown_attribute_ids") or []:
+        blockers.append({
+            "code": "unknown_attribute",
+            "message": f"O atributo {aid} não existe nos metadados oficiais da categoria.",
+            "attribute": aid,
+        })
+
+    for aid in comparison.get("missing_conditional_ids") or []:
+        blockers.append({
+            "code": "conditional_required_missing",
+            "message": f"O atributo condicional {aid} ainda está faltando.",
+            "attribute": aid,
+        })
+
+    variation_attrs = build.get("variation_attributes") or []
+    if variation_attrs:
+        warnings.append({
+            "code": "variation_payload_generated",
+            "message": "Atributos de variação foram movidos para attribute_combinations.",
+            "attributes": [item.get("id") for item in variation_attrs],
+        })
+
+    score = 100
+    score -= min(80, len(blockers) * 20)
+    score -= min(20, len(warnings) * 5)
+    score = max(0, score)
+
+    return {
+        "success": len(blockers) == 0,
+        "version": APP_VERSION,
+        "score": score,
+        "status": "ready" if not blockers else "blocked",
+        "payload": payload,
+        "discovery": discovery,
+        "comparison": comparison,
+        "preflight": preflight,
+        "intelligence": intelligence,
+        "blockers": blockers,
+        "warnings": warnings,
+        "recommendations": recommendations,
+    }
+
+
 # ==========================================================
 # SPRINT 27 - MARKETPLACE RULES ENGINE
 # Converte metadados oficiais e condicionais em árvore de decisão.
@@ -8248,3 +8339,105 @@ async def marketplace_rules_page(listing_id: str):
 </div>
 """
     return HTMLResponse(shell("Marketplace Rules Engine", content))
+
+
+async def s26_build_payload(context, listing):
+    payload = s19_build_ml_payload(context, listing, mode="user_product")
+    payload["attributes"] = await s21_payload_attributes(
+        context["product"].get("id"),
+        listing.get("category_id"),
+        payload.get("attributes"),
+    )
+
+    discovery = await s26_category_discovery(listing.get("category_id"))
+    variation_ids = {
+        str(row.get("attribute_id") or "").upper()
+        for row in (discovery.get("variation_attributes") or [])
+    }
+
+    item_attrs = []
+    variation_attrs = []
+
+    for attr in payload.get("attributes") or []:
+        aid = str(attr.get("id") or "").upper()
+        if aid in variation_ids:
+            variation_attrs.append(attr)
+        else:
+            item_attrs.append(attr)
+
+    payload["attributes"] = item_attrs
+
+    if variation_attrs:
+        payload["variations"] = [{
+            "price": payload.get("price"),
+            "available_quantity": payload.get("available_quantity"),
+            "attribute_combinations": variation_attrs,
+            "picture_ids": [],
+        }]
+
+    return {
+        "payload": payload,
+        "item_attributes": item_attrs,
+        "variation_attributes": variation_attrs,
+        "discovery": discovery,
+    }
+
+
+def s26_compare_payload(payload, official_ids, conditional_ids):
+    sent = {
+        str(item.get("id") or "").upper()
+        for item in (payload.get("attributes") or [])
+        if item.get("id")
+    }
+    official = {str(x).upper() for x in official_ids or []}
+    conditional = {str(x).upper() for x in conditional_ids or []}
+
+    return {
+        "sent_attribute_ids": sorted(sent),
+        "unknown_attribute_ids": sorted(sent - official),
+        "missing_conditional_ids": sorted(conditional - sent),
+        "valid": not (sent - official) and not (conditional - sent),
+    }
+
+
+async def s26_category_discovery(category_id):
+    await s21_sync_category(category_id)
+    attrs = await s21_category_attrs(category_id)
+
+    item_attributes = []
+    variation_attributes = []
+    required_attributes = []
+    optional_attributes = []
+
+    for attr in attrs:
+        location = s26_attr_location(attr) if "s26_attr_location" in globals() else "item"
+        row = {
+            "attribute_id": attr.get("attribute_id"),
+            "name": attr.get("name"),
+            "required": bool(attr.get("required") or attr.get("catalog_required")),
+            "catalog_required": bool(attr.get("catalog_required")),
+            "value_type": attr.get("value_type"),
+            "values_count": len(attr.get("values") or []),
+            "location": location,
+        }
+
+        if location == "variation":
+            variation_attributes.append(row)
+        else:
+            item_attributes.append(row)
+
+        if row["required"]:
+            required_attributes.append(row)
+        else:
+            optional_attributes.append(row)
+
+    return {
+        "success": True,
+        "category_id": category_id,
+        "attributes_count": len(attrs),
+        "required_attributes": required_attributes,
+        "optional_attributes": optional_attributes,
+        "item_attributes": item_attributes,
+        "variation_attributes": variation_attributes,
+        "raw_attributes": attrs,
+    }

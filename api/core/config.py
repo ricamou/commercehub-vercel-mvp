@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint27-2-rules-engine-runtime-hotfix"
+APP_VERSION = "enterprise-v5-sprint27-3-missing-simulator-hotfix"
 
 def env(name, default=""):
     value = os.getenv(name, default)
