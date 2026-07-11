@@ -1,15 +1,19 @@
-# Sprint 27.3 — Missing Simulator Hotfix
+# Sprint 27.4 — Attribute Router Hotfix
 
-Erro corrigido:
+Correção definitiva do erro:
 
-`NameError: name 's26_simulate_listing' is not defined`
+`NameError: name 's26_attr_location' is not defined`
 
-A função de simulação da Sprint 26 não estava presente no arquivo final usado pela
-Sprint 27. Esta versão restaura o simulador e inclui fallbacks para:
+Incluído:
 
-- s26_simulate_listing
-- s26_build_payload
-- s26_compare_payload
-- s26_category_discovery
+- s26_attr_location
+- s26_is_variation
+- s26_is_item
+- s26_split_item_variation
+- s26_build_attribute_contract
+- s26_validate_payload_contract
+- normalização de tags/raw_data JSON
+- roteamento automático item x variation
+- validação da localização dos atributos
 
 Não execute nova query no Supabase.

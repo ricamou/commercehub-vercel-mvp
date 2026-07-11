@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint27-3-missing-simulator-hotfix"
+S13_VERSION = "enterprise-v5-sprint27-4-attribute-router-hotfix"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -7724,6 +7724,221 @@ async def publishing_lab_publish(listing_id: str, request: Request):
 
 
 
+
+
+# ==========================================================
+# SPRINT 27.4 - ATTRIBUTE ROUTER HOTFIX
+# Restaura classificação item x variação e roteamento do payload.
+# ==========================================================
+
+def s26_attr_tags(metadata):
+    tags = metadata.get("tags") or {}
+    if isinstance(tags, str):
+        try:
+            parsed = json.loads(tags)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return tags if isinstance(tags, dict) else {}
+
+
+def s26_attr_raw(metadata):
+    raw = metadata.get("raw_data") or {}
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+def s26_attr_location(metadata):
+    tags = s26_attr_tags(metadata)
+    raw = s26_attr_raw(metadata)
+
+    attribute_id = str(
+        metadata.get("attribute_id")
+        or metadata.get("id")
+        or ""
+    ).upper()
+
+    # Marcadores oficiais/semioficiais de atributos de variação.
+    variation_flags = (
+        metadata.get("allow_variations"),
+        tags.get("allow_variations"),
+        tags.get("variation_attribute"),
+        tags.get("defines_picture"),
+        raw.get("allow_variations"),
+        raw.get("variation_attribute"),
+    )
+
+    # Alguns atributos são tipicamente de variação mesmo quando os metadados
+    # antigos não carregam todas as tags.
+    common_variation_ids = {
+        "COLOR",
+        "MAIN_COLOR",
+        "SIZE",
+        "VOLTAGE",
+        "PATTERN_NAME",
+        "FABRIC_DESIGN",
+        "HAND_ORIENTATION",
+    }
+
+    if any(bool(flag) for flag in variation_flags):
+        return "variation"
+
+    if attribute_id in common_variation_ids and (
+        tags.get("allow_variations")
+        or tags.get("defines_picture")
+        or metadata.get("allow_variations")
+    ):
+        return "variation"
+
+    return "item"
+
+
+def s26_is_variation(metadata):
+    return s26_attr_location(metadata) == "variation"
+
+
+def s26_is_item(metadata):
+    return s26_attr_location(metadata) == "item"
+
+
+def s26_split_item_variation(attributes, metadata_map):
+    item_attributes = []
+    variation_attributes = []
+
+    for attribute in attributes or []:
+        attribute_id = str(attribute.get("id") or "").upper()
+        metadata = metadata_map.get(attribute_id) or {
+            "attribute_id": attribute_id
+        }
+
+        if s26_is_variation(metadata):
+            variation_attributes.append(attribute)
+        else:
+            item_attributes.append(attribute)
+
+    return item_attributes, variation_attributes
+
+
+def s26_build_attribute_contract(metadata):
+    tags = s26_attr_tags(metadata)
+    values = metadata.get("values") or []
+
+    if isinstance(values, str):
+        try:
+            parsed = json.loads(values)
+            values = parsed if isinstance(parsed, list) else []
+        except Exception:
+            values = []
+
+    return {
+        "attribute_id": str(
+            metadata.get("attribute_id")
+            or metadata.get("id")
+            or ""
+        ).upper(),
+        "name": metadata.get("name"),
+        "location": s26_attr_location(metadata),
+        "required": bool(
+            metadata.get("required")
+            or metadata.get("catalog_required")
+            or tags.get("required")
+            or tags.get("catalog_required")
+            or tags.get("conditional_required")
+        ),
+        "conditional_required": bool(tags.get("conditional_required")),
+        "catalog_required": bool(
+            metadata.get("catalog_required")
+            or tags.get("catalog_required")
+        ),
+        "value_type": metadata.get("value_type"),
+        "value_strategy": (
+            "value_id_preferred"
+            if values or str(metadata.get("value_type") or "").lower() in {
+                "boolean", "list"
+            }
+            else "value_name"
+        ),
+        "allowed_values": values,
+    }
+
+
+def s26_validate_payload_contract(payload, metadata_map, conditional_ids=None):
+    conditional_ids = {
+        str(item or "").upper()
+        for item in (conditional_ids or [])
+    }
+
+    sent_item_ids = {
+        str(item.get("id") or "").upper()
+        for item in (payload.get("attributes") or [])
+        if item.get("id")
+    }
+
+    sent_variation_ids = set()
+    for variation in payload.get("variations") or []:
+        for item in variation.get("attribute_combinations") or []:
+            if item.get("id"):
+                sent_variation_ids.add(str(item.get("id")).upper())
+        for item in variation.get("attributes") or []:
+            if item.get("id"):
+                sent_variation_ids.add(str(item.get("id")).upper())
+
+    sent_all = sent_item_ids | sent_variation_ids
+    official_ids = set(metadata_map.keys())
+
+    blockers = []
+    warnings = []
+
+    for attribute_id, metadata in metadata_map.items():
+        contract = s26_build_attribute_contract(metadata)
+
+        if contract.get("required") and attribute_id not in sent_all:
+            blockers.append({
+                "code": "required_attribute_missing",
+                "attribute": attribute_id,
+                "message": f"O atributo obrigatório {attribute_id} não foi enviado.",
+                "location": contract.get("location"),
+            })
+
+        if (
+            attribute_id in sent_item_ids
+            and contract.get("location") == "variation"
+        ):
+            warnings.append({
+                "code": "attribute_wrong_location",
+                "attribute": attribute_id,
+                "message": f"{attribute_id} deveria estar em variation.",
+            })
+
+    for attribute_id in conditional_ids:
+        if attribute_id not in sent_all:
+            blockers.append({
+                "code": "conditional_required_missing",
+                "attribute": attribute_id,
+                "message": f"O atributo condicional {attribute_id} não foi enviado.",
+            })
+
+    for attribute_id in sorted(sent_all - official_ids):
+        blockers.append({
+            "code": "unknown_attribute",
+            "attribute": attribute_id,
+            "message": f"O atributo {attribute_id} não existe nos metadados oficiais.",
+        })
+
+    return {
+        "valid": len(blockers) == 0,
+        "item_attribute_ids": sorted(sent_item_ids),
+        "variation_attribute_ids": sorted(sent_variation_ids),
+        "blockers": blockers,
+        "warnings": warnings,
+    }
+
+
 # ==========================================================
 # SPRINT 27.3 - MISSING SIMULATOR HOTFIX
 # Implementação compatível de s26_simulate_listing.
@@ -8350,20 +8565,16 @@ async def s26_build_payload(context, listing):
     )
 
     discovery = await s26_category_discovery(listing.get("category_id"))
-    variation_ids = {
-        str(row.get("attribute_id") or "").upper()
-        for row in (discovery.get("variation_attributes") or [])
+    metadata_map = {
+        str(item.get("attribute_id") or "").upper(): item
+        for item in (discovery.get("raw_attributes") or [])
+        if item.get("attribute_id")
     }
 
-    item_attrs = []
-    variation_attrs = []
-
-    for attr in payload.get("attributes") or []:
-        aid = str(attr.get("id") or "").upper()
-        if aid in variation_ids:
-            variation_attrs.append(attr)
-        else:
-            item_attrs.append(attr)
+    item_attrs, variation_attrs = s26_split_item_variation(
+        payload.get("attributes") or [],
+        metadata_map,
+    )
 
     payload["attributes"] = item_attrs
 
@@ -8374,12 +8585,22 @@ async def s26_build_payload(context, listing):
             "attribute_combinations": variation_attrs,
             "picture_ids": [],
         }]
+    else:
+        payload.pop("variations", None)
+
+    contract_validation = s26_validate_payload_contract(
+        payload,
+        metadata_map,
+        [],
+    )
 
     return {
         "payload": payload,
         "item_attributes": item_attrs,
         "variation_attributes": variation_attrs,
         "discovery": discovery,
+        "metadata_map": metadata_map,
+        "contract_validation": contract_validation,
     }
 
 
