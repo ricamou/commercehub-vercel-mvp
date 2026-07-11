@@ -1,35 +1,38 @@
-# CommerceHub Enterprise V5 — Sprint 37 Seller Eligibility Inspector
+# CommerceHub Enterprise V5 — Sprint 38
 
-## Objetivo
+## Supplier Bulk Publication Pipeline
 
-Aprofundar o erro `seller.unable_to_list` usando verificações específicas para:
+Executa para todos os anúncios importados o mesmo procedimento validado no primeiro produto:
 
-- usuário autenticado;
-- categoria do anúncio;
-- tipo de anúncio escolhido;
-- disponibilidade do listing type para o vendedor;
-- existência de anúncios anteriores;
-- tags do perfil, incluindo `user_product_seller`;
-- provável onboarding do primeiro anúncio.
+1. Product Master;
+2. Marketplace Inspector;
+3. GTIN/identificadores;
+4. Auto Completer;
+5. Unified Payload;
+6. Publication Readiness;
+7. Publicação real, somente quando o produto estiver pronto.
+
+## Segurança
+
+O modo padrão é `prepare`.
+Ele apenas analisa e registra os resultados.
+
+O modo `publish` publica somente anúncios com:
+- prontidão 100%;
+- nenhuma pendência;
+- nenhum atributo inválido;
+- sem `external_id` anterior.
 
 ## Rotas
 
-- `/seller-eligibility/listing/{listing_id}`
-- `/api/seller-eligibility/listing/{listing_id}`
-
-## Interpretação
-
-A API pública pode não expor o motivo interno exato do bloqueio. Quando isso ocorrer,
-o sistema separa:
-
-- bloqueio comprovado;
-- provável onboarding do primeiro anúncio;
-- restrição não exposta pela API pública.
+- `/supplier-bulk-publication?mode=prepare&limit=20`
+- `/supplier-bulk-publication?mode=publish&limit=20`
+- `/api/supplier-bulk-publication?mode=prepare&limit=20`
 
 ## Versão
 
-`enterprise-v5-sprint37-seller-eligibility-inspector`
+`enterprise-v5-sprint38-supplier-bulk-publication-pipeline`
 
 ## Supabase
 
-Não é necessário criar nova query.
+É necessário executar a query da Sprint 38.

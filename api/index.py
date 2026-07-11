@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint37-seller-eligibility-inspector"
+S13_VERSION = "enterprise-v5-sprint38-supplier-bulk-publication-pipeline"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -4547,6 +4547,7 @@ async def listing_details_page(listing_id: str):
 <p><b>Descrição:</b><br>{s19e(listing.get('description') or '-')}</p>
 <a class='btn' href='/product-master/{product.get("id")}/listing'>Editar rascunho</a>
 <a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a><a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a><a class='btn' href='/marketplace-intelligence/listing/{listing_id}'>Marketplace Intelligence</a><a class='btn' href='/publishing-lab/listing/{listing_id}'>Publishing Lab</a><a class='btn' href='/marketplace-rules/listing/{listing_id}'>Rules Engine</a><a class='btn' href='/marketplace-inspector/listing/{listing_id}'>Marketplace Inspector</a><a class='btn' href='/marketplace-knowledge/listing/{listing_id}'>Knowledge Engine</a><a class='btn' href='/publication-readiness/listing/{listing_id}'>Prontidão para Publicação</a><a class='btn' href='/gtin-discovery/listing/{listing_id}'>Descobrir GTIN</a><a class='btn' href='/gtin-intelligence/listing/{listing_id}'>GTIN Intelligence</a><a class='btn' href='/marketplace-auto-completer/listing/{listing_id}'>Auto Completar</a><a class='btn' href='/seller-diagnostics'>Diagnóstico do vendedor</a>
+<a class='btn' href='/supplier-bulk-publication?mode=prepare&limit=20'>Publicação em lote</a>
 <a class='btn' href='/seller-eligibility/listing/{listing_id}'>Elegibilidade para este anúncio</a>
 </div>
 <div class='card'><h2>Erros</h2><ul>{errors_html}</ul><h2>Alertas</h2><ul>{warnings_html}</ul></div>
@@ -12442,3 +12443,438 @@ async def seller_eligibility_page(listing_id: str):
 """
 
     return HTMLResponse(shell("Elegibilidade do vendedor", content))
+
+
+# ==========================================================
+# SPRINT 38 - SUPPLIER BULK PUBLICATION PIPELINE
+# Executa o mesmo fluxo validado para todos os anúncios importados.
+# ==========================================================
+
+def s38_supplier_name(context):
+    supplier = context.get("supplier") or {}
+    if isinstance(supplier, dict):
+        return (
+            supplier.get("name")
+            or supplier.get("slug")
+            or supplier.get("code")
+            or "desconhecido"
+        )
+    return str(supplier or "desconhecido")
+
+
+async def s38_create_run(mode, supplier_filter, limit):
+    result = await store.insert("bulk_publication_runs", {
+        "company_id": DEFAULT_COMPANY_ID,
+        "mode": mode,
+        "supplier_filter": supplier_filter,
+        "status": "running",
+        "requested_limit": limit,
+    })
+    rows = result.get("data") or []
+    if isinstance(rows, dict):
+        rows = [rows]
+    return rows[0] if rows else {}
+
+
+async def s38_save_item(run_id, payload):
+    data = {
+        "run_id": run_id,
+        "company_id": DEFAULT_COMPANY_ID,
+        **payload,
+    }
+    return await store.insert("bulk_publication_items", data)
+
+
+async def s38_update_run(run_id, counters, summary):
+    return await store.update(
+        "bulk_publication_runs",
+        "id=eq." + quote(str(run_id), safe="-"),
+        {
+            "status": "completed",
+            "processed_count": counters.get("processed", 0),
+            "ready_count": counters.get("ready", 0),
+            "blocked_count": counters.get("blocked", 0),
+            "published_count": counters.get("published", 0),
+            "failed_count": counters.get("failed", 0),
+            "summary": summary,
+            "finished_at": __import__("datetime").datetime.utcnow().isoformat(),
+        },
+    )
+
+
+async def s38_candidate_listings(limit):
+    query = (
+        "select=*"
+        "&order=created_at.asc"
+        "&limit=" + str(limit)
+    )
+    result = await store.select("listings", query)
+    rows = result.get("data") or []
+
+    output = []
+    for row in rows:
+        external_id = row.get("external_id")
+        status = str(row.get("status") or "").lower()
+
+        if external_id:
+            continue
+        if status in {"active", "published", "closed"}:
+            continue
+
+        output.append(row)
+
+    return output
+
+
+async def s38_publish_one(listing_id):
+    readiness = await s30_build_readiness(listing_id)
+    unified = await s34_listing_payload(listing_id)
+
+    if not readiness.get("success"):
+        return {
+            "status": "failed",
+            "readiness": readiness,
+            "error": readiness.get("error") or "Falha ao calcular prontidão.",
+        }
+
+    if not unified.get("success"):
+        return {
+            "status": "failed",
+            "readiness": readiness,
+            "error": unified.get("error") or "Falha ao montar payload.",
+        }
+
+    if readiness.get("status") != "ready":
+        return {
+            "status": "blocked",
+            "readiness": readiness,
+            "unified": {
+                "locations": unified.get("locations"),
+                "identifiers": unified.get("identifiers"),
+            },
+            "error": "Produto ainda não está pronto para publicação.",
+        }
+
+    payload = unified.get("payload") or {}
+    listing = unified.get("listing") or {}
+    context = unified.get("context") or {}
+
+    result = await ml_request(
+        "/items",
+        method="POST",
+        payload=payload,
+    )
+
+    if not result.get("success"):
+        try:
+            await s25_record_error(context, listing, result, payload)
+        except Exception:
+            pass
+
+        return {
+            "status": "failed",
+            "readiness": readiness,
+            "payload": payload,
+            "marketplace_result": result,
+            "error": (
+                (result.get("data") or {}).get("message")
+                if isinstance(result.get("data"), dict)
+                else None
+            ) or result.get("error") or "Mercado Livre recusou a publicação.",
+        }
+
+    item = result.get("data") or {}
+
+    await store.update(
+        "listings",
+        "id=eq." + quote(str(listing_id), safe="-"),
+        {
+            "external_id": item.get("id"),
+            "permalink": item.get("permalink"),
+            "item_url": item.get("permalink"),
+            "status": item.get("status") or "active",
+            "validation_status": "published",
+            "last_error": None,
+            "payload": payload,
+            "published_at": __import__("datetime").datetime.utcnow().isoformat(),
+            "last_synced_at": __import__("datetime").datetime.utcnow().isoformat(),
+        },
+    )
+
+    return {
+        "status": "published",
+        "readiness": readiness,
+        "payload": payload,
+        "item": item,
+    }
+
+
+async def s38_process_batch(mode="prepare", supplier_filter=None, limit=20):
+    mode = str(mode or "prepare").lower()
+    if mode not in {"prepare", "publish"}:
+        mode = "prepare"
+
+    limit = max(1, min(int(limit or 20), 100))
+    run = await s38_create_run(mode, supplier_filter, limit)
+    run_id = run.get("id")
+
+    if not run_id:
+        return {
+            "success": False,
+            "status_code": 500,
+            "error": "Não foi possível criar o lote.",
+        }
+
+    listings = await s38_candidate_listings(limit)
+
+    counters = {
+        "processed": 0,
+        "ready": 0,
+        "blocked": 0,
+        "published": 0,
+        "failed": 0,
+    }
+    results = []
+
+    # Verificação de conta feita uma vez para o lote.
+    seller_diagnostics = await s36_seller_diagnostics()
+
+    for listing in listings:
+        listing_id = listing.get("id")
+        product_id = listing.get("product_id")
+        category_id = listing.get("category_id")
+
+        try:
+            context = await s19_product_context(product_id)
+            supplier = s38_supplier_name(context)
+
+            if supplier_filter and supplier_filter.lower() not in supplier.lower():
+                continue
+
+            readiness = await s30_build_readiness(listing_id)
+            counters["processed"] += 1
+
+            if not readiness.get("success"):
+                counters["failed"] += 1
+                row = {
+                    "listing_id": listing_id,
+                    "product_id": product_id,
+                    "supplier": supplier,
+                    "category_id": category_id,
+                    "readiness_status": "error",
+                    "readiness_score": 0,
+                    "processing_status": "failed",
+                    "error_message": readiness.get("error"),
+                    "details": {"readiness": readiness},
+                }
+                await s38_save_item(run_id, row)
+                results.append(row)
+                continue
+
+            if readiness.get("status") != "ready":
+                counters["blocked"] += 1
+                row = {
+                    "listing_id": listing_id,
+                    "product_id": product_id,
+                    "supplier": supplier,
+                    "category_id": category_id,
+                    "readiness_status": readiness.get("status"),
+                    "readiness_score": readiness.get("readiness_score") or 0,
+                    "processing_status": "blocked",
+                    "error_message": "Produto com pendências.",
+                    "details": {
+                        "missing_fields": readiness.get("missing_fields"),
+                        "invalid_fields": readiness.get("invalid_fields"),
+                    },
+                }
+                await s38_save_item(run_id, row)
+                results.append(row)
+                continue
+
+            counters["ready"] += 1
+
+            if mode == "prepare":
+                row = {
+                    "listing_id": listing_id,
+                    "product_id": product_id,
+                    "supplier": supplier,
+                    "category_id": category_id,
+                    "readiness_status": "ready",
+                    "readiness_score": readiness.get("readiness_score") or 100,
+                    "processing_status": "ready",
+                    "details": {
+                        "payload_preview": readiness.get("payload_preview"),
+                    },
+                }
+                await s38_save_item(run_id, row)
+                results.append(row)
+                continue
+
+            published = await s38_publish_one(listing_id)
+
+            if published.get("status") == "published":
+                counters["published"] += 1
+                item = published.get("item") or {}
+                row = {
+                    "listing_id": listing_id,
+                    "product_id": product_id,
+                    "supplier": supplier,
+                    "category_id": category_id,
+                    "readiness_status": "ready",
+                    "readiness_score": readiness.get("readiness_score") or 100,
+                    "processing_status": "published",
+                    "marketplace_item_id": item.get("id"),
+                    "details": {
+                        "item": item,
+                        "payload": published.get("payload"),
+                    },
+                }
+            else:
+                counters["failed"] += 1
+                market_result = published.get("marketplace_result") or {}
+                data = market_result.get("data") or {}
+                row = {
+                    "listing_id": listing_id,
+                    "product_id": product_id,
+                    "supplier": supplier,
+                    "category_id": category_id,
+                    "readiness_status": "ready",
+                    "readiness_score": readiness.get("readiness_score") or 100,
+                    "processing_status": "failed",
+                    "error_code": (
+                        data.get("error")
+                        if isinstance(data, dict)
+                        else market_result.get("error")
+                    ),
+                    "error_message": published.get("error"),
+                    "details": published,
+                }
+
+            await s38_save_item(run_id, row)
+            results.append(row)
+
+        except Exception as exc:
+            counters["processed"] += 1
+            counters["failed"] += 1
+            row = {
+                "listing_id": listing_id,
+                "product_id": product_id,
+                "supplier": None,
+                "category_id": category_id,
+                "readiness_status": "error",
+                "readiness_score": 0,
+                "processing_status": "failed",
+                "error_message": str(exc),
+                "details": {"exception": str(exc)},
+            }
+            await s38_save_item(run_id, row)
+            results.append(row)
+
+    summary = {
+        "mode": mode,
+        "supplier_filter": supplier_filter,
+        "seller_diagnostics": {
+            "status": seller_diagnostics.get("status"),
+            "can_list": seller_diagnostics.get("can_list"),
+        },
+        "results": results,
+    }
+
+    await s38_update_run(run_id, counters, summary)
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "run_id": run_id,
+        "mode": mode,
+        "supplier_filter": supplier_filter,
+        "counters": counters,
+        "results": results,
+    }
+
+
+@app.get("/api/supplier-bulk-publication")
+async def supplier_bulk_publication_api(
+    mode: str = "prepare",
+    supplier: str = None,
+    limit: int = 20,
+):
+    return await s38_process_batch(
+        mode=mode,
+        supplier_filter=supplier,
+        limit=limit,
+    )
+
+
+@app.get("/supplier-bulk-publication", response_class=HTMLResponse)
+async def supplier_bulk_publication_page(
+    mode: str = "prepare",
+    supplier: str = None,
+    limit: int = 20,
+):
+    result = await s38_process_batch(
+        mode=mode,
+        supplier_filter=supplier,
+        limit=limit,
+    )
+
+    if not result.get("success"):
+        return HTMLResponse(
+            shell(
+                "Publicação em lote",
+                f"<div class='card'><h2>Erro</h2><p>{result.get('error')}</p></div>",
+            ),
+            status_code=int(result.get("status_code") or 400),
+        )
+
+    counters = result.get("counters") or {}
+
+    rows = "".join(
+        f"<tr>"
+        f"<td>{item.get('supplier') or '-'}</td>"
+        f"<td>{item.get('listing_id') or '-'}</td>"
+        f"<td>{item.get('category_id') or '-'}</td>"
+        f"<td>{item.get('readiness_score') or 0}%</td>"
+        f"<td>{item.get('processing_status')}</td>"
+        f"<td>{item.get('marketplace_item_id') or '-'}</td>"
+        f"<td>{item.get('error_message') or '-'}</td>"
+        f"</tr>"
+        for item in result.get("results") or []
+    ) or "<tr><td colspan='7'>Nenhum anúncio elegível encontrado.</td></tr>"
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Processados</span><strong>{counters.get('processed', 0)}</strong></div>
+  <div class='metric'><span>Prontos</span><strong>{counters.get('ready', 0)}</strong></div>
+  <div class='metric'><span>Publicados</span><strong>{counters.get('published', 0)}</strong></div>
+  <div class='metric'><span>Bloqueados/Falhas</span><strong>{counters.get('blocked', 0) + counters.get('failed', 0)}</strong></div>
+</div>
+
+<div class='card'>
+<h2>Executar lote</h2>
+<p>Use primeiro o modo <b>prepare</b>. Depois, publique somente os produtos que ficaram prontos.</p>
+<a class='btn' href='/supplier-bulk-publication?mode=prepare&limit=20'>Preparar 20 produtos</a>
+<a class='btn' href='/supplier-bulk-publication?mode=publish&limit=20'>Publicar 20 produtos prontos</a>
+<a class='btn' href='/api/supplier-bulk-publication?mode=prepare&limit=20'>Ver JSON técnico</a>
+</div>
+
+<div class='card'>
+<h2>Resultado do lote</h2>
+<table>
+<thead>
+<tr>
+<th>Fornecedor</th>
+<th>Listing</th>
+<th>Categoria</th>
+<th>Score</th>
+<th>Status</th>
+<th>Item ML</th>
+<th>Erro</th>
+</tr>
+</thead>
+<tbody>{rows}</tbody>
+</table>
+</div>
+"""
+
+    return HTMLResponse(shell("Supplier Bulk Publication Pipeline", content))

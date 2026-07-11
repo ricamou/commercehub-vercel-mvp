@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint37-seller-eligibility-inspector"
+APP_VERSION = "enterprise-v5-sprint38-supplier-bulk-publication-pipeline"
 
 def env(name, default=""):
     value = os.getenv(name, default)

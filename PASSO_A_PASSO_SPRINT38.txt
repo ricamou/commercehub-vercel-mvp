@@ -1,0 +1,14 @@
+SPRINT 38 — PUBLICAÇÃO EM LOTE
+
+1. Envie todos os arquivos pelo GitHub Web.
+2. Aguarde o deploy.
+3. Confirme /api/health.
+4. Versão esperada:
+   enterprise-v5-sprint38-supplier-bulk-publication-pipeline
+5. Crie uma nova query no Supabase e execute o SQL da Sprint 38.
+6. Abra:
+   /supplier-bulk-publication?mode=prepare&limit=20
+7. Analise os produtos prontos e bloqueados.
+8. Depois abra:
+   /supplier-bulk-publication?mode=publish&limit=20
+9. O sistema publicará apenas os produtos com prontidão 100%.
