@@ -1,27 +1,20 @@
-# CommerceHub Enterprise V5 — Sprint 28 Marketplace Inspector
+# CommerceHub Enterprise V5 — Sprint 29 Marketplace Knowledge Engine
 
 ## Objetivo
 
-Descobrir exatamente o que o Mercado Livre exige para um anúncio antes de ajustar o CommerceHub ou tentar publicar.
+Consolidar em uma base persistente as regras oficiais descobertas pelo Marketplace Inspector.
 
-## O Inspector consulta
+## O que esta versão faz
 
-- categoria oficial;
-- atributos oficiais;
-- atributos condicionais;
-- listing types disponíveis;
-- payload atual do CommerceHub.
-
-## O relatório mostra
-
-- campos obrigatórios;
-- campos condicionais;
-- local correto: item ou variation;
-- formato aceito;
-- valores permitidos;
-- endpoint oficial que comprovou a regra;
-- campos faltantes;
-- atributos desconhecidos enviados pelo CommerceHub.
+- cria perfil por categoria + marca + domínio;
+- salva fingerprint das regras;
+- consolida atributos obrigatórios e condicionais;
+- registra local correto: item ou variation;
+- registra formato e valores aceitos;
+- consolida política de GTIN;
+- diferencia presença de EMPTY_GTIN_REASON de substituição efetiva do GTIN;
+- gera recomendações comprovadas;
+- preserva as fontes oficiais consultadas.
 
 ## Instalação
 
@@ -29,8 +22,8 @@ Descobrir exatamente o que o Mercado Livre exige para um anúncio antes de ajust
 2. Aguarde o deploy.
 3. Confirme `/api/health`.
 4. Versão esperada:
-   `enterprise-v5-sprint28-marketplace-inspector`
-5. Execute `Sprint28_Marketplace_Inspector.sql` no Supabase.
+   `enterprise-v5-sprint29-marketplace-knowledge-engine`
+5. Execute `Sprint29_Marketplace_Knowledge_Engine.sql`.
 6. Abra o anúncio.
-7. Clique em `Marketplace Inspector`.
-8. Use o relatório para fazer apenas os ajustes comprovados pelas APIs oficiais.
+7. Clique em `Knowledge Engine`.
+8. Use apenas as recomendações comprovadas antes de ajustar o CommerceHub.

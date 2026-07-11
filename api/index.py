@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint28-marketplace-inspector"
+S13_VERSION = "enterprise-v5-sprint29-marketplace-knowledge-engine"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -4597,7 +4597,7 @@ async def listing_details_page(listing_id: str):
 <p><b>Imagens:</b> {len(context['images'])}</p>
 <p><b>Descrição:</b><br>{s19e(listing.get('description') or '-')}</p>
 <a class='btn' href='/product-master/{product.get("id")}/listing'>Editar rascunho</a>
-<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a><a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a><a class='btn' href='/marketplace-intelligence/listing/{listing_id}'>Marketplace Intelligence</a><a class='btn' href='/publishing-lab/listing/{listing_id}'>Publishing Lab</a><a class='btn' href='/marketplace-rules/listing/{listing_id}'>Rules Engine</a><a class='btn' href='/marketplace-inspector/listing/{listing_id}'>Marketplace Inspector</a>
+<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a><a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a><a class='btn' href='/marketplace-intelligence/listing/{listing_id}'>Marketplace Intelligence</a><a class='btn' href='/publishing-lab/listing/{listing_id}'>Publishing Lab</a><a class='btn' href='/marketplace-rules/listing/{listing_id}'>Rules Engine</a><a class='btn' href='/marketplace-inspector/listing/{listing_id}'>Marketplace Inspector</a><a class='btn' href='/marketplace-knowledge/listing/{listing_id}'>Knowledge Engine</a>
 </div>
 <div class='card'><h2>Erros</h2><ul>{errors_html}</ul><h2>Alertas</h2><ul>{warnings_html}</ul></div>
 {publish_box}
@@ -9051,3 +9051,383 @@ async def marketplace_inspector_page(listing_id: str):
 </div>
 """
     return HTMLResponse(shell("Marketplace Inspector", content))
+
+
+# ==========================================================
+# SPRINT 29 - MARKETPLACE KNOWLEDGE ENGINE
+# Consolida metadados oficiais, validação condicional e histórico real.
+# ==========================================================
+
+def s29_hash(value):
+    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def s29_rule_scope(field_name, conditional_required, learned_rule):
+    if learned_rule:
+        return "category_brand"
+    if conditional_required:
+        return "payload_conditional"
+    return "category"
+
+
+def s29_build_profile(inspection_result):
+    inspection = inspection_result.get("inspection") or {}
+    product = inspection_result.get("product") or {}
+    category_result = inspection_result.get("category") or {}
+    category_data = category_result.get("data") or {}
+
+    requirements = inspection.get("requirements") or []
+    knowledge_rules = []
+
+    for item in requirements:
+        field_name = str(item.get("field") or "").upper()
+        knowledge_rules.append({
+            "rule_key": (
+                f"REQUIRE_{field_name}"
+                if item.get("required")
+                else f"OPTIONAL_{field_name}"
+            ),
+            "field_name": field_name,
+            "required": bool(item.get("required")),
+            "conditional": bool(item.get("conditional_required")),
+            "location": item.get("location"),
+            "accepted_format": item.get("accepted_format"),
+            "accepted_values": item.get("accepted_values") or [],
+            "outcome": "block_when_missing" if item.get("required") else "informational",
+            "explanation": (
+                f"{field_name} é exigido pelo Mercado Livre para este contexto."
+                if item.get("required")
+                else f"{field_name} é opcional para este contexto."
+            ),
+            "source_endpoint": item.get("source"),
+            "evidence": item,
+            "confidence": 100,
+        })
+
+    learned_rules = (
+        ((inspection_result.get("inspection") or {}).get("learned_rules"))
+        or []
+    )
+
+    gtin_rule = next(
+        (
+            item for item in knowledge_rules
+            if item.get("field_name") == "GTIN"
+        ),
+        None,
+    )
+    empty_rule = next(
+        (
+            item for item in knowledge_rules
+            if item.get("field_name") == "EMPTY_GTIN_REASON"
+        ),
+        None,
+    )
+
+    profile = {
+        "category_id": inspection.get("category_id"),
+        "category_name": inspection.get("category_name"),
+        "domain_id": inspection.get("domain_id") or category_data.get("domain_id"),
+        "brand": product.get("brand"),
+        "listing_type_id": inspection.get("listing_type_id"),
+        "can_publish": inspection.get("can_publish"),
+        "current_payload_attribute_ids": inspection.get("current_payload_attribute_ids") or [],
+        "conditional_required_ids": inspection.get("conditional_required_ids") or [],
+        "missing_required_ids": inspection.get("missing_required_ids") or [],
+        "unknown_sent_ids": inspection.get("unknown_sent_ids") or [],
+        "gtin_policy": {
+            "gtin_required": bool(gtin_rule and gtin_rule.get("required")),
+            "gtin_conditional": bool(gtin_rule and gtin_rule.get("conditional")),
+            "gtin_location": gtin_rule.get("location") if gtin_rule else None,
+            "empty_gtin_reason_available": bool(empty_rule),
+            "empty_gtin_reason_required": bool(empty_rule and empty_rule.get("required")),
+            "empty_gtin_reason_conditional": bool(empty_rule and empty_rule.get("conditional")),
+            "empty_gtin_reason_values": (
+                empty_rule.get("accepted_values") if empty_rule else []
+            ),
+            "empty_gtin_reason_substitutes_gtin": bool(
+                empty_rule
+                and empty_rule.get("required")
+                and not (gtin_rule and gtin_rule.get("required"))
+            ),
+        },
+        "rules": knowledge_rules,
+        "official_sources": sorted(set(
+            str(item.get("source_endpoint") or "")
+            for item in knowledge_rules
+            if item.get("source_endpoint")
+        )),
+    }
+
+    profile["fingerprint"] = s29_hash({
+        "category_id": profile.get("category_id"),
+        "brand": profile.get("brand"),
+        "domain_id": profile.get("domain_id"),
+        "listing_type_id": profile.get("listing_type_id"),
+        "rules": [
+            {
+                "field": item.get("field_name"),
+                "required": item.get("required"),
+                "conditional": item.get("conditional"),
+                "location": item.get("location"),
+                "accepted_format": item.get("accepted_format"),
+            }
+            for item in knowledge_rules
+        ],
+    })
+
+    return profile
+
+
+async def s29_save_profile(inspection_result):
+    profile = s29_build_profile(inspection_result)
+    product = inspection_result.get("product") or {}
+
+    category_id = str(profile.get("category_id") or "")
+    brand = str(product.get("brand") or "").strip()
+    domain_id = str(profile.get("domain_id") or "").strip()
+    fingerprint = profile.get("fingerprint")
+
+    query = (
+        "select=*&category_id=eq." + quote(category_id, safe="-_")
+        + "&fingerprint=eq." + quote(str(fingerprint), safe="")
+        + ("&brand=eq." + quote(brand, safe="-_ ") if brand else "&brand=is.null")
+        + ("&domain_id=eq." + quote(domain_id, safe="-_") if domain_id else "&domain_id=is.null")
+        + "&limit=1"
+    )
+
+    existing_result = await store.select("ml_knowledge_profiles", query)
+    existing_rows = existing_result.get("data") or []
+    existing = existing_rows[0] if existing_rows else None
+
+    payload = {
+        "company_id": DEFAULT_COMPANY_ID,
+        "category_id": category_id,
+        "brand": brand or None,
+        "domain_id": domain_id or None,
+        "fingerprint": fingerprint,
+        "status": "active",
+        "confidence": 100,
+        "profile": profile,
+        "official_sources": profile.get("official_sources") or [],
+        "last_seen_at": __import__("datetime").datetime.utcnow().isoformat(),
+    }
+
+    if existing:
+        profile_id = existing.get("id")
+        payload["evidence_count"] = int(existing.get("evidence_count") or 0) + 1
+        saved = await store.update(
+            "ml_knowledge_profiles",
+            "id=eq." + quote(str(profile_id), safe="-"),
+            payload,
+        )
+    else:
+        payload["evidence_count"] = 1
+        payload["first_seen_at"] = __import__("datetime").datetime.utcnow().isoformat()
+        saved = await store.insert("ml_knowledge_profiles", payload)
+        rows = saved.get("data") or []
+        if isinstance(rows, dict):
+            rows = [rows]
+        profile_id = (rows[0] if rows else {}).get("id")
+
+    if not saved.get("success"):
+        return {
+            "success": False,
+            "profile_id": profile_id if 'profile_id' in locals() else None,
+            "error": saved.get("error") or saved.get("raw"),
+            "profile": profile,
+        }
+
+    if profile_id:
+        await store.delete(
+            "ml_knowledge_rules",
+            "profile_id=eq." + quote(str(profile_id), safe="-"),
+        )
+
+        for rule in profile.get("rules") or []:
+            await store.insert("ml_knowledge_rules", {
+                "profile_id": profile_id,
+                "rule_key": rule.get("rule_key"),
+                "field_name": rule.get("field_name"),
+                "rule_scope": s29_rule_scope(
+                    rule.get("field_name"),
+                    rule.get("conditional"),
+                    False,
+                ),
+                "required": bool(rule.get("required")),
+                "conditional": bool(rule.get("conditional")),
+                "location": rule.get("location"),
+                "accepted_format": rule.get("accepted_format"),
+                "accepted_values": rule.get("accepted_values") or [],
+                "outcome": rule.get("outcome"),
+                "explanation": rule.get("explanation"),
+                "source_endpoint": rule.get("source_endpoint"),
+                "evidence": rule.get("evidence") or {},
+                "confidence": rule.get("confidence") or 100,
+            })
+
+    return {
+        "success": True,
+        "profile_id": profile_id,
+        "profile": profile,
+    }
+
+
+async def s29_knowledge_for_listing(listing_id):
+    inspection_result = await s28_inspect_listing(listing_id)
+    if not inspection_result.get("success"):
+        return inspection_result
+
+    saved = await s29_save_profile(inspection_result)
+    profile = saved.get("profile") or {}
+
+    missing = profile.get("missing_required_ids") or []
+    unknown = profile.get("unknown_sent_ids") or []
+
+    recommendations = []
+
+    for field_name in missing:
+        recommendations.append({
+            "action": "provide_required_field",
+            "field_name": field_name,
+            "message": f"Informe {field_name} antes de publicar.",
+        })
+
+    if profile.get("gtin_policy", {}).get("gtin_required"):
+        recommendations.append({
+            "action": "provide_real_gtin",
+            "field_name": "GTIN",
+            "message": (
+                "O Mercado Livre exige GTIN para este contexto. "
+                "Use o código real recebido do fornecedor/fabricante."
+            ),
+        })
+
+    if (
+        profile.get("gtin_policy", {}).get("empty_gtin_reason_available")
+        and profile.get("gtin_policy", {}).get("gtin_required")
+    ):
+        recommendations.append({
+            "action": "do_not_treat_empty_gtin_as_substitute",
+            "field_name": "EMPTY_GTIN_REASON",
+            "message": (
+                "EMPTY_GTIN_REASON existe na categoria, mas não substitui "
+                "o GTIN nesta validação condicional."
+            ),
+        })
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "profile_id": saved.get("profile_id"),
+        "saved": saved.get("success"),
+        "save_error": saved.get("error"),
+        "profile": profile,
+        "recommendations": recommendations,
+        "inspection": inspection_result,
+    }
+
+
+@app.get("/api/marketplace-knowledge/listing/{listing_id}")
+async def marketplace_knowledge_api(listing_id: str):
+    result = await s29_knowledge_for_listing(listing_id)
+    if not result.get("success"):
+        return JSONResponse(
+            status_code=int(result.get("status_code") or 400),
+            content=result,
+        )
+    return result
+
+
+@app.get("/marketplace-knowledge/listing/{listing_id}", response_class=HTMLResponse)
+async def marketplace_knowledge_page(listing_id: str):
+    result = await s29_knowledge_for_listing(listing_id)
+    if not result.get("success"):
+        return HTMLResponse(
+            shell(
+                "Marketplace Knowledge Engine",
+                f"<div class='card'><h2>Erro</h2><p>{s19e(result.get('error'))}</p></div>",
+            ),
+            status_code=int(result.get("status_code") or 400),
+        )
+
+    profile = result.get("profile") or {}
+    gtin = profile.get("gtin_policy") or {}
+    recommendations = result.get("recommendations") or []
+
+    recommendation_html = "".join(
+        f"<li><b>{s19e(item.get('field_name') or item.get('action'))}</b>: "
+        f"{s19e(item.get('message'))}</li>"
+        for item in recommendations
+    ) or "<li>Nenhuma recomendação.</li>"
+
+    rules_rows = ""
+    for item in profile.get("rules") or []:
+        if not item.get("required") and not item.get("conditional"):
+            continue
+
+        rules_rows += f"""
+<tr>
+<td>{s19e(item.get('field_name'))}</td>
+<td>{'SIM' if item.get('required') else 'NÃO'}</td>
+<td>{'SIM' if item.get('conditional') else 'NÃO'}</td>
+<td>{s19e(item.get('location'))}</td>
+<td>{s19e(item.get('accepted_format'))}</td>
+<td>{s19e(item.get('source_endpoint'))}</td>
+</tr>
+"""
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Status</span><strong>{'LIBERADO' if profile.get('can_publish') else 'BLOQUEADO'}</strong></div>
+  <div class='metric'><span>Categoria</span><strong>{s19e(profile.get('category_id'))}</strong></div>
+  <div class='metric'><span>Marca</span><strong>{s19e(profile.get('brand') or '-')}</strong></div>
+  <div class='metric'><span>Perfil</span><strong>{s19e((result.get('profile_id') or '')[:8])}</strong></div>
+</div>
+
+<div class='card'>
+<h2>Política de GTIN descoberta</h2>
+<p><b>GTIN obrigatório:</b> {'SIM' if gtin.get('gtin_required') else 'NÃO'}</p>
+<p><b>GTIN condicional:</b> {'SIM' if gtin.get('gtin_conditional') else 'NÃO'}</p>
+<p><b>Local:</b> {s19e(gtin.get('gtin_location') or '-')}</p>
+<p><b>EMPTY_GTIN_REASON disponível:</b> {'SIM' if gtin.get('empty_gtin_reason_available') else 'NÃO'}</p>
+<p><b>Substitui GTIN neste contexto:</b> {'SIM' if gtin.get('empty_gtin_reason_substitutes_gtin') else 'NÃO'}</p>
+</div>
+
+<div class='card'>
+<h2>Recomendações comprovadas</h2>
+<ul>{recommendation_html}</ul>
+</div>
+
+<div class='card'>
+<h2>Regras oficiais consolidadas</h2>
+<table>
+<thead>
+<tr>
+<th>Campo</th>
+<th>Obrigatório</th>
+<th>Condicional</th>
+<th>Local</th>
+<th>Formato</th>
+<th>Fonte oficial</th>
+</tr>
+</thead>
+<tbody>{rules_rows}</tbody>
+</table>
+</div>
+
+<div class='card'>
+<h2>Fontes oficiais consultadas</h2>
+<p>{s19e(', '.join(profile.get('official_sources') or []))}</p>
+<p><b>Snapshot salvo:</b> {'SIM' if result.get('saved') else 'NÃO'}</p>
+<p><b>Erro ao salvar:</b> {s19e(result.get('save_error') or '-')}</p>
+</div>
+
+<div class='card'>
+<a class='btn' href='/marketplace-inspector/listing/{listing_id}'>Marketplace Inspector</a>
+<a class='btn' href='/api/marketplace-knowledge/listing/{listing_id}'>Ver JSON técnico</a>
+<a class='btn' href='/product-master/{result.get("inspection", {}).get("listing", {}).get("product_id")}/listing'>Voltar ao anúncio</a>
+</div>
+"""
+    return HTMLResponse(shell("Marketplace Knowledge Engine", content))

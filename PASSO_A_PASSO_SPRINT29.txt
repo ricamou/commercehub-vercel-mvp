@@ -1,0 +1,20 @@
+SPRINT 29 — MARKETPLACE KNOWLEDGE ENGINE
+
+1. Envie todos os arquivos pelo GitHub Web.
+2. Aguarde o deploy da Vercel.
+3. Abra /api/health.
+4. Confirme:
+   enterprise-v5-sprint29-marketplace-knowledge-engine
+5. No Supabase, abra SQL Editor > New query.
+6. Cole Sprint29_Marketplace_Knowledge_Engine.sql.
+7. Clique em Run.
+8. Resultado esperado:
+   marketplace_knowledge_engine_ready
+9. Abra o anúncio.
+10. Clique em Knowledge Engine.
+11. Confira:
+    - política de GTIN;
+    - regras oficiais;
+    - recomendações comprovadas;
+    - fontes oficiais;
+    - snapshot salvo.
