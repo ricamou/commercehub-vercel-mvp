@@ -1,30 +1,28 @@
-# CommerceHub Enterprise V5 — Sprint 30 Publication Readiness Pipeline
+# CommerceHub Enterprise V5 — Sprint 31 GTIN Discovery Engine
 
 ## Objetivo
 
-Garantir que todo produto importado tenha todas as informações exigidas pelo Mercado Livre antes de publicar.
+Descobrir e preencher automaticamente o GTIN antes da publicação.
 
-## Fluxo
+## Fontes consultadas nesta versão
 
-1. Produto importado do fornecedor.
-2. Categoria do Mercado Livre definida.
-3. Marketplace Inspector consulta requisitos oficiais.
-4. CommerceHub compara requisitos com Product Master e atributos.
-5. Dados disponíveis são preenchidos automaticamente.
-6. Campos faltantes ou inválidos são exibidos.
-7. Botão Publicar só envia quando o status estiver PRONTO.
+1. Product Master (`ean` ou `gtin`);
+2. payload bruto do fornecedor/importação;
+3. atributos do marketplace já salvos;
+4. catálogo interno aprendido do CommerceHub.
 
-## Recursos
+## O que o sistema faz quando encontra
 
-- score de prontidão;
-- campos obrigatórios;
-- campos preenchidos;
-- campos faltantes;
-- campos inválidos;
-- origem de cada valor;
-- payload preparado;
-- bloqueio de publicação incompleta;
-- publicação real quando aprovado.
+- valida o dígito verificador;
+- identifica o tipo: GTIN-8, UPC-A, EAN-13 ou GTIN-14;
+- salva no catálogo interno;
+- tenta atualizar o Product Master;
+- grava o atributo GTIN do Mercado Livre;
+- atualiza a Prontidão para Publicação.
+
+## Quando não encontra
+
+O produto continua BLOQUEADO e a tela mostra todas as fontes verificadas.
 
 ## Instalação
 
@@ -32,7 +30,8 @@ Garantir que todo produto importado tenha todas as informações exigidas pelo M
 2. Aguarde o deploy.
 3. Confirme `/api/health`.
 4. Versão esperada:
-   `enterprise-v5-sprint30-publication-readiness-pipeline`
-5. Execute `Sprint30_Publication_Readiness_Pipeline.sql`.
+   `enterprise-v5-sprint31-gtin-discovery-engine`
+5. Execute `Sprint31_GTIN_Discovery_Engine.sql`.
 6. Abra o anúncio.
-7. Clique em `Prontidão para Publicação`.
+7. Clique em `Descobrir GTIN`.
+8. Depois clique em `Atualizar Prontidão`.

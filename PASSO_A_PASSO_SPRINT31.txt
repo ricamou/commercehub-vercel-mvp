@@ -1,0 +1,19 @@
+SPRINT 31 — GTIN DISCOVERY ENGINE
+
+1. Envie os arquivos pelo GitHub Web.
+2. Aguarde o deploy.
+3. Abra /api/health.
+4. Confirme:
+   enterprise-v5-sprint31-gtin-discovery-engine
+5. No Supabase, abra SQL Editor > New query.
+6. Cole Sprint31_GTIN_Discovery_Engine.sql.
+7. Clique em Run.
+8. Abra o anúncio.
+9. Clique em Descobrir GTIN.
+10. Confira:
+    - status;
+    - GTIN encontrado;
+    - origem;
+    - confiança;
+    - fontes verificadas.
+11. Clique em Atualizar Prontidão.
