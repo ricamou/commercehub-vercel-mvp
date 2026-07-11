@@ -1,22 +1,29 @@
-# CommerceHub Enterprise V5 — Sprint 35
+# CommerceHub Enterprise V5 — Sprint 36 Seller Diagnostics
 
-## Conditional Identifier Logic
+## Objetivo
 
-Correção principal:
+Diagnosticar a conta autenticada antes de tentar publicar.
 
-- `GTIN` e `EMPTY_GTIN_REASON` não são tratados como dois campos obrigatórios simultâneos;
-- GTIN válido satisfaz a exigência e remove a pendência de `EMPTY_GTIN_REASON`;
-- motivo de ausência satisfaz a alternativa quando o contexto permitir;
-- GTIN e motivo juntos continuam bloqueados;
-- a tentativa controlada é liberada quando o payload está completo e sem conflito.
+## Verificações
 
-## Caso atual
+- token OAuth presente;
+- `/users/me`;
+- usuário, site e e-mail;
+- documento;
+- telefone;
+- endereço;
+- status da conta;
+- reputação de vendedor;
+- tipos de anúncio disponíveis em MLB.
 
-O código `7908429311635` passa na validação matemática de EAN-13 e está em `item.attributes`.
+## Rotas
+
+- `/seller-diagnostics`
+- `/api/seller-diagnostics`
 
 ## Versão
 
-`enterprise-v5-sprint35-conditional-identifier-logic`
+`enterprise-v5-sprint36-seller-diagnostics`
 
 ## Supabase
 

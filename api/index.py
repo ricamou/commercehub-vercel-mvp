@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint35-conditional-identifier-logic"
+S13_VERSION = "enterprise-v5-sprint36-seller-diagnostics"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -4546,7 +4546,7 @@ async def listing_details_page(listing_id: str):
 <p><b>Imagens:</b> {len(context['images'])}</p>
 <p><b>Descrição:</b><br>{s19e(listing.get('description') or '-')}</p>
 <a class='btn' href='/product-master/{product.get("id")}/listing'>Editar rascunho</a>
-<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a><a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a><a class='btn' href='/marketplace-intelligence/listing/{listing_id}'>Marketplace Intelligence</a><a class='btn' href='/publishing-lab/listing/{listing_id}'>Publishing Lab</a><a class='btn' href='/marketplace-rules/listing/{listing_id}'>Rules Engine</a><a class='btn' href='/marketplace-inspector/listing/{listing_id}'>Marketplace Inspector</a><a class='btn' href='/marketplace-knowledge/listing/{listing_id}'>Knowledge Engine</a><a class='btn' href='/publication-readiness/listing/{listing_id}'>Prontidão para Publicação</a><a class='btn' href='/gtin-discovery/listing/{listing_id}'>Descobrir GTIN</a><a class='btn' href='/gtin-intelligence/listing/{listing_id}'>GTIN Intelligence</a><a class='btn' href='/marketplace-auto-completer/listing/{listing_id}'>Auto Completar</a>
+<a class='btn' href='/api/ml/categories/{quote(str(listing.get("category_id") or ""))}/attributes'>Atributos da categoria</a><a class='btn' href='/api/listing-engine/{listing_id}/readiness'>Verificar prontidão</a><a class='btn' href='/smart-category-engine/product/{product.get("id")}/category/{listing.get("category_id")}'>Atributos inteligentes</a><a class='btn' href='/category-rules/product/{product.get("id")}/category/{listing.get("category_id")}'>Regras da categoria</a><a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a><a class='btn' href='/marketplace-intelligence/listing/{listing_id}'>Marketplace Intelligence</a><a class='btn' href='/publishing-lab/listing/{listing_id}'>Publishing Lab</a><a class='btn' href='/marketplace-rules/listing/{listing_id}'>Rules Engine</a><a class='btn' href='/marketplace-inspector/listing/{listing_id}'>Marketplace Inspector</a><a class='btn' href='/marketplace-knowledge/listing/{listing_id}'>Knowledge Engine</a><a class='btn' href='/publication-readiness/listing/{listing_id}'>Prontidão para Publicação</a><a class='btn' href='/gtin-discovery/listing/{listing_id}'>Descobrir GTIN</a><a class='btn' href='/gtin-intelligence/listing/{listing_id}'>GTIN Intelligence</a><a class='btn' href='/marketplace-auto-completer/listing/{listing_id}'>Auto Completar</a><a class='btn' href='/seller-diagnostics'>Diagnóstico do vendedor</a>
 </div>
 <div class='card'><h2>Erros</h2><ul>{errors_html}</ul><h2>Alertas</h2><ul>{warnings_html}</ul></div>
 {publish_box}
@@ -9682,6 +9682,7 @@ async def publication_readiness_page(listing_id: str):
 <a class='btn' href='/marketplace-inspector/listing/{listing_id}'>Marketplace Inspector</a>
 <a class='btn' href='/api/publication-readiness/listing/{listing_id}'>Ver JSON técnico</a>
 <a class='btn' href='/api/unified-payload/listing/{listing_id}'>Ver payload unificado</a>
+<a class='btn' href='/seller-diagnostics'>Diagnóstico do vendedor</a>
 <form method='post' action='/api/publication-readiness/listing/{listing_id}/controlled-attempt' style='display:inline'>
 <button class='btn' type='submit'>Tentar publicação controlada</button>
 </form>
@@ -11761,3 +11762,308 @@ def s35_reconcile_identifier_requirements(readiness):
     )
 
     return readiness
+
+
+# ==========================================================
+# SPRINT 36 - SELLER DIAGNOSTICS
+# Diagnostica a conta autenticada antes de publicar.
+# ==========================================================
+
+def s36_truth(value):
+    return value not in (None, "", [], {}, False)
+
+
+def s36_collect_account_signals(user):
+    status = user.get("status") or {}
+    seller_reputation = user.get("seller_reputation") or {}
+    transactions = seller_reputation.get("transactions") or {}
+    identification = user.get("identification") or {}
+    address = user.get("address") or {}
+    phone = user.get("phone") or {}
+
+    checks = [
+        {
+            "code": "user_id",
+            "label": "Usuário autenticado",
+            "ok": s36_truth(user.get("id")),
+            "value": user.get("id"),
+        },
+        {
+            "code": "nickname",
+            "label": "Apelido da conta",
+            "ok": s36_truth(user.get("nickname")),
+            "value": user.get("nickname"),
+        },
+        {
+            "code": "site_id",
+            "label": "País/site da conta",
+            "ok": user.get("site_id") == "MLB",
+            "value": user.get("site_id"),
+        },
+        {
+            "code": "email",
+            "label": "E-mail cadastrado",
+            "ok": s36_truth(user.get("email")),
+            "value": user.get("email"),
+        },
+        {
+            "code": "identification",
+            "label": "Documento cadastrado",
+            "ok": s36_truth(identification.get("number")),
+            "value": identification.get("type"),
+        },
+        {
+            "code": "address",
+            "label": "Endereço cadastrado",
+            "ok": s36_truth(address.get("address")),
+            "value": address.get("city"),
+        },
+        {
+            "code": "phone",
+            "label": "Telefone cadastrado",
+            "ok": s36_truth(phone.get("number") or phone.get("area_code")),
+            "value": phone.get("number"),
+        },
+        {
+            "code": "user_status",
+            "label": "Status da conta",
+            "ok": not bool(status.get("site_status") in {"inactive", "blocked", "suspended"}),
+            "value": status.get("site_status") or "não informado",
+        },
+        {
+            "code": "seller_reputation",
+            "label": "Perfil de vendedor disponível",
+            "ok": bool(seller_reputation),
+            "value": seller_reputation.get("level_id"),
+        },
+        {
+            "code": "transactions",
+            "label": "Histórico de transações",
+            "ok": bool(transactions) or transactions == {},
+            "value": transactions.get("total"),
+        },
+    ]
+
+    tags = set(user.get("tags") or [])
+    if tags:
+        checks.append({
+            "code": "tags",
+            "label": "Tags da conta",
+            "ok": True,
+            "value": ", ".join(sorted(tags)),
+        })
+
+    return checks
+
+
+def s36_extract_blockers(user, checks, listing_types_result):
+    blockers = []
+    warnings = []
+
+    status = user.get("status") or {}
+    site_status = str(status.get("site_status") or "").lower()
+
+    if site_status in {"inactive", "blocked", "suspended"}:
+        blockers.append({
+            "code": "account_status",
+            "message": f"Status da conta: {site_status}.",
+        })
+
+    failed = [item for item in checks if not item.get("ok")]
+    for item in failed:
+        if item.get("code") in {"identification", "phone", "address", "email"}:
+            blockers.append({
+                "code": item.get("code"),
+                "message": f"Cadastro incompleto: {item.get('label')}.",
+            })
+        else:
+            warnings.append({
+                "code": item.get("code"),
+                "message": f"Verificação inconclusiva: {item.get('label')}.",
+            })
+
+    if not listing_types_result.get("success"):
+        warnings.append({
+            "code": "listing_types_lookup",
+            "message": "Não foi possível consultar os tipos de anúncio disponíveis.",
+        })
+
+    return blockers, warnings
+
+
+async def s36_seller_diagnostics():
+    token = await get_token()
+
+    token_check = {
+        "present": bool(token.get("access_token")),
+        "user_id": token.get("user_id"),
+        "scope": token.get("scope"),
+        "expires_in": token.get("expires_in"),
+        "updated_at": token.get("updated_at"),
+    }
+
+    if not token_check["present"]:
+        return {
+            "success": False,
+            "status_code": 401,
+            "error": "Mercado Livre não conectado.",
+            "token": token_check,
+        }
+
+    user_result = await ml_request("/users/me")
+    listing_types_result = await ml_request("/sites/MLB/listing_types")
+
+    user = user_result.get("data") or {}
+    checks = s36_collect_account_signals(user) if user_result.get("success") else []
+
+    blockers, warnings = s36_extract_blockers(
+        user,
+        checks,
+        listing_types_result,
+    )
+
+    can_list = bool(
+        user_result.get("success")
+        and not blockers
+    )
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "status": "ready" if can_list else "blocked",
+        "can_list": can_list,
+        "token": token_check,
+        "user_request": {
+            "success": user_result.get("success"),
+            "status_code": user_result.get("status_code"),
+            "error": user_result.get("error"),
+        },
+        "user": {
+            "id": user.get("id"),
+            "nickname": user.get("nickname"),
+            "site_id": user.get("site_id"),
+            "email": user.get("email"),
+            "first_name": user.get("first_name"),
+            "last_name": user.get("last_name"),
+            "identification": user.get("identification"),
+            "address": user.get("address"),
+            "phone": user.get("phone"),
+            "status": user.get("status"),
+            "tags": user.get("tags"),
+            "seller_reputation": user.get("seller_reputation"),
+        },
+        "checks": checks,
+        "blockers": blockers,
+        "warnings": warnings,
+        "listing_types": (
+            listing_types_result.get("data")
+            if listing_types_result.get("success")
+            else []
+        ),
+        "recommendation": (
+            "A conta parece apta para publicar."
+            if can_list
+            else (
+                "Abra o Mercado Livre no navegador, tente criar o primeiro anúncio "
+                "manualmente e conclua qualquer confirmação de identidade, telefone, "
+                "endereço ou dados fiscais apresentada pela plataforma."
+            )
+        ),
+    }
+
+
+@app.get("/api/seller-diagnostics")
+async def seller_diagnostics_api():
+    result = await s36_seller_diagnostics()
+
+    if not result.get("success"):
+        return JSONResponse(
+            status_code=int(result.get("status_code") or 400),
+            content=result,
+        )
+
+    return result
+
+
+@app.get("/seller-diagnostics", response_class=HTMLResponse)
+async def seller_diagnostics_page():
+    result = await s36_seller_diagnostics()
+
+    if not result.get("success"):
+        return HTMLResponse(
+            shell(
+                "Diagnóstico do vendedor",
+                f"<div class='card'><h2>Erro</h2><p>{result.get('error')}</p></div>",
+            ),
+            status_code=int(result.get("status_code") or 400),
+        )
+
+    checks_rows = "".join(
+        f"<tr>"
+        f"<td>{item.get('label')}</td>"
+        f"<td>{'OK' if item.get('ok') else 'PENDENTE'}</td>"
+        f"<td>{item.get('value') or '-'}</td>"
+        f"</tr>"
+        for item in result.get("checks") or []
+    ) or "<tr><td colspan='3'>Nenhuma verificação disponível.</td></tr>"
+
+    blocker_rows = "".join(
+        f"<li><b>{item.get('code')}</b>: {item.get('message')}</li>"
+        for item in result.get("blockers") or []
+    ) or "<li>Nenhum bloqueio identificado pelos dados disponíveis.</li>"
+
+    warning_rows = "".join(
+        f"<li><b>{item.get('code')}</b>: {item.get('message')}</li>"
+        for item in result.get("warnings") or []
+    ) or "<li>Nenhum alerta adicional.</li>"
+
+    listing_rows = "".join(
+        f"<tr><td>{item.get('id')}</td><td>{item.get('name')}</td></tr>"
+        for item in result.get("listing_types") or []
+        if isinstance(item, dict)
+    ) or "<tr><td colspan='2'>Nenhum tipo retornado.</td></tr>"
+
+    user = result.get("user") or {}
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Status</span><strong>{'APTO' if result.get('can_list') else 'BLOQUEADO'}</strong></div>
+  <div class='metric'><span>Usuário</span><strong>{user.get('nickname') or '-'}</strong></div>
+  <div class='metric'><span>Site</span><strong>{user.get('site_id') or '-'}</strong></div>
+  <div class='metric'><span>Token</span><strong>{'OK' if result.get('token', {}).get('present') else 'AUSENTE'}</strong></div>
+</div>
+
+<div class='card'>
+<h2>Verificações da conta</h2>
+<table>
+<thead><tr><th>Verificação</th><th>Status</th><th>Valor</th></tr></thead>
+<tbody>{checks_rows}</tbody>
+</table>
+</div>
+
+<div class='card'>
+<h2>Bloqueios identificados</h2>
+<ul>{blocker_rows}</ul>
+<h2>Alertas</h2>
+<ul>{warning_rows}</ul>
+</div>
+
+<div class='card'>
+<h2>Tipos de anúncio disponíveis no site MLB</h2>
+<table>
+<thead><tr><th>ID</th><th>Nome</th></tr></thead>
+<tbody>{listing_rows}</tbody>
+</table>
+</div>
+
+<div class='card'>
+<h2>Próxima ação recomendada</h2>
+<p>{result.get('recommendation')}</p>
+</div>
+
+<div class='card'>
+<a class='btn' href='/api/seller-diagnostics'>Ver JSON técnico</a>
+<a class='btn' href='/mercado-livre'>Voltar ao Mercado Livre</a>
+</div>
+"""
+    return HTMLResponse(shell("Diagnóstico do vendedor", content))

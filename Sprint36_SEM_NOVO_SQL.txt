@@ -1,0 +1,1 @@
+Não execute nova query. Esta versão apenas adiciona diagnóstico de conta.

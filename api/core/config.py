@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint35-conditional-identifier-logic"
+APP_VERSION = "enterprise-v5-sprint36-seller-diagnostics"
 
 def env(name, default=""):
     value = os.getenv(name, default)
