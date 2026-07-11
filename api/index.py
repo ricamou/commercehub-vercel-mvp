@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint31-gtin-discovery-engine"
+S13_VERSION = "enterprise-v5-sprint31-1-product-master-hotfix"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -3436,58 +3436,7 @@ async def product_master_page(request: Request):
         rows = "<tr><td colspan='9'>Nenhum produto encontrado.</td></tr>"
 
 
-    gtin_metadata = await s22_gtin_metadata(category_id)
-    reason_options = s22_allowed_reasons(gtin_metadata.get("empty_reason"))
-    gtin_row = vals.get("GTIN") or vals.get("gtin") or {}
-    reason_row = vals.get("EMPTY_GTIN_REASON") or vals.get("empty_gtin_reason") or {}
-
-    reason_options_html = "".join(
-        f"<option value='{s19e(option.get('id'))}' "
-        f"{'selected' if str(reason_row.get('value_id') or '').lower() == str(option.get('id') or '').lower() else ''}>"
-        f"{s19e(option.get('name'))}</option>"
-        for option in reason_options
-    )
-
-    resolver_html = f"""
-<div class='card'>
-<h2>Resolvedor inteligente de GTIN</h2>
-<p>Escolha somente uma das opções abaixo. O CommerceHub removerá automaticamente o atributo conflitante.</p>
-
-<div style='display:grid;grid-template-columns:1fr 1fr;gap:18px'>
-<div style='border:1px solid #dbe3ef;border-radius:12px;padding:16px'>
-<h3>Produto possui GTIN</h3>
-<form method='post' action='/api/gtin-resolver/product/{product_id}/category/{category_id}'>
-<input type='hidden' name='mode' value='with_gtin'>
-<label>GTIN real do produto</label>
-<input name='gtin' value='{s19e(gtin_row.get("value_name") or "")}' placeholder='8, 12, 13 ou 14 dígitos'>
-<button type='submit'>Usar este GTIN</button>
-</form>
-</div>
-
-<div style='border:1px solid #dbe3ef;border-radius:12px;padding:16px'>
-<h3>Produto não possui GTIN</h3>
-<form method='post' action='/api/gtin-resolver/product/{product_id}/category/{category_id}'>
-<input type='hidden' name='mode' value='without_gtin'>
-<label>Motivo permitido pelo Mercado Livre</label>
-<select name='reason' style='width:100%;padding:9px' required>
-<option value=''>Selecione...</option>
-{reason_options_html}
-</select>
-<button type='submit'>Confirmar produto sem GTIN</button>
-</form>
-</div>
-</div>
-
-<p style='margin-top:12px'>
-<a class='btn' href='/gtin-resolver/product/{product_id}/category/{category_id}'>Abrir resolvedor simplificado</a>
-<a class='btn' href='/api/gtin-resolver/product/{product_id}/category/{category_id}/status'>Ver status do resolvedor</a>
-<a class='btn' href='/api/gtin-resolver/category/{category_id}/options'>Ver opções do Mercado Livre</a>
-</p>
-</div>
-"""
-
     content = f"""
-{resolver_html}
 <div class='grid'>
 <div class='metric'><span>Produtos nesta página</span><strong>{len(products)}</strong></div>
 <div class='metric'><span>Página</span><strong>{page}</strong></div>

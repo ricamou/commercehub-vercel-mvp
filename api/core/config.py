@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint31-gtin-discovery-engine"
+APP_VERSION = "enterprise-v5-sprint31-1-product-master-hotfix"
 
 def env(name, default=""):
     value = os.getenv(name, default)
