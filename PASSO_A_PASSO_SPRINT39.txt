@@ -1,0 +1,10 @@
+SPRINT 39 — ORDER ORCHESTRATOR
+
+1. Envie todos os arquivos pelo GitHub Web.
+2. Aguarde o deploy.
+3. Confirme /api/health:
+   enterprise-v5-sprint39-order-orchestrator
+4. Execute a query da Sprint 39 no Supabase.
+5. Configure a URL de notificações:
+   https://SEU-DOMINIO/api/webhooks/mercado-livre
+6. Abra /order-orchestrator.

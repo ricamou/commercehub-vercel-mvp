@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint38-supplier-bulk-publication-pipeline"
+S13_VERSION = "enterprise-v5-sprint39-order-orchestrator"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -12878,3 +12878,401 @@ async def supplier_bulk_publication_page(
 """
 
     return HTMLResponse(shell("Supplier Bulk Publication Pipeline", content))
+
+
+# ==========================================================
+# SPRINT 39 - ORDER ORCHESTRATOR
+# Mercado Livre -> CommerceHub -> Fornecedor -> NF/Rastreio
+# ==========================================================
+
+def s39_safe_dict(value):
+    return value if isinstance(value, dict) else {}
+
+
+def s39_paid_order(order):
+    return any(
+        str(payment.get("status") or "").lower() == "approved"
+        for payment in (order.get("payments") or [])
+        if isinstance(payment, dict)
+    )
+
+
+async def s39_log_event(event_type, source, payload, marketplace_order_id=None, job_id=None):
+    try:
+        await store.insert("order_event_log", {
+            "company_id": DEFAULT_COMPANY_ID,
+            "marketplace_order_id": marketplace_order_id,
+            "supplier_order_job_id": job_id,
+            "event_type": event_type,
+            "source": source,
+            "payload": payload or {},
+        })
+    except Exception:
+        pass
+
+
+async def s39_find_listing(external_item_id):
+    result = await store.select(
+        "listings",
+        "select=*&external_id=eq." + quote(str(external_item_id), safe="-_") + "&limit=1"
+    )
+    rows = result.get("data") or []
+    return rows[0] if rows else {}
+
+
+async def s39_supplier_for_product(product_id):
+    try:
+        context = await s19_product_context(product_id)
+        return s38_supplier_name(context)
+    except Exception:
+        return "desconhecido"
+
+
+async def s39_get_connector(supplier):
+    result = await store.select(
+        "supplier_connector_capabilities",
+        "select=*&company_id=eq."
+        + quote(str(DEFAULT_COMPANY_ID), safe="-")
+        + "&supplier=eq."
+        + quote(str(supplier).lower(), safe="-_ ")
+        + "&active=eq.true&limit=1"
+    )
+    rows = result.get("data") or []
+    return rows[0] if rows else {}
+
+
+async def s39_upsert_order(order):
+    external_order_id = str(order.get("id"))
+    shipping = s39_safe_dict(order.get("shipping"))
+    buyer = s39_safe_dict(order.get("buyer"))
+    payments = order.get("payments") or []
+
+    payment_status = None
+    for payment in payments:
+        if isinstance(payment, dict) and payment.get("status"):
+            payment_status = payment.get("status")
+            if payment_status == "approved":
+                break
+
+    payload = {
+        "company_id": DEFAULT_COMPANY_ID,
+        "marketplace": "mercado_livre",
+        "external_order_id": external_order_id,
+        "buyer_id": str(buyer.get("id") or ""),
+        "status": order.get("status"),
+        "payment_status": payment_status,
+        "shipment_id": str(shipping.get("id") or ""),
+        "total_amount": order.get("total_amount"),
+        "currency_id": order.get("currency_id"),
+        "order_data": order,
+        "buyer_data": buyer,
+        "shipping_data": shipping,
+        "date_created": order.get("date_created"),
+        "last_updated": order.get("last_updated"),
+    }
+
+    existing = await store.select(
+        "marketplace_orders",
+        "select=*&marketplace=eq.mercado_livre&external_order_id=eq."
+        + quote(external_order_id, safe="-_") + "&limit=1"
+    )
+    rows = existing.get("data") or []
+
+    if rows:
+        order_row = rows[0]
+        await store.update(
+            "marketplace_orders",
+            "id=eq." + quote(str(order_row.get("id")), safe="-"),
+            payload,
+        )
+        return order_row.get("id")
+
+    created = await store.insert("marketplace_orders", payload)
+    created_rows = created.get("data") or []
+    if isinstance(created_rows, dict):
+        created_rows = [created_rows]
+    return (created_rows[0] if created_rows else {}).get("id")
+
+
+async def s39_sync_order_items(order_db_id, order):
+    await store.delete(
+        "marketplace_order_items",
+        "order_id=eq." + quote(str(order_db_id), safe="-")
+    )
+
+    suppliers = {}
+
+    for row in order.get("order_items") or []:
+        item = s39_safe_dict(row.get("item"))
+        external_item_id = item.get("id")
+        listing = await s39_find_listing(external_item_id)
+        product_id = listing.get("product_id")
+        supplier = await s39_supplier_for_product(product_id) if product_id else "desconhecido"
+
+        entry = {
+            "external_item_id": external_item_id,
+            "listing_id": listing.get("id"),
+            "product_id": product_id,
+            "supplier_sku": item.get("seller_sku"),
+            "title": item.get("title"),
+            "quantity": row.get("quantity") or 1,
+            "unit_price": row.get("unit_price"),
+            "raw": row,
+        }
+        suppliers.setdefault(supplier, []).append(entry)
+
+        await store.insert("marketplace_order_items", {
+            "order_id": order_db_id,
+            "listing_id": listing.get("id"),
+            "product_id": product_id,
+            "external_item_id": external_item_id,
+            "supplier": supplier,
+            "supplier_sku": item.get("seller_sku"),
+            "title": item.get("title"),
+            "quantity": row.get("quantity") or 1,
+            "unit_price": row.get("unit_price"),
+            "item_data": row,
+        })
+
+    return suppliers
+
+
+async def s39_create_supplier_jobs(order_db_id, order, suppliers):
+    jobs = []
+    buyer = s39_safe_dict(order.get("buyer"))
+    shipping = s39_safe_dict(order.get("shipping"))
+
+    for supplier, items in suppliers.items():
+        connector = await s39_get_connector(supplier)
+        dispatch_mode = connector.get("dispatch_mode") or "manual"
+
+        request_payload = {
+            "marketplace_order_id": order.get("id"),
+            "items": items,
+            "recipient": {
+                "name": buyer.get("first_name"),
+                "last_name": buyer.get("last_name"),
+                "id": buyer.get("id"),
+            },
+            "shipping": shipping,
+            "invoice_required": True,
+            "tracking_required": True,
+        }
+
+        existing = await store.select(
+            "supplier_order_jobs",
+            "select=*&marketplace_order_id=eq."
+            + quote(str(order_db_id), safe="-")
+            + "&supplier=eq."
+            + quote(str(supplier), safe="-_ ")
+            + "&limit=1"
+        )
+        rows = existing.get("data") or []
+
+        if rows:
+            job_id = rows[0].get("id")
+            await store.update(
+                "supplier_order_jobs",
+                "id=eq." + quote(str(job_id), safe="-"),
+                {"request_payload": request_payload}
+            )
+        else:
+            created = await store.insert("supplier_order_jobs", {
+                "company_id": DEFAULT_COMPANY_ID,
+                "marketplace_order_id": order_db_id,
+                "supplier": supplier,
+                "status": "pending",
+                "dispatch_mode": dispatch_mode,
+                "request_payload": request_payload,
+            })
+            created_rows = created.get("data") or []
+            if isinstance(created_rows, dict):
+                created_rows = [created_rows]
+            job_id = (created_rows[0] if created_rows else {}).get("id")
+
+        await s39_log_event(
+            "supplier_job_created",
+            "commercehub",
+            request_payload,
+            marketplace_order_id=order_db_id,
+            job_id=job_id,
+        )
+
+        jobs.append({
+            "job_id": job_id,
+            "supplier": supplier,
+            "dispatch_mode": dispatch_mode,
+            "connector": connector,
+            "request_payload": request_payload,
+        })
+
+    return jobs
+
+
+async def s39_ingest_order(external_order_id):
+    result = await ml_request(f"/orders/{quote(str(external_order_id), safe='-_')}")
+    if not result.get("success"):
+        return {
+            "success": False,
+            "status_code": result.get("status_code") or 400,
+            "error": result.get("error") or "Falha ao consultar pedido.",
+            "result": result,
+        }
+
+    order = result.get("data") or {}
+    order_db_id = await s39_upsert_order(order)
+    suppliers = await s39_sync_order_items(order_db_id, order)
+
+    if not s39_paid_order(order):
+        await s39_log_event(
+            "order_waiting_payment",
+            "mercado_livre",
+            order,
+            marketplace_order_id=order_db_id,
+        )
+        return {
+            "success": True,
+            "status": "waiting_payment",
+            "order_id": order_db_id,
+            "external_order_id": external_order_id,
+            "supplier_jobs": [],
+        }
+
+    jobs = await s39_create_supplier_jobs(order_db_id, order, suppliers)
+
+    return {
+        "success": True,
+        "status": "ready_for_supplier",
+        "order_id": order_db_id,
+        "external_order_id": external_order_id,
+        "supplier_jobs": jobs,
+    }
+
+
+@app.post("/api/webhooks/mercado-livre")
+async def mercado_livre_webhook(request: Request):
+    payload = await request.json()
+    topic = payload.get("topic")
+    resource = str(payload.get("resource") or "")
+
+    await s39_log_event("webhook_received", "mercado_livre", payload)
+
+    if topic in {"orders_v2", "orders"} and "/orders/" in resource:
+        external_order_id = resource.rstrip("/").split("/")[-1]
+        result = await s39_ingest_order(external_order_id)
+        return {"success": True, "processed": result}
+
+    return {"success": True, "ignored": True, "topic": topic}
+
+
+@app.post("/api/orders/{external_order_id}/ingest")
+async def order_ingest_manual(external_order_id: str):
+    result = await s39_ingest_order(external_order_id)
+    return JSONResponse(
+        status_code=200 if result.get("success") else int(result.get("status_code") or 400),
+        content=result,
+    )
+
+
+@app.post("/api/supplier-orders/{job_id}/confirm")
+async def supplier_order_confirm(job_id: str, request: Request):
+    payload = await request.json()
+
+    update_payload = {
+        "status": payload.get("status") or "confirmed",
+        "supplier_order_id": payload.get("supplier_order_id"),
+        "response_payload": payload,
+        "invoice_number": payload.get("invoice_number"),
+        "invoice_key": payload.get("invoice_key"),
+        "invoice_url": payload.get("invoice_url"),
+        "tracking_code": payload.get("tracking_code"),
+        "tracking_url": payload.get("tracking_url"),
+        "carrier": payload.get("carrier"),
+        "confirmed_at": __import__("datetime").datetime.utcnow().isoformat(),
+    }
+
+    if payload.get("tracking_code"):
+        update_payload["status"] = "shipped"
+        update_payload["shipped_at"] = __import__("datetime").datetime.utcnow().isoformat()
+
+    await store.update(
+        "supplier_order_jobs",
+        "id=eq." + quote(str(job_id), safe="-"),
+        update_payload,
+    )
+
+    await s39_log_event(
+        "supplier_confirmation",
+        "supplier",
+        payload,
+        job_id=job_id,
+    )
+
+    return {
+        "success": True,
+        "job_id": job_id,
+        "status": update_payload.get("status"),
+        "tracking_code": payload.get("tracking_code"),
+        "invoice_number": payload.get("invoice_number"),
+    }
+
+
+@app.get("/api/order-orchestrator/jobs")
+async def order_orchestrator_jobs(status: str = None, limit: int = 50):
+    query = "select=*&order=created_at.desc&limit=" + str(max(1, min(limit, 100)))
+    if status:
+        query += "&status=eq." + quote(status, safe="-_")
+    result = await store.select("supplier_order_jobs", query)
+    return {
+        "success": bool(result.get("success")),
+        "jobs": result.get("data") or [],
+        "error": result.get("error"),
+    }
+
+
+@app.get("/order-orchestrator", response_class=HTMLResponse)
+async def order_orchestrator_page():
+    result = await store.select(
+        "supplier_order_jobs",
+        "select=*&order=created_at.desc&limit=50"
+    )
+    jobs = result.get("data") or []
+
+    rows = "".join(
+        f"<tr>"
+        f"<td>{row.get('supplier')}</td>"
+        f"<td>{row.get('status')}</td>"
+        f"<td>{row.get('dispatch_mode')}</td>"
+        f"<td>{row.get('supplier_order_id') or '-'}</td>"
+        f"<td>{row.get('invoice_number') or '-'}</td>"
+        f"<td>{row.get('tracking_code') or '-'}</td>"
+        f"<td>{row.get('created_at') or '-'}</td>"
+        f"</tr>"
+        for row in jobs
+    ) or "<tr><td colspan='7'>Nenhum pedido recebido.</td></tr>"
+
+    content = f"""
+<div class='card'>
+<h2>Fluxo do pedido</h2>
+<p>Mercado Livre → CommerceHub → Fornecedor → NF/Rastreio → retorno ao Mercado Livre.</p>
+<p>Conectores sem API de pedidos permanecem em modo manual até a documentação ser configurada.</p>
+</div>
+
+<div class='card'>
+<h2>Pedidos dos fornecedores</h2>
+<table>
+<thead>
+<tr>
+<th>Fornecedor</th><th>Status</th><th>Modo</th><th>Pedido fornecedor</th>
+<th>NF</th><th>Rastreio</th><th>Criado em</th>
+</tr>
+</thead>
+<tbody>{rows}</tbody>
+</table>
+</div>
+
+<div class='card'>
+<a class='btn' href='/api/order-orchestrator/jobs'>Ver JSON técnico</a>
+</div>
+"""
+    return HTMLResponse(shell("Order Orchestrator", content))
