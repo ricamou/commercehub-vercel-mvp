@@ -1,0 +1,1 @@
+A Sprint 25.1 usa as tabelas da Sprint 25. Não execute nova query.

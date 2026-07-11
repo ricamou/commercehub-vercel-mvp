@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint25-marketplace-intelligence-engine"
+S13_VERSION = "enterprise-v5-sprint25-1-auto-learning-preflight"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -7310,9 +7310,16 @@ async def marketplace_intelligence_listing(listing_id: str):
             "error": "Produto não encontrado.",
         })
 
+    try:
+        preflight_result = await s24_metadata_preflight(context, listing)
+        learning = await s251_learn_from_preflight(context, listing, preflight_result)
+    except Exception as exc:
+        learning = {"success": False, "learned": [], "error": str(exc)}
+
     return {
         "success": True,
         "version": APP_VERSION,
+        "learning": learning,
         "assessment": await s25_intelligence_assessment(context, listing),
     }
 
@@ -7327,6 +7334,11 @@ async def marketplace_intelligence_page(listing_id: str):
         )
 
     context = await s19_product_context(listing.get("product_id"))
+    try:
+        preflight_result = await s24_metadata_preflight(context, listing)
+        await s251_learn_from_preflight(context, listing, preflight_result)
+    except Exception:
+        pass
     assessment = await s25_intelligence_assessment(context, listing)
 
     blockers = assessment.get("blockers") or []
@@ -7379,9 +7391,143 @@ async def marketplace_intelligence_page(listing_id: str):
 </div>
 
 <div class='card'>
+<a class='btn' href='/marketplace-intelligence/listing/{listing_id}/refresh'>Atualizar inteligência</a>
 <a class='btn' href='/metadata-preflight/listing/{listing_id}'>Metadata Preflight</a>
 <a class='btn' href='/product-master/{listing.get("product_id")}/listing'>Voltar ao anúncio</a>
 <a class='btn' href='/api/marketplace-intelligence/listing/{listing_id}'>Ver JSON técnico</a>
 </div>
 """
     return HTMLResponse(shell("Marketplace Intelligence Engine", content))
+
+
+# ==========================================================
+# SPRINT 25.1 - AUTO LEARNING PREFLIGHT
+# Aprende com o endpoint condicional antes do POST /items.
+# ==========================================================
+
+async def s251_learn_from_preflight(context, listing, preflight_result):
+    product = context.get("product") or {}
+    category_id = listing.get("category_id")
+    brand = product.get("brand")
+
+    conditional_ids = {
+        str(item or "").upper()
+        for item in (preflight_result.get("conditional_attribute_ids") or [])
+    }
+    sent_ids = {
+        str(item or "").upper()
+        for item in (preflight_result.get("sent_attribute_ids") or [])
+    }
+
+    values = await s21_product_values(product.get("id"), category_id)
+    reason_row = (
+        values.get("EMPTY_GTIN_REASON")
+        or values.get("empty_gtin_reason")
+        or {}
+    )
+    has_empty_reason = bool(
+        reason_row.get("value_id") or reason_row.get("value_name")
+    )
+
+    learned = []
+
+    if "GTIN" in conditional_ids and "GTIN" not in sent_ids and has_empty_reason:
+        saved = await s25_upsert_rule(
+            category_id=category_id,
+            rule_key="GTIN_REQUIRED",
+            rule_value={
+                "required": True,
+                "empty_gtin_reason_substitutes": False,
+                "evidence": "conditional_metadata",
+                "conditional_attribute": "GTIN",
+            },
+            brand=brand,
+            source="mercado_livre_conditional_metadata",
+            confidence=100,
+            error_code="conditional_required",
+            error_message=(
+                "O endpoint condicional exigiu GTIN mesmo com "
+                "EMPTY_GTIN_REASON presente."
+            ),
+        )
+        learned.append({
+            "rule_key": "GTIN_REQUIRED",
+            "success": bool(saved.get("success")),
+            "source": "conditional_metadata",
+        })
+
+    legacy_rule = await s23_product_feedback_rule(product.get("id"), category_id)
+    if legacy_rule:
+        saved = await s25_upsert_rule(
+            category_id=category_id,
+            rule_key="GTIN_REQUIRED",
+            rule_value={
+                "required": True,
+                "empty_gtin_reason_substitutes": False,
+                "evidence": "legacy_ml_feedback",
+            },
+            brand=brand,
+            source="legacy_marketplace_feedback",
+            confidence=100,
+            error_code="7810",
+            error_message="Regra migrada do aprendizado anterior do CommerceHub.",
+        )
+        learned.append({
+            "rule_key": "GTIN_REQUIRED",
+            "success": bool(saved.get("success")),
+            "source": "legacy_feedback",
+        })
+
+    return {
+        "success": True,
+        "learned": learned,
+        "learned_count": len(learned),
+    }
+
+
+async def s251_refresh_listing_intelligence(listing_id):
+    listing = await s19_get_listing(listing_id)
+    if not listing:
+        return {"success": False, "status_code": 404, "error": "Anúncio não encontrado."}
+
+    context = await s19_product_context(listing.get("product_id"))
+    if not context:
+        return {"success": False, "status_code": 404, "error": "Produto não encontrado."}
+
+    preflight = await s24_metadata_preflight(context, listing)
+    learning = await s251_learn_from_preflight(context, listing, preflight)
+    assessment = await s25_intelligence_assessment(context, listing)
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "listing_id": listing_id,
+        "learning": learning,
+        "assessment": assessment,
+        "preflight": preflight,
+    }
+
+
+@app.get("/api/marketplace-intelligence/listing/{listing_id}/refresh")
+async def marketplace_intelligence_refresh(listing_id: str):
+    result = await s251_refresh_listing_intelligence(listing_id)
+    if not result.get("success"):
+        return JSONResponse(
+            status_code=int(result.get("status_code") or 400),
+            content=result,
+        )
+    return result
+
+
+@app.get("/marketplace-intelligence/listing/{listing_id}/refresh")
+async def marketplace_intelligence_refresh_page(listing_id: str):
+    result = await s251_refresh_listing_intelligence(listing_id)
+    if not result.get("success"):
+        return JSONResponse(
+            status_code=int(result.get("status_code") or 400),
+            content=result,
+        )
+    return RedirectResponse(
+        f"/marketplace-intelligence/listing/{listing_id}",
+        status_code=303,
+    )

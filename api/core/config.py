@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint25-marketplace-intelligence-engine"
+APP_VERSION = "enterprise-v5-sprint25-1-auto-learning-preflight"
 
 def env(name, default=""):
     value = os.getenv(name, default)

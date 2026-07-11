@@ -1,32 +1,21 @@
-# CommerceHub Enterprise V5 — Sprint 25 Marketplace Intelligence Engine
+# CommerceHub Enterprise V5 — Sprint 25.1 Auto Learning Preflight
 
-## Incluído
+Esta versão aprende regras também a partir do Metadata Preflight e dos
+atributos condicionais retornados pelo Mercado Livre, sem exigir uma nova
+falha no POST /items.
 
-- base de conhecimento persistente por categoria e marca;
-- armazenamento de erros reais do Mercado Livre;
-- aprendizado automático das regras:
-  - GTIN obrigatório;
-  - GTIN inválido;
-  - fluxo User Products com `family_name`;
-- contador de ocorrências;
-- nível de confiança;
-- aplicação das regras antes da publicação;
-- integração com Metadata Preflight;
-- tela Marketplace Intelligence;
-- histórico técnico de erros e payloads.
+## Resultado esperado no produto atual
+
+- Regras aprendidas: pelo menos 1
+- Status: BLOQUEADO
+- Regra: GTIN_REQUIRED
+- Fonte: mercado_livre_conditional_metadata ou legacy_marketplace_feedback
 
 ## Instalação
 
 1. Envie os arquivos pelo GitHub Web.
 2. Aguarde o deploy.
-3. Abra `/api/health`.
-4. Confirme:
-   `enterprise-v5-sprint25-marketplace-intelligence-engine`
-5. Execute `Sprint25_Marketplace_Intelligence.sql` em uma nova query no Supabase.
-6. Abra `/api/marketplace-intelligence/category/MLB1714`.
-7. Abra o anúncio e clique em `Marketplace Intelligence`.
-8. Faça uma nova tentativa somente depois de corrigir os bloqueios.
-
-## Observação
-
-O sistema não cria GTIN e não substitui dados reais do fabricante. Ele aprende quando uma categoria ou combinação categoria/marca exige um GTIN verdadeiro.
+3. Confirme `/api/health`.
+4. Não execute novo SQL.
+5. Abra Marketplace Intelligence.
+6. Clique em `Atualizar inteligência`.
