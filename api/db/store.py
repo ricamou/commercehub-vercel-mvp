@@ -39,11 +39,10 @@ async def upsert(table, payload, conflict="id"):
     if not configured():
         values = payload if isinstance(payload, list) else [payload]
         items = MEMORY.setdefault(table, [])
-        conflict_keys = [key.strip() for key in str(conflict or "id").split(",") if key.strip()]
         for value in values:
             found = False
             for i, item in enumerate(items):
-                if all(str(item.get(key)) == str(value.get(key)) for key in conflict_keys):
+                if str(item.get(conflict)) == str(value.get(conflict)):
                     items[i] = {**item, **value}
                     found = True
                     break
