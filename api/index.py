@@ -18964,7 +18964,14 @@ def s48_extract_catalog_item(item):
         if isinstance(pic, dict):
             url = pic.get("secure_url") or pic.get("url")
             if url and str(url).startswith("http"):
-                pictures.append(str(url))
+                pictures.append(str(url).replace("http://", "https://", 1))
+    # Alguns endpoints de busca devolvem somente thumbnail, sem pictures.
+    for key in ("secure_thumbnail", "thumbnail", "picture", "image"):
+        url = item.get(key)
+        if isinstance(url, str) and url.startswith("http"):
+            url = url.replace("http://", "https://", 1)
+            if url not in pictures:
+                pictures.append(url)
 
     return {
         "catalog_product_id": item.get("id") or item.get("catalog_product_id"),
@@ -19333,6 +19340,106 @@ def s49_catalog_attribute_map(catalog):
     return output
 
 
+def s50_public_image_url(url):
+    text = str(url or "").strip()
+    if not text.startswith("https://"):
+        return False
+    lowered = text.lower()
+    return not any(x in lowered for x in ("placehold.co", "placeholder", "dummyimage", "localhost", "127.0.0.1"))
+
+
+def s50_title(product, catalog):
+    """Cria título legível com no máximo 60 caracteres, preservando marca/modelo."""
+    brand = str(product.get("brand") or catalog.get("brand") or "").strip()
+    model = str(product.get("model") or catalog.get("model") or "").strip()
+    source = str(catalog.get("name") or product.get("seo_name") or product.get("name") or "Produto").strip()
+    source = re.sub(r"\s+", " ", source)
+    tokens = source.split()
+    preferred = []
+    for value in (brand, model):
+        for token in value.split():
+            if token and token.lower() not in {x.lower() for x in preferred}:
+                preferred.append(token)
+    for token in tokens:
+        if token.lower() not in {x.lower() for x in preferred}:
+            preferred.append(token)
+    title = ""
+    for token in preferred:
+        candidate = (title + " " + token).strip()
+        if len(candidate) > 60:
+            break
+        title = candidate
+    return (title or source[:60]).strip()[:60]
+
+
+async def s50_find_official_ml_images(product, catalog, minimum_score=72):
+    """Busca imagens públicas dentro do próprio Mercado Livre e só aceita correspondência segura."""
+    current = [u for u in (catalog.get("pictures") or []) if s50_public_image_url(u)]
+    if current:
+        return {"success": True, "pictures": current[:12], "source": "ml_catalog_product"}
+    query = " ".join(str(x).strip() for x in (product.get("brand"), product.get("model"), product.get("name")) if x)[:180]
+    result = await ml_request("/sites/MLB/search", params={"q": query, "limit": 20})
+    if not result.get("success"):
+        return {"success": False, "pictures": [], "error": result.get("error") or result.get("raw")}
+    rows = ((result.get("data") or {}).get("results") or []) if isinstance(result.get("data"), dict) else []
+    ranked = []
+    for row in rows:
+        candidate = s48_extract_catalog_item(row)
+        candidate["match_score"] = s48_match_score(product, candidate)
+        item_id = row.get("id")
+        pics = candidate.get("pictures") or []
+        if item_id and not pics:
+            detail = await ml_request("/items/" + quote(str(item_id), safe="-_"))
+            if detail.get("success") and isinstance(detail.get("data"), dict):
+                candidate = s48_extract_catalog_item(detail.get("data"))
+                candidate["match_score"] = s48_match_score(product, candidate)
+                pics = candidate.get("pictures") or []
+        pics = [u for u in pics if s50_public_image_url(u)]
+        if pics:
+            ranked.append((float(candidate.get("match_score") or 0), pics, item_id))
+    ranked.sort(key=lambda x: x[0], reverse=True)
+    if ranked and ranked[0][0] >= float(minimum_score):
+        return {"success": True, "pictures": ranked[0][1][:12], "source": "ml_item_verified", "match_score": ranked[0][0], "item_id": ranked[0][2]}
+    return {"success": False, "pictures": [], "error": "Nenhuma imagem com correspondência segura foi encontrada."}
+
+
+async def s50_save_images(product, pictures, source="mercado_livre_verified"):
+    product_id = product.get("id")
+    valid = [u for u in pictures if s50_public_image_url(u)]
+    if not valid:
+        return {"saved": 0, "pictures": []}
+    existing_result = await store.select("product_images", "select=*&product_id=eq." + quote(str(product_id), safe="-") + "&limit=100")
+    existing = existing_result.get("data") or []
+    existing_urls = {str(x.get("url") or "").split("?")[0].lower() for x in existing}
+    saved = 0
+    for pos, url in enumerate(valid[:12]):
+        key = url.split("?")[0].lower()
+        if key in existing_urls:
+            continue
+        result = await store.insert("product_images", {
+            "company_id": DEFAULT_COMPANY_ID, "product_id": product_id, "url": url,
+            "position": pos, "is_main": pos == 0 and not existing,
+            "source": source, "alt_text": product.get("name"),
+            "hash": hashlib.sha256(url.encode("utf-8")).hexdigest(),
+        })
+        if result.get("success"):
+            saved += 1
+            existing_urls.add(key)
+    await store.update("products", "id=eq." + quote(str(product_id), safe="-"), {"primary_image_url": valid[0], "sync_status": "pending"})
+    return {"saved": saved, "pictures": valid[:12]}
+
+
+def s50_empty_gtin_choice(requirement):
+    """Usa somente uma opção oficial oferecida pela categoria, sem inventar valor."""
+    values = requirement.get("values") or []
+    preferred_terms = ("não possui", "nao possui", "sem código", "sem codigo", "não se aplica", "nao se aplica")
+    for row in values:
+        name = str((row or {}).get("name") or "").lower()
+        if any(term in name for term in preferred_terms):
+            return {"value_id": row.get("id"), "value_name": row.get("name")}
+    return None
+
+
 def s49_description(product, catalog):
     name = str(product.get("name") or catalog.get("name") or "Produto").strip()
     brand = str(product.get("brand") or catalog.get("brand") or "").strip()
@@ -19389,6 +19496,11 @@ async def s49_save_marketplace_attributes(product_id, category_id, catalog, requ
             value_name = str(product.get("model"))
         elif not value_name and generic.get(aid):
             value_name = generic.get(aid)
+        elif aid == "EMPTY_GTIN_REASON" and not product.get("ean"):
+            choice = s50_empty_gtin_choice(req)
+            if choice:
+                value_id = choice.get("value_id")
+                value_name = choice.get("value_name")
 
         if value_name or value_id:
             payload = {
@@ -19421,7 +19533,7 @@ async def s49_create_or_update_listing(product_id, category_id, catalog):
     inventory = context.get("inventory") or {}
     current = await s19_get_listing_by_product(product_id) or {}
     listing_id = current.get("id") or str(uuid.uuid4())
-    title = str(catalog.get("name") or product.get("seo_name") or product.get("name") or "").strip()[:60]
+    title = s50_title(product, catalog)
     description = str(product.get("description") or "").strip() or s49_description(product, catalog)
     price = s19float(product.get("sale_price"), 0)
     quantity = s19int(inventory.get("available"), 0)
@@ -19451,7 +19563,7 @@ async def s49_create_or_update_listing(product_id, category_id, catalog):
     await store.update("products", "id=eq." + quote(str(product_id), safe="-"), {
         "ml_category_id": category_id,
         "description": description,
-        "internal_status": "ready",
+        "internal_status": "pending_validation",
         "sync_status": "pending",
     })
     return {"success": True, "listing_id": listing_id, "description": description}
@@ -19470,6 +19582,12 @@ async def s49_prepare_product(product_id, supplier_sku=None, minimum_score=72):
             "enrichment": enriched,
         }
     category_id = enriched.get("category_id")
+    # Garante ao menos uma imagem pública oficial antes de criar o anúncio.
+    refreshed_product = await s44_product_by_id(product_id) or {}
+    image_result = await s50_find_official_ml_images(refreshed_product, catalog, minimum_score)
+    if image_result.get("pictures"):
+        await s50_save_images(refreshed_product, image_result.get("pictures") or [], image_result.get("source") or "mercado_livre_verified")
+        catalog["pictures"] = image_result.get("pictures") or catalog.get("pictures") or []
     requirements = await s48_category_requirements(category_id)
     mapped = await s49_save_marketplace_attributes(product_id, category_id, catalog, requirements)
     listing_result = await s49_create_or_update_listing(product_id, category_id, catalog)
@@ -19482,6 +19600,17 @@ async def s49_prepare_product(product_id, supplier_sku=None, minimum_score=72):
     except Exception:
         pass
     readiness = await s30_build_readiness(listing_id)
+    latest_context = await s19_product_context(product_id)
+    latest_listing = await s19_get_listing(listing_id) or {}
+    local_validation = s19_local_validation(latest_context, latest_listing) if latest_context else {"valid": False, "errors": ["Produto não encontrado."], "warnings": []}
+    final_ready = bool(readiness.get("status") == "ready" and local_validation.get("valid"))
+    await store.update("products", "id=eq." + quote(str(product_id), safe="-"), {
+        "internal_status": "ready" if final_ready else "blocked",
+        "sync_status": "pending",
+    })
+    # Recarrega a validação para refletir o status final ready.
+    latest_context = await s19_product_context(product_id)
+    local_validation = s19_local_validation(latest_context, latest_listing) if latest_context else local_validation
     return {
         "success": True,
         "product_id": product_id,
@@ -19492,7 +19621,9 @@ async def s49_prepare_product(product_id, supplier_sku=None, minimum_score=72):
         "attributes_saved": mapped.get("saved"),
         "attributes_missing": mapped.get("missing"),
         "readiness": readiness,
-        "ready_to_publish": readiness.get("status") == "ready",
+        "local_validation": local_validation,
+        "image_enrichment": image_result,
+        "ready_to_publish": final_ready,
         "next": f"/publication-center/listing/{listing_id}",
     }
 
@@ -19540,8 +19671,12 @@ async def s49_listing_page(listing_id: str):
     readiness = await s30_build_readiness(listing_id)
     missing = readiness.get("missing_fields") or []
     invalid = readiness.get("invalid_fields") or []
-    ready = readiness.get("status") == "ready"
-    rows = "".join(f"<li>{s19e(x.get('name') or x.get('field'))}</li>" for x in missing + invalid) or "<li>Nenhuma pendência.</li>"
+    context = await s19_product_context(listing.get("product_id"))
+    local_validation = s19_local_validation(context, listing) if context else {"valid": False, "errors": ["Produto não encontrado."], "warnings": []}
+    ready = readiness.get("status") == "ready" and local_validation.get("valid")
+    readiness_rows = [s19e(x.get('name') or x.get('field')) for x in missing + invalid]
+    local_rows = [s19e(x) for x in (local_validation.get("errors") or [])]
+    rows = "".join(f"<li>{x}</li>" for x in readiness_rows + local_rows) or "<li>Nenhuma pendência.</li>"
     button = (
         f"<form method='post' action='/api/publication-center/listing/{listing_id}/publish'><button class='btn' type='submit'>Publicar agora no Mercado Livre</button></form>"
         if ready else
