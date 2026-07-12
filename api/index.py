@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint30-audited-integrated-pipeline"
+S13_VERSION = "enterprise-v5-sprint30.2-image-pipeline-fixed"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -2810,6 +2810,8 @@ async def s17_import_normalized(supplier, normalized, mode="manual"):
         "supplier_products": 0,
         "master_created_or_updated": 0,
         "inventory_created_or_updated": 0,
+        "images_promoted": 0,
+        "images_failed": 0,
         "errors": []
     }
 
@@ -2845,6 +2847,7 @@ async def s17_import_normalized(supplier, normalized, mode="manual"):
                 "brand": item.get("brand"),
                 "ean": item.get("ean"),
                 "description": item.get("description"),
+                "primary_image_url": item.get("image_url") or None,
                 "cost_price": item.get("cost_price", 0),
                 "sale_price": item.get("sale_price", 0),
                 "status": item.get("status", "active"),
@@ -2883,6 +2886,27 @@ async def s17_import_normalized(supplier, normalized, mode="manual"):
             if not inventory.get("success"):
                 raise RuntimeError(str(inventory.get("error") or inventory.get("raw") or "Falha inventory"))
             stats["inventory_created_or_updated"] += 1
+
+            # Promove a imagem recebida do fornecedor para o Product Master e
+            # para product_images. A cópia ao Storage é feita pelo Workflow,
+            # evitando timeout durante importações grandes.
+            source_image = item.get("image_url")
+            if source_image:
+                image_result = await s20_ensure_product_image(
+                    real_product_id,
+                    source_url=source_image,
+                    mirror_to_storage=False,
+                    source="supplier_import",
+                )
+                if image_result.get("success"):
+                    stats["images_promoted"] += 1
+                else:
+                    stats["images_failed"] += 1
+                    await s17_job_log(job["id"], "warning", "Imagem do produto não pôde ser promovida", {
+                        "sku": item.get("sku"),
+                        "image_url": source_image,
+                        "details": image_result,
+                    })
 
             await store.upsert(
                 "supplier_products",
@@ -3460,6 +3484,7 @@ async def product_master_page(request: Request):
 <a class='btn' href='/product-master/new'>Novo produto</a>
 <a class='btn' href='/product-master/sql'>SQL Sprint 18</a>
 <a class='btn' href='/api/product-master/status'>Status do módulo</a>
+<a class='btn' href='/api/images/backfill?limit=10'>Corrigir fotos importadas</a>
 </form>
 </div>
 <div class='card'>
@@ -4860,6 +4885,122 @@ async def s20_check_public_image(url):
             "error_type": type(exc).__name__,
             "error": str(exc),
         }
+
+
+
+async def s20_ensure_product_image(product_id, source_url=None, mirror_to_storage=True, source="automatic"):
+    """Garante que a imagem esteja no Product Master e em product_images.
+
+    Se o Storage estiver configurado, baixa a imagem remota e cria uma cópia
+    pública controlada pelo CommerceHub. Se a cópia falhar, mantém a URL
+    externa validada, para que a imagem não desapareça do pipeline.
+    """
+    import httpx
+
+    product = await s18_get_product(str(product_id))
+    if not product:
+        return {"success": False, "error": "Produto não encontrado.", "product_id": product_id}
+
+    raw = product.get("raw_data") or {}
+    if not isinstance(raw, dict):
+        raw = {}
+    candidates = [
+        source_url,
+        product.get("primary_image_url"),
+        raw.get("image_url"),
+        raw.get("imagem"),
+        raw.get("foto"),
+    ]
+    url = next((str(x).strip() for x in candidates if str(x or "").strip()), "")
+    if not url:
+        return {"success": False, "error": "Nenhuma URL de imagem disponível.", "product_id": product_id}
+
+    checked = await s20_check_public_image(url)
+    if not checked.get("success"):
+        return {"success": False, "error": "A URL não retornou uma imagem pública válida.", "url": url, "validation": checked}
+
+    final_url = url
+    storage_info = None
+    content_type = checked.get("content_type") or "image/jpeg"
+
+    if mirror_to_storage and SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=35.0, follow_redirects=True) as client:
+                response = await client.get(url, headers={"User-Agent": "CommerceHub-Image-Mirror/1.0"})
+            remote_type = str(response.headers.get("content-type") or content_type).split(";")[0].lower()
+            if 200 <= response.status_code < 300 and remote_type in S20_ALLOWED_MIME and response.content:
+                digest = hashlib.sha256(response.content).hexdigest()
+                ext = S20_ALLOWED_MIME[remote_type]
+                object_path = f"{DEFAULT_COMPANY_ID}/{product_id}/imported-{digest[:16]}{ext}"
+                uploaded = await s20_upload_bytes(
+                    SUPABASE_STORAGE_BUCKET,
+                    object_path,
+                    response.content,
+                    remote_type,
+                )
+                storage_info = uploaded
+                if uploaded.get("success"):
+                    final_url = uploaded.get("public_url") or url
+                    content_type = remote_type
+        except Exception as exc:
+            storage_info = {"success": False, "error_type": type(exc).__name__, "error": str(exc)}
+
+    existing = await store.select(
+        "product_images",
+        "select=*&product_id=eq." + quote(str(product_id), safe="-")
+        + "&url=eq." + quote(str(final_url), safe="/:?=&%._-+") + "&limit=1",
+    )
+    rows = existing.get("data") or []
+    if not rows:
+        current = await store.select(
+            "product_images",
+            "select=id&product_id=eq." + quote(str(product_id), safe="-") + "&deleted_at=is.null&limit=1",
+        )
+        is_main = not bool(current.get("data"))
+        payload = {
+            "company_id": DEFAULT_COMPANY_ID,
+            "product_id": product_id,
+            "url": final_url,
+            "position": 0 if is_main else 99,
+            "is_main": is_main,
+            "alt_text": product.get("name") or product.get("sku"),
+            "source": "supabase_storage" if final_url != url else source,
+            "mime_type": content_type,
+            "upload_status": "ready",
+            "validation_status": "valid",
+            "validation_message": None,
+        }
+        if final_url != url and storage_info:
+            payload.update({
+                "storage_bucket": SUPABASE_STORAGE_BUCKET,
+                "storage_path": str(storage_info.get("public_url") or "").split(f"/{SUPABASE_STORAGE_BUCKET}/", 1)[-1],
+            })
+        saved = await store.insert("product_images", payload)
+        if not saved.get("success"):
+            return {"success": False, "error": "Imagem válida, mas não foi gravada em product_images.", "database": saved, "url": final_url}
+
+    await store.update(
+        "products",
+        "id=eq." + quote(str(product_id), safe="-"),
+        {"primary_image_url": final_url, "sync_status": "pending"},
+    )
+    try:
+        await s18_history(
+            product_id,
+            "image_promoted_automatically",
+            "Imagem promovida automaticamente para o Product Master.",
+            payload={"source_url": url, "public_url": final_url, "mirrored": final_url != url, "source": source},
+        )
+    except Exception:
+        pass
+    return {
+        "success": True,
+        "product_id": product_id,
+        "source_url": url,
+        "public_url": final_url,
+        "mirrored": final_url != url,
+        "storage": storage_info,
+    }
 
 
 @app.post("/api/storage/products/{product_id}/upload")
@@ -8140,6 +8281,53 @@ async def enrichment_resolver_listing_page(listing_id: str):
     await s27_auto_correct_listing(listing_id)
     return RedirectResponse(f"/publishing-lab/listing/{listing_id}", status_code=303)
 
+
+@app.get("/api/images/backfill")
+async def images_backfill(limit: int = 10):
+    """Recupera imagens que ficaram presas em raw_data.image_url.
+
+    Processa poucos itens por chamada para respeitar o limite de execução da
+    Vercel. Pode ser chamado novamente até zerar os produtos sem foto.
+    """
+    limit = max(1, min(int(limit or 10), 25))
+    result = await store.select(
+        "products",
+        "select=*&company_id=eq." + quote(DEFAULT_COMPANY_ID, safe="-")
+        + "&order=updated_at.asc&limit=200",
+    )
+    products = result.get("data") or []
+    selected = []
+    for product in products:
+        raw = product.get("raw_data") or {}
+        if not isinstance(raw, dict):
+            raw = {}
+        candidate = product.get("primary_image_url") or raw.get("image_url") or raw.get("imagem") or raw.get("foto")
+        if candidate:
+            selected.append((product, candidate))
+        if len(selected) >= limit:
+            break
+
+    processed = []
+    for product, candidate in selected:
+        processed.append(await s20_ensure_product_image(
+            product.get("id"),
+            source_url=candidate,
+            mirror_to_storage=True,
+            source="image_backfill",
+        ))
+
+    return {
+        "success": all(x.get("success") for x in processed) if processed else True,
+        "version": "enterprise-v5-sprint30.2-image-pipeline-fixed",
+        "selected": len(selected),
+        "promoted": sum(1 for x in processed if x.get("success")),
+        "failed": sum(1 for x in processed if not x.get("success")),
+        "results": processed,
+        "next": "/product-master",
+        "note": "Execute novamente até todas as imagens desejadas aparecerem no Product Master.",
+    }
+
+
 # ==========================================================
 # SPRINT 29 - WORKFLOW ENGINE
 # Orquestra Product Master -> Listing -> Auto Correction -> Publishing Lab.
@@ -8229,6 +8417,21 @@ async def s29_process_product(product_id):
 
     listing = created.get("listing") or {}
     listing_id = listing.get("id")
+
+    # Primeiro recupera/promove qualquer imagem já recebida do fornecedor.
+    # Em execução individual, tenta espelhar a imagem para o Supabase Storage.
+    image_resolution = await s20_ensure_product_image(
+        product_id,
+        mirror_to_storage=True,
+        source="workflow_engine",
+    )
+    if not image_resolution.get("success"):
+        await s19_history(
+            listing_id, product_id, "workflow_image_unresolved",
+            "O Workflow não encontrou uma imagem pública válida para o produto.",
+            None, listing.get("status") or "draft", image_resolution,
+        )
+
     enrichment = await s28_enrich_listing(listing_id)
     # Falha de correspondência não interrompe o pipeline: a auditoria final mostra
     # exatamente o que ainda precisa de revisão. Falhas técnicas são registradas.
@@ -8262,6 +8465,7 @@ async def s29_process_product(product_id):
         "blockers": simulation.get("blockers") or [],
         "warnings": simulation.get("warnings") or [],
         "enrichment": enrichment,
+        "image_resolution": image_resolution,
     }
 
 
@@ -8404,7 +8608,7 @@ async def workflow_engine_status():
     listings = listings_result.get("data") or []
     return {
         "success": True,
-        "version": "enterprise-v5-sprint30-audited-integrated-pipeline",
+        "version": "enterprise-v5-sprint30.2-image-pipeline-fixed",
         "products": len(products),
         "listings": len(listings),
         "published": sum(1 for row in listings if row.get("external_id")),
