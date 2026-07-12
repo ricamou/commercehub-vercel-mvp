@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v6-sprint43-supplier-hub-core"
+S13_VERSION = "enterprise-v6-sprint44-hayamax-integration-engine"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -14547,6 +14547,7 @@ async def supplier_hub_page():
 <h2>Supplier Hub</h2>
 <p>Esta camada foi adicionada ao CommerceHub atual. O fluxo do Mercado Livre continua funcionando.</p>
 <a class='btn' href='/api/supplier-hub'>Ver JSON técnico</a>
+<a class='btn' href='/supplier-hub/hayamax'>Abrir Hayamax</a>
 </div>
 
 <div class='card'>
@@ -14558,3 +14559,452 @@ async def supplier_hub_page():
 </div>
 """
     return HTMLResponse(shell("Supplier Hub", content))
+
+
+# ==========================================================
+# SPRINT 44 - HAYAMAX INTEGRATION ENGINE
+# Usa o conector universal já existente e prepara produtos
+# importados para publicação pelo pipeline Mercado Livre.
+# ==========================================================
+
+def s44_flatten(value, prefix="", output=None, depth=0):
+    output = output or {}
+    if depth > 6:
+        return output
+
+    if isinstance(value, dict):
+        for key, child in value.items():
+            path = f"{prefix}.{key}" if prefix else str(key)
+            s44_flatten(child, path, output, depth + 1)
+    elif isinstance(value, list):
+        for index, child in enumerate(value[:100]):
+            path = f"{prefix}[{index}]"
+            s44_flatten(child, path, output, depth + 1)
+    elif value not in (None, "", [], {}):
+        output[prefix] = value
+
+    return output
+
+
+def s44_collect_images(value, output=None, depth=0):
+    output = output or []
+    if depth > 7:
+        return output
+
+    if isinstance(value, dict):
+        for child in value.values():
+            s44_collect_images(child, output, depth + 1)
+    elif isinstance(value, list):
+        for child in value[:200]:
+            s44_collect_images(child, output, depth + 1)
+    elif isinstance(value, str):
+        url = value.strip()
+        lower = url.lower()
+        if (
+            url.startswith(("http://", "https://"))
+            and any(ext in lower for ext in (".jpg", ".jpeg", ".png", ".webp"))
+        ):
+            output.append(url)
+
+    unique = []
+    seen = set()
+    for url in output:
+        key = url.split("?")[0].lower()
+        if key not in seen:
+            seen.add(key)
+            unique.append(url)
+    return unique
+
+
+def s44_publication_score(product, stock, images_count, attributes_count):
+    missing = []
+    score = 0
+
+    if product.get("name"):
+        score += 15
+    else:
+        missing.append("name")
+
+    if product.get("brand"):
+        score += 10
+    else:
+        missing.append("brand")
+
+    if product.get("ean"):
+        score += 20
+    else:
+        missing.append("gtin_ean")
+
+    if float(product.get("cost_price") or 0) > 0:
+        score += 15
+    else:
+        missing.append("cost_price")
+
+    if int(stock or 0) > 0:
+        score += 10
+    else:
+        missing.append("stock")
+
+    if images_count >= 1:
+        score += 15
+    else:
+        missing.append("images")
+
+    if attributes_count >= 5:
+        score += 10
+    elif attributes_count > 0:
+        score += 5
+    else:
+        missing.append("attributes")
+
+    if product.get("description"):
+        score += 5
+    else:
+        missing.append("description")
+
+    return min(score, 100), missing
+
+
+async def s44_hayamax_supplier():
+    supplier = await s17_get_supplier(S17_HAYAMAX_SUPPLIER_ID)
+    if supplier:
+        return supplier
+
+    await s17_ensure_hayamax_supplier()
+    return await s17_get_supplier(S17_HAYAMAX_SUPPLIER_ID)
+
+
+async def s44_hayamax_connector():
+    supplier = await s44_hayamax_supplier()
+    if not supplier:
+        return {}
+
+    await s43_ensure_connectors()
+
+    result = await store.select(
+        "supplier_hub_connectors",
+        "select=*&supplier_id=eq."
+        + quote(str(supplier.get("id")), safe="-")
+        + "&limit=1",
+    )
+    rows = result.get("data") or []
+    return rows[0] if rows else {}
+
+
+async def s44_supplier_products(limit=100):
+    result = await store.select(
+        "supplier_products",
+        "select=*&supplier_id=eq."
+        + quote(str(S17_HAYAMAX_SUPPLIER_ID), safe="-")
+        + "&order=updated_at.desc&limit="
+        + str(max(1, min(int(limit or 100), 500))),
+    )
+    return result.get("data") or []
+
+
+async def s44_product_by_id(product_id):
+    if not product_id:
+        return {}
+    result = await store.select(
+        "products",
+        "select=*&id=eq." + quote(str(product_id), safe="-") + "&limit=1",
+    )
+    rows = result.get("data") or []
+    return rows[0] if rows else {}
+
+
+async def s44_inventory(product_id):
+    if not product_id:
+        return {}
+    result = await store.select(
+        "inventory",
+        "select=*&product_id=eq."
+        + quote(str(product_id), safe="-")
+        + "&limit=1",
+    )
+    rows = result.get("data") or []
+    return rows[0] if rows else {}
+
+
+async def s44_store_assets_and_attributes(offer, product):
+    raw = offer.get("raw_data") or {}
+    images = s44_collect_images(raw)
+
+    if offer.get("image_url"):
+        images = [offer.get("image_url"), *images]
+
+    seen = set()
+    images = [
+        url for url in images
+        if url and not (url.split("?")[0].lower() in seen or seen.add(url.split("?")[0].lower()))
+    ]
+
+    for position, url in enumerate(images[:20]):
+        await store.upsert(
+            "supplier_product_assets",
+            {
+                "company_id": DEFAULT_COMPANY_ID,
+                "supplier_id": S17_HAYAMAX_SUPPLIER_ID,
+                "product_id": product.get("id"),
+                "supplier_sku": offer.get("sku"),
+                "asset_type": "image",
+                "source_url": url,
+                "position": position,
+                "metadata": {"source": "hayamax_catalog"},
+                "active": True,
+            },
+            "company_id,supplier_id,supplier_sku,source_url",
+        )
+
+    flat = s44_flatten(raw)
+    attribute_count = 0
+
+    for path, value in flat.items():
+        if isinstance(value, (str, int, float, bool)):
+            key = re.sub(r"[^A-Za-z0-9_]+", "_", path).strip("_").upper()[:120]
+            if not key:
+                continue
+
+            await store.upsert(
+                "supplier_attribute_values",
+                {
+                    "company_id": DEFAULT_COMPANY_ID,
+                    "supplier_id": S17_HAYAMAX_SUPPLIER_ID,
+                    "product_id": product.get("id"),
+                    "supplier_sku": offer.get("sku"),
+                    "attribute_key": key,
+                    "attribute_value": str(value)[:2000],
+                    "source_path": path,
+                    "raw_value": value,
+                },
+                "company_id,supplier_id,supplier_sku,attribute_key",
+            )
+            attribute_count += 1
+
+    return len(images[:20]), attribute_count
+
+
+async def s44_prepare_candidates(limit=100):
+    supplier = await s44_hayamax_supplier()
+    connector = await s44_hayamax_connector()
+    offers = await s44_supplier_products(limit)
+
+    processed = 0
+    ready = 0
+    blocked = 0
+    results = []
+
+    for offer in offers:
+        product = await s44_product_by_id(offer.get("product_id"))
+        inventory = await s44_inventory(product.get("id"))
+        images_count, attributes_count = await s44_store_assets_and_attributes(
+            offer,
+            product,
+        )
+
+        cost_price = float(
+            product.get("cost_price")
+            or offer.get("cost_price")
+            or 0
+        )
+        final_price = s43_calculate_price(cost_price, 8, "percentage")
+        stock = int(
+            inventory.get("quantity")
+            or offer.get("stock")
+            or 0
+        )
+
+        score, missing = s44_publication_score(
+            product,
+            stock,
+            images_count,
+            attributes_count,
+        )
+        status = "ready" if score >= 70 and not {"name", "cost_price", "stock"} & set(missing) else "blocked"
+
+        await store.upsert(
+            "supplier_product_mappings",
+            {
+                "company_id": DEFAULT_COMPANY_ID,
+                "supplier_id": S17_HAYAMAX_SUPPLIER_ID,
+                "product_id": product.get("id"),
+                "supplier_sku": offer.get("sku"),
+                "supplier_product_id": offer.get("external_id"),
+                "supplier_barcode": offer.get("ean"),
+                "supplier_data": offer.get("raw_data") or {},
+                "priority": 1,
+                "is_primary": True,
+                "active": offer.get("status") != "inactive",
+                "last_price": cost_price,
+                "last_stock": stock,
+                "last_sync_at": __import__("datetime").datetime.utcnow().isoformat(),
+            },
+            "company_id,supplier_id,supplier_sku",
+        )
+
+        await store.upsert(
+            "supplier_publication_candidates",
+            {
+                "company_id": DEFAULT_COMPANY_ID,
+                "supplier_id": S17_HAYAMAX_SUPPLIER_ID,
+                "product_id": product.get("id"),
+                "supplier_sku": offer.get("sku"),
+                "marketplace": "mercado_livre",
+                "cost_price": cost_price,
+                "markup_percent": 8,
+                "final_price": final_price,
+                "stock": stock,
+                "images_count": images_count,
+                "attributes_count": attributes_count,
+                "readiness_status": status,
+                "readiness_score": score,
+                "missing_fields": missing,
+            },
+            "company_id,supplier_id,supplier_sku,marketplace",
+        )
+
+        processed += 1
+        if status == "ready":
+            ready += 1
+        else:
+            blocked += 1
+
+        results.append({
+            "supplier_sku": offer.get("sku"),
+            "product_id": product.get("id"),
+            "name": product.get("name"),
+            "cost_price": cost_price,
+            "final_price": final_price,
+            "stock": stock,
+            "images_count": images_count,
+            "attributes_count": attributes_count,
+            "score": score,
+            "status": status,
+            "missing": missing,
+        })
+
+    if connector.get("id"):
+        await store.update(
+            "supplier_hub_connectors",
+            "id=eq." + quote(str(connector.get("id")), safe="-"),
+            {
+                "status": "configured" if offers else "draft",
+                "capabilities": {
+                    "catalog": True,
+                    "prices": True,
+                    "stock": True,
+                    "images": True,
+                    "attributes": True,
+                    "orders": False,
+                    "invoice": False,
+                    "tracking": False,
+                },
+                "last_sync_at": __import__("datetime").datetime.utcnow().isoformat(),
+                "last_error": None if offers else "Nenhum produto importado da Hayamax.",
+            },
+        )
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "supplier": supplier.get("name") if supplier else "Hayamax",
+        "processed": processed,
+        "ready": ready,
+        "blocked": blocked,
+        "results": results,
+    }
+
+
+@app.post("/api/supplier-hub/hayamax/prepare")
+async def hayamax_prepare_candidates(limit: int = 100):
+    return await s44_prepare_candidates(limit)
+
+
+@app.get("/api/supplier-hub/hayamax/status")
+async def hayamax_status():
+    supplier = await s44_hayamax_supplier()
+    connector = await s44_hayamax_connector()
+    offers = await s44_supplier_products(500)
+
+    candidates_result = await store.select(
+        "supplier_publication_candidates",
+        "select=*&supplier_id=eq."
+        + quote(str(S17_HAYAMAX_SUPPLIER_ID), safe="-")
+        + "&marketplace=eq.mercado_livre",
+    )
+    candidates = candidates_result.get("data") or []
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "supplier": supplier,
+        "connector": connector,
+        "catalog_products": len(offers),
+        "publication_candidates": len(candidates),
+        "ready": sum(1 for row in candidates if row.get("readiness_status") == "ready"),
+        "blocked": sum(1 for row in candidates if row.get("readiness_status") == "blocked"),
+    }
+
+
+@app.get("/supplier-hub/hayamax", response_class=HTMLResponse)
+async def hayamax_integration_page():
+    status = await hayamax_status()
+    supplier = status.get("supplier") or {}
+    connector = status.get("connector") or {}
+
+    candidate_result = await store.select(
+        "supplier_publication_candidates",
+        "select=*&supplier_id=eq."
+        + quote(str(S17_HAYAMAX_SUPPLIER_ID), safe="-")
+        + "&marketplace=eq.mercado_livre"
+        + "&order=updated_at.desc&limit=100",
+    )
+    candidates = candidate_result.get("data") or []
+
+    rows = "".join(
+        f"<tr>"
+        f"<td>{row.get('supplier_sku')}</td>"
+        f"<td>R$ {float(row.get('cost_price') or 0):.2f}</td>"
+        f"<td>R$ {float(row.get('final_price') or 0):.2f}</td>"
+        f"<td>{row.get('stock') or 0}</td>"
+        f"<td>{row.get('images_count') or 0}</td>"
+        f"<td>{row.get('attributes_count') or 0}</td>"
+        f"<td>{row.get('readiness_score') or 0}%</td>"
+        f"<td>{row.get('readiness_status')}</td>"
+        f"</tr>"
+        for row in candidates
+    ) or "<tr><td colspan='8'>Nenhum candidato preparado.</td></tr>"
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Status</span><strong>{connector.get('status') or 'draft'}</strong></div>
+  <div class='metric'><span>Catálogo importado</span><strong>{status.get('catalog_products', 0)}</strong></div>
+  <div class='metric'><span>Prontos</span><strong>{status.get('ready', 0)}</strong></div>
+  <div class='metric'><span>Bloqueados</span><strong>{status.get('blocked', 0)}</strong></div>
+</div>
+
+<div class='card'>
+<h2>Hayamax Integration Engine</h2>
+<p>Usa os produtos já importados pelo conector universal e os prepara para o pipeline do Mercado Livre.</p>
+<p><b>Markup:</b> 8%</p>
+<form method='post' action='/api/supplier-hub/hayamax/prepare?limit=100' style='display:inline'>
+<button class='btn' type='submit'>Preparar produtos Hayamax</button>
+</form>
+<a class='btn' href='/supplier-connector/{supplier.get("id")}'>Configurar API/Catálogo</a>
+<a class='btn' href='/api/supplier-hub/hayamax/status'>Ver JSON técnico</a>
+</div>
+
+<div class='card'>
+<h2>Candidatos à publicação</h2>
+<table>
+<thead>
+<tr>
+<th>SKU</th><th>Custo</th><th>Preço +8%</th><th>Estoque</th>
+<th>Fotos</th><th>Atributos</th><th>Score</th><th>Status</th>
+</tr>
+</thead>
+<tbody>{rows}</tbody>
+</table>
+</div>
+"""
+    return HTMLResponse(shell("Hayamax Integration", content))

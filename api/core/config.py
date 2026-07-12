@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v6-sprint43-supplier-hub-core"
+APP_VERSION = "enterprise-v6-sprint44-hayamax-integration-engine"
 
 def env(name, default=""):
     value = os.getenv(name, default)
