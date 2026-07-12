@@ -8005,27 +8005,76 @@ async def s29_product_state(product):
 
 @app.get("/workflow-engine", response_class=HTMLResponse)
 async def workflow_engine_page(request: Request):
-    limit = min(max(s19int(request.query_params.get("limit"), 50), 1), 200)
-    result = await store.select("products", f"select=*&company_id=eq.{quote(DEFAULT_COMPANY_ID, safe='-')}&order=updated_at.desc&limit={limit}")
-    products = result.get("data") or []
-    rows = []
-    counts = {key: 0 for key in S29_STAGE_LABELS}
-    for product in products:
-        state = await s29_product_state(product)
-        stage = state.get("stage")
-        counts[stage] = counts.get(stage, 0) + 1
-        listing = state.get("listing") or {}
-        simulation = state.get("simulation") or {}
-        action = (
-            f"<a class='btn' href='/publishing-lab/listing/{listing.get('id')}'>Auditar/Publicar</a>"
-            if listing.get("id") else
-            f"<form method='post' action='/workflow-engine/product/{product.get('id')}/run' style='display:inline'><button class='btn' type='submit'>Processar</button></form>"
+    """Painel leve do Workflow Engine.
+
+    Não executa Publishing Lab nem chamadas externas durante o GET. Essas
+    operações pertencem aos endpoints de processamento, evitando timeout/500
+    ao abrir a página com muitos produtos.
+    """
+    try:
+        limit = min(max(s19int(request.query_params.get("limit"), 50), 1), 200)
+        products_result = await store.select(
+            "products",
+            f"select=*&company_id=eq.{quote(DEFAULT_COMPANY_ID, safe='-')}&order=updated_at.desc&limit={limit}"
         )
-        rows.append(f"""
-<tr><td>{s19e(product.get('sku') or '-')}</td><td>{s19e(product.get('name') or '-')}</td><td>{s19e(S29_STAGE_LABELS.get(stage, stage))}</td><td>{s19e(listing.get('status') or '-')}</td><td>{s19e(simulation.get('score') if simulation else '-')}</td><td>{action}</td></tr>
-""")
-    table_rows = ''.join(rows) or "<tr><td colspan='6'>Nenhum produto encontrado.</td></tr>"
-    content = f"""
+        if not products_result.get("success", True) and not isinstance(products_result.get("data"), list):
+            raise RuntimeError(products_result.get("error") or products_result.get("raw") or "Falha ao consultar produtos.")
+        products = products_result.get("data") or []
+
+        listings_result = await store.select(
+            "listings",
+            f"select=*&company_id=eq.{quote(DEFAULT_COMPANY_ID, safe='-')}&marketplace=eq.mercado_livre&limit=1000"
+        )
+        listings = listings_result.get("data") or []
+        by_product = {}
+        for item in listings:
+            pid = str(item.get("product_id") or "")
+            if pid and pid not in by_product:
+                by_product[pid] = item
+
+        rows = []
+        counts = {key: 0 for key in S29_STAGE_LABELS}
+        for product in products:
+            product_id = str(product.get("id") or "")
+            listing = by_product.get(product_id) or {}
+            if listing.get("external_id"):
+                stage = "published"
+            elif listing:
+                validation = str(listing.get("validation_status") or "").lower()
+                listing_status = str(listing.get("status") or "").lower()
+                if validation in {"validated", "ready", "approved"} or listing_status in {"ready", "active"}:
+                    stage = "ready_to_publish"
+                else:
+                    stage = str(product.get("sync_status") or "blocked")
+                    if stage not in S29_STAGE_LABELS or stage == "imported":
+                        stage = "blocked"
+            else:
+                stage = str(product.get("sync_status") or "imported")
+                if stage not in S29_STAGE_LABELS:
+                    stage = "imported"
+
+            counts[stage] = counts.get(stage, 0) + 1
+            if listing.get("id"):
+                action = f"<a class='btn' href='/publishing-lab/listing/{listing.get('id')}'>Auditar/Publicar</a>"
+            else:
+                action = (
+                    f"<form method='post' action='/workflow-engine/product/{product.get('id')}/run' style='display:inline'>"
+                    "<button class='btn' type='submit'>Processar</button></form>"
+                )
+            score = "-"
+            payload = listing.get("payload") or {}
+            if isinstance(payload, dict):
+                score = payload.get("publishing_score") or payload.get("score") or "-"
+            rows.append(
+                f"<tr><td>{s19e(product.get('sku') or '-')}</td>"
+                f"<td>{s19e(product.get('name') or '-')}</td>"
+                f"<td>{s19e(S29_STAGE_LABELS.get(stage, stage))}</td>"
+                f"<td>{s19e(listing.get('status') or '-')}</td>"
+                f"<td>{s19e(score)}</td><td>{action}</td></tr>"
+            )
+
+        table_rows = ''.join(rows) or "<tr><td colspan='6'>Nenhum produto encontrado.</td></tr>"
+        content = f"""
 <div class='grid'>
 <div class='metric'><span>Produtos</span><strong>{len(products)}</strong></div>
 <div class='metric'><span>Prontos</span><strong>{counts.get('ready_to_publish',0)}</strong></div>
@@ -8036,7 +8085,15 @@ async def workflow_engine_page(request: Request):
 <form method='post' action='/workflow-engine/run'><label>Quantidade</label><input name='limit' value='30' style='max-width:120px'><button type='submit'>Processar lote</button></form></div>
 <div class='card'><table><thead><tr><th>SKU</th><th>Produto</th><th>Etapa</th><th>Listing</th><th>Score</th><th>Ação</th></tr></thead><tbody>{table_rows}</tbody></table></div>
 """
-    return HTMLResponse(shell("Workflow Engine", content))
+        return HTMLResponse(shell("Workflow Engine", content))
+    except Exception as exc:
+        content = f"""
+<div class='card'><h2>Não foi possível carregar o Workflow Engine</h2>
+<p>O restante do CommerceHub continua disponível. Detalhe técnico:</p>
+<pre style='white-space:pre-wrap'>{s19e(str(exc))}</pre>
+<p><a class='btn' href='/api/workflow-engine/status'>Abrir diagnóstico</a> <a class='btn' href='/product-master'>Voltar ao Product Master</a></p></div>
+"""
+        return HTMLResponse(shell("Workflow Engine", content), status_code=200)
 
 
 @app.post("/workflow-engine/product/{product_id}/run")
