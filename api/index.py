@@ -1828,7 +1828,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v6-sprint47-4-closing-engine"
+S13_VERSION = "enterprise-v6-sprint48-hayamax-30-catalog"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -18437,3 +18437,65 @@ async def s474_page():
 </div>
 """
     return HTMLResponse(shell("Closing Engine", content))
+
+
+# ==========================================================
+# SPRINT 48 - HAYAMAX 30 PUBLIC CATALOG
+# ==========================================================
+
+@app.get("/api/hayamax-launch-30")
+async def s48_hayamax_launch_api():
+    result = await store.select(
+        "products",
+        "select=id,sku,name,brand,cost_price,sale_price,internal_status,sync_status,raw_data"
+        "&supplier_id=eq.00000000-0000-0000-0000-000000001700"
+        "&raw_data->>source=eq.hayamax_public_catalog"
+        "&order=name.asc&limit=100"
+    )
+    rows = result.get("data") or []
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "products": rows,
+        "total": len(rows),
+        "awaiting_supplier_access": sum(
+            1 for row in rows if float(row.get("cost_price") or 0) <= 0
+        ),
+        "publication_blocked": any(
+            float(row.get("cost_price") or 0) <= 0 for row in rows
+        ),
+    }
+
+
+@app.get("/hayamax-launch-30", response_class=HTMLResponse)
+async def s48_hayamax_launch_page():
+    result = await store.select(
+        "products",
+        "select=*&supplier_id=eq.00000000-0000-0000-0000-000000001700"
+        "&raw_data->>source=eq.hayamax_public_catalog"
+        "&order=name.asc&limit=100"
+    )
+    rows = result.get("data") or []
+    table_rows = "".join(
+        f"<tr><td>{row.get('sku')}</td><td>{row.get('name')}</td>"
+        f"<td>{row.get('brand') or '-'}</td>"
+        f"<td>R$ {float(row.get('cost_price') or 0):.2f}</td>"
+        f"<td>{'Aguardando acesso' if float(row.get('cost_price') or 0) == 0 else 'Pronto'}</td></tr>"
+        for row in rows
+    ) or "<tr><td colspan='5'>Execute a query da Sprint 48.</td></tr>"
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Produtos importados</span><strong>{len(rows)}</strong></div>
+  <div class='metric'><span>Fornecedor</span><strong>Hayamax</strong></div>
+  <div class='metric'><span>Margem alvo</span><strong>10% líquido</strong></div>
+  <div class='metric'><span>Publicação</span><strong>Bloqueada sem custo</strong></div>
+</div>
+<div class='card'>
+<h2>30 produtos Hayamax</h2>
+<p>Os produtos públicos foram importados. Preço, estoque, EAN e imagens comerciais serão atualizados quando o cadastro Hayamax for liberado.</p>
+<table><thead><tr><th>SKU</th><th>Produto</th><th>Marca</th><th>Custo</th><th>Status</th></tr></thead>
+<tbody>{table_rows}</tbody></table>
+</div>
+"""
+    return HTMLResponse(shell("Lançamento Hayamax 30", content))
