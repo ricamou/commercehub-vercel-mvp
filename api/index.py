@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v6-sprint44-hayamax-integration-engine"
+S13_VERSION = "enterprise-v6-sprint45-order-fulfillment-engine"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -15008,3 +15008,560 @@ async def hayamax_integration_page():
 </div>
 """
     return HTMLResponse(shell("Hayamax Integration", content))
+
+
+# ==========================================================
+# SPRINT 45 - ORDER & FULFILLMENT ENGINE
+# Marketplace -> CommerceHub -> Fornecedor -> NF/Tracking -> Cliente
+# ==========================================================
+
+def s45_now():
+    return __import__("datetime").datetime.utcnow().isoformat()
+
+
+async def s45_log_event(order_id, event_type, source, message, payload=None, status=None):
+    try:
+        await store.insert("fulfillment_event_log", {
+            "company_id": DEFAULT_COMPANY_ID,
+            "fulfillment_order_id": order_id,
+            "event_type": event_type,
+            "source": source,
+            "status": status,
+            "message": message,
+            "payload": payload or {},
+        })
+    except Exception:
+        pass
+
+
+async def s45_find_fulfillment_order(external_order_id):
+    result = await store.select(
+        "fulfillment_orders",
+        "select=*&company_id=eq."
+        + quote(str(DEFAULT_COMPANY_ID), safe="-")
+        + "&marketplace=eq.mercado_livre"
+        + "&external_order_id=eq."
+        + quote(str(external_order_id), safe="-_")
+        + "&limit=1",
+    )
+    rows = result.get("data") or []
+    return rows[0] if rows else {}
+
+
+async def s45_order_items(order_db_id):
+    result = await store.select(
+        "marketplace_order_items",
+        "select=*&order_id=eq."
+        + quote(str(order_db_id), safe="-")
+        + "&order=created_at.asc",
+    )
+    return result.get("data") or []
+
+
+async def s45_supplier_for_items(items):
+    suppliers = [str(item.get("supplier") or "").strip() for item in items]
+    suppliers = [name for name in suppliers if name and name != "desconhecido"]
+
+    if not suppliers:
+        return None, None
+
+    supplier_name = suppliers[0]
+
+    result = await store.select(
+        "suppliers",
+        "select=*&name=ilike."
+        + quote(f"%{supplier_name}%", safe="%_- ")
+        + "&limit=1",
+    )
+    rows = result.get("data") or []
+    supplier = rows[0] if rows else {}
+    return supplier.get("id"), supplier_name
+
+
+async def s45_create_from_marketplace_order(order_row):
+    external_order_id = order_row.get("external_order_id")
+    existing = await s45_find_fulfillment_order(external_order_id)
+    if existing:
+        return existing
+
+    items = await s45_order_items(order_row.get("id"))
+    supplier_id, supplier_name = await s45_supplier_for_items(items)
+
+    created = await store.insert("fulfillment_orders", {
+        "company_id": DEFAULT_COMPANY_ID,
+        "marketplace_order_id": order_row.get("id"),
+        "marketplace": order_row.get("marketplace") or "mercado_livre",
+        "supplier_id": supplier_id,
+        "supplier_name": supplier_name,
+        "external_order_id": external_order_id,
+        "status": "received",
+        "payment_status": order_row.get("payment_status"),
+        "routing_status": "resolved" if supplier_name else "manual_review",
+        "fiscal_status": "pending",
+        "shipping_status": "pending",
+        "customer_notification_status": "pending",
+        "total_amount": order_row.get("total_amount"),
+        "currency_id": order_row.get("currency_id"),
+        "recipient_data": order_row.get("buyer_data") or {},
+        "shipping_data": order_row.get("shipping_data") or {},
+        "items_data": items,
+    })
+
+    rows = created.get("data") or []
+    if isinstance(rows, dict):
+        rows = [rows]
+
+    fulfillment = rows[0] if rows else {}
+
+    if fulfillment:
+        await s45_log_event(
+            fulfillment.get("id"),
+            "fulfillment_created",
+            "commercehub",
+            "Pedido de fulfillment criado a partir do marketplace.",
+            {"external_order_id": external_order_id},
+            "received",
+        )
+
+    return fulfillment
+
+
+async def s45_sync_marketplace_orders(limit=100):
+    result = await store.select(
+        "marketplace_orders",
+        "select=*&order=created_at.desc&limit="
+        + str(max(1, min(int(limit or 100), 500))),
+    )
+    orders = result.get("data") or []
+
+    created = 0
+    existing = 0
+    rows = []
+
+    for order_row in orders:
+        before = await s45_find_fulfillment_order(order_row.get("external_order_id"))
+        fulfillment = await s45_create_from_marketplace_order(order_row)
+        if before:
+            existing += 1
+        elif fulfillment:
+            created += 1
+        rows.append(fulfillment)
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "marketplace_orders": len(orders),
+        "created": created,
+        "existing": existing,
+        "fulfillment_orders": rows,
+    }
+
+
+async def s45_dispatch_to_supplier(fulfillment_order_id):
+    result = await store.select(
+        "fulfillment_orders",
+        "select=*&id=eq."
+        + quote(str(fulfillment_order_id), safe="-")
+        + "&limit=1",
+    )
+    rows = result.get("data") or []
+    order = rows[0] if rows else {}
+
+    if not order:
+        return {
+            "success": False,
+            "status_code": 404,
+            "error": "Pedido de fulfillment não encontrado.",
+        }
+
+    supplier_name = str(order.get("supplier_name") or "").lower()
+
+    connector_result = await store.select(
+        "supplier_hub_connectors",
+        "select=*&supplier_id=eq."
+        + quote(str(order.get("supplier_id") or ""), safe="-")
+        + "&active=eq.true&limit=1",
+    )
+    connector_rows = connector_result.get("data") or []
+    connector = connector_rows[0] if connector_rows else {}
+    capabilities = connector.get("capabilities") or {}
+
+    if not capabilities.get("orders"):
+        await store.update(
+            "fulfillment_orders",
+            "id=eq." + quote(str(fulfillment_order_id), safe="-"),
+            {
+                "status": "awaiting_manual_supplier_order",
+                "routing_status": "manual",
+                "last_error": (
+                    "O fornecedor não possui criação de pedido por API configurada."
+                ),
+            },
+        )
+
+        await s45_log_event(
+            fulfillment_order_id,
+            "supplier_dispatch_manual",
+            "commercehub",
+            "Pedido preparado, mas o fornecedor ainda não possui Order API configurada.",
+            {"supplier": supplier_name, "connector": connector},
+            "manual",
+        )
+
+        return {
+            "success": True,
+            "mode": "manual",
+            "status": "awaiting_manual_supplier_order",
+            "message": (
+                "Pedido preparado. A criação automática no fornecedor depende "
+                "da documentação e credenciais da API de pedidos."
+            ),
+            "fulfillment_order": order,
+        }
+
+    # Estrutura preparada para adapters reais.
+    # Quando a Hayamax fornecer endpoint e credenciais de pedidos,
+    # este bloco chamará o adapter correspondente.
+    await store.update(
+        "fulfillment_orders",
+        "id=eq." + quote(str(fulfillment_order_id), safe="-"),
+        {
+            "status": "ready_for_supplier_adapter",
+            "routing_status": "ready",
+            "last_error": None,
+        },
+    )
+
+    await s45_log_event(
+        fulfillment_order_id,
+        "supplier_adapter_ready",
+        "commercehub",
+        "Conector informa suporte a pedidos; adapter real precisa estar configurado.",
+        {"connector": connector},
+        "ready",
+    )
+
+    return {
+        "success": True,
+        "mode": "adapter",
+        "status": "ready_for_supplier_adapter",
+        "message": "Pedido pronto para envio pelo adapter do fornecedor.",
+    }
+
+
+async def s45_register_invoice(fulfillment_order_id, payload):
+    created = await store.insert("fulfillment_invoices", {
+        "company_id": DEFAULT_COMPANY_ID,
+        "fulfillment_order_id": fulfillment_order_id,
+        "supplier_id": payload.get("supplier_id"),
+        "invoice_number": payload.get("invoice_number"),
+        "invoice_series": payload.get("invoice_series"),
+        "access_key": payload.get("access_key"),
+        "issued_at": payload.get("issued_at"),
+        "issuer_document": payload.get("issuer_document"),
+        "issuer_name": payload.get("issuer_name"),
+        "recipient_document": payload.get("recipient_document"),
+        "recipient_name": payload.get("recipient_name"),
+        "total_amount": payload.get("total_amount"),
+        "xml_url": payload.get("xml_url"),
+        "danfe_url": payload.get("danfe_url"),
+        "raw_payload": payload,
+        "status": "received",
+    })
+
+    invoice_rows = created.get("data") or []
+    if isinstance(invoice_rows, dict):
+        invoice_rows = [invoice_rows]
+    invoice = invoice_rows[0] if invoice_rows else {}
+
+    await store.update(
+        "fulfillment_orders",
+        "id=eq." + quote(str(fulfillment_order_id), safe="-"),
+        {
+            "fiscal_status": "received",
+            "status": "invoice_received",
+            "last_error": None,
+        },
+    )
+
+    if payload.get("danfe_url"):
+        await store.insert("marketplace_customer_documents", {
+            "company_id": DEFAULT_COMPANY_ID,
+            "fulfillment_order_id": fulfillment_order_id,
+            "document_type": "danfe",
+            "title": "Nota Fiscal",
+            "document_url": payload.get("danfe_url"),
+            "document_key": payload.get("access_key"),
+            "visible_to_customer": True,
+            "marketplace_sync_status": "pending",
+        })
+
+    if payload.get("xml_url"):
+        await store.insert("marketplace_customer_documents", {
+            "company_id": DEFAULT_COMPANY_ID,
+            "fulfillment_order_id": fulfillment_order_id,
+            "document_type": "nfe_xml",
+            "title": "XML da Nota Fiscal",
+            "document_url": payload.get("xml_url"),
+            "document_key": payload.get("access_key"),
+            "visible_to_customer": True,
+            "marketplace_sync_status": "pending",
+        })
+
+    await s45_log_event(
+        fulfillment_order_id,
+        "invoice_received",
+        "supplier",
+        "Nota fiscal recebida e vinculada ao pedido.",
+        payload,
+        "received",
+    )
+
+    return invoice
+
+
+async def s45_register_tracking(fulfillment_order_id, payload):
+    created = await store.insert("fulfillment_trackings", {
+        "company_id": DEFAULT_COMPANY_ID,
+        "fulfillment_order_id": fulfillment_order_id,
+        "supplier_id": payload.get("supplier_id"),
+        "carrier": payload.get("carrier"),
+        "tracking_code": payload.get("tracking_code"),
+        "tracking_url": payload.get("tracking_url"),
+        "shipped_at": payload.get("shipped_at"),
+        "delivered_at": payload.get("delivered_at"),
+        "status": payload.get("status") or "shipped",
+        "events": payload.get("events") or [],
+        "raw_payload": payload,
+    })
+
+    tracking_rows = created.get("data") or []
+    if isinstance(tracking_rows, dict):
+        tracking_rows = [tracking_rows]
+    tracking = tracking_rows[0] if tracking_rows else {}
+
+    await store.update(
+        "fulfillment_orders",
+        "id=eq." + quote(str(fulfillment_order_id), safe="-"),
+        {
+            "shipping_status": payload.get("status") or "shipped",
+            "status": "tracking_received",
+            "last_error": None,
+        },
+    )
+
+    await s45_log_event(
+        fulfillment_order_id,
+        "tracking_received",
+        "supplier",
+        "Código de rastreamento recebido e vinculado ao pedido.",
+        payload,
+        payload.get("status") or "shipped",
+    )
+
+    return tracking
+
+
+async def s45_order_detail(fulfillment_order_id):
+    order_result = await store.select(
+        "fulfillment_orders",
+        "select=*&id=eq."
+        + quote(str(fulfillment_order_id), safe="-")
+        + "&limit=1",
+    )
+    order_rows = order_result.get("data") or []
+    order = order_rows[0] if order_rows else {}
+
+    invoice_result = await store.select(
+        "fulfillment_invoices",
+        "select=*&fulfillment_order_id=eq."
+        + quote(str(fulfillment_order_id), safe="-")
+        + "&order=created_at.desc",
+    )
+
+    tracking_result = await store.select(
+        "fulfillment_trackings",
+        "select=*&fulfillment_order_id=eq."
+        + quote(str(fulfillment_order_id), safe="-")
+        + "&order=created_at.desc",
+    )
+
+    events_result = await store.select(
+        "fulfillment_event_log",
+        "select=*&fulfillment_order_id=eq."
+        + quote(str(fulfillment_order_id), safe="-")
+        + "&order=created_at.asc",
+    )
+
+    documents_result = await store.select(
+        "marketplace_customer_documents",
+        "select=*&fulfillment_order_id=eq."
+        + quote(str(fulfillment_order_id), safe="-")
+        + "&order=created_at.desc",
+    )
+
+    return {
+        "order": order,
+        "invoices": invoice_result.get("data") or [],
+        "trackings": tracking_result.get("data") or [],
+        "events": events_result.get("data") or [],
+        "customer_documents": documents_result.get("data") or [],
+    }
+
+
+@app.post("/api/fulfillment/sync-orders")
+async def fulfillment_sync_orders(limit: int = 100):
+    return await s45_sync_marketplace_orders(limit)
+
+
+@app.post("/api/fulfillment/orders/{fulfillment_order_id}/dispatch")
+async def fulfillment_dispatch(fulfillment_order_id: str):
+    result = await s45_dispatch_to_supplier(fulfillment_order_id)
+    return JSONResponse(
+        status_code=200 if result.get("success") else int(result.get("status_code") or 400),
+        content=result,
+    )
+
+
+@app.post("/api/fulfillment/orders/{fulfillment_order_id}/invoice")
+async def fulfillment_invoice(fulfillment_order_id: str, request: Request):
+    payload = await request.json()
+    invoice = await s45_register_invoice(fulfillment_order_id, payload)
+    return {"success": True, "invoice": invoice}
+
+
+@app.post("/api/fulfillment/orders/{fulfillment_order_id}/tracking")
+async def fulfillment_tracking(fulfillment_order_id: str, request: Request):
+    payload = await request.json()
+    tracking = await s45_register_tracking(fulfillment_order_id, payload)
+    return {"success": True, "tracking": tracking}
+
+
+@app.get("/api/fulfillment/orders/{fulfillment_order_id}")
+async def fulfillment_order_detail_api(fulfillment_order_id: str):
+    detail = await s45_order_detail(fulfillment_order_id)
+    if not detail.get("order"):
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "error": "Pedido não encontrado."},
+        )
+    return {"success": True, "detail": detail}
+
+
+@app.get("/fulfillment-center", response_class=HTMLResponse)
+async def fulfillment_center_page():
+    result = await store.select(
+        "fulfillment_orders",
+        "select=*&order=created_at.desc&limit=100",
+    )
+    orders = result.get("data") or []
+
+    rows = "".join(
+        f"<tr>"
+        f"<td><a href='/fulfillment-center/{row.get('id')}'>{row.get('external_order_id')}</a></td>"
+        f"<td>{row.get('marketplace')}</td>"
+        f"<td>{row.get('supplier_name') or '-'}</td>"
+        f"<td>{row.get('payment_status') or '-'}</td>"
+        f"<td>{row.get('status')}</td>"
+        f"<td>{row.get('fiscal_status')}</td>"
+        f"<td>{row.get('shipping_status')}</td>"
+        f"<td>{row.get('customer_notification_status')}</td>"
+        f"</tr>"
+        for row in orders
+    ) or "<tr><td colspan='8'>Nenhum pedido de fulfillment.</td></tr>"
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Pedidos</span><strong>{len(orders)}</strong></div>
+  <div class='metric'><span>NF recebida</span><strong>{sum(1 for row in orders if row.get('fiscal_status') == 'received')}</strong></div>
+  <div class='metric'><span>Rastreios</span><strong>{sum(1 for row in orders if row.get('shipping_status') not in {'pending', None})}</strong></div>
+  <div class='metric'><span>Fluxo</span><strong>Marketplace → Cliente</strong></div>
+</div>
+
+<div class='card'>
+<h2>Order & Fulfillment Engine</h2>
+<p>Sincroniza pedidos do Order Center, identifica fornecedor e acompanha NF e rastreamento.</p>
+<form method='post' action='/api/fulfillment/sync-orders?limit=100' style='display:inline'>
+<button class='btn' type='submit'>Sincronizar pedidos</button>
+</form>
+</div>
+
+<div class='card'>
+<h2>Pedidos</h2>
+<table>
+<thead>
+<tr>
+<th>Pedido</th><th>Marketplace</th><th>Fornecedor</th><th>Pagamento</th>
+<th>Status</th><th>Fiscal</th><th>Envio</th><th>Cliente</th>
+</tr>
+</thead>
+<tbody>{rows}</tbody>
+</table>
+</div>
+"""
+    return HTMLResponse(shell("Fulfillment Center", content))
+
+
+@app.get("/fulfillment-center/{fulfillment_order_id}", response_class=HTMLResponse)
+async def fulfillment_center_detail_page(fulfillment_order_id: str):
+    detail = await s45_order_detail(fulfillment_order_id)
+    order = detail.get("order") or {}
+
+    if not order:
+        return HTMLResponse(
+            shell("Fulfillment", "<div class='card'><h2>Pedido não encontrado</h2></div>"),
+            status_code=404,
+        )
+
+    invoice_rows = "".join(
+        f"<tr><td>{row.get('invoice_number') or '-'}</td><td>{row.get('access_key') or '-'}</td>"
+        f"<td>{row.get('issued_at') or '-'}</td><td>{row.get('danfe_url') or '-'}</td></tr>"
+        for row in detail.get("invoices") or []
+    ) or "<tr><td colspan='4'>Nenhuma nota fiscal recebida.</td></tr>"
+
+    tracking_rows = "".join(
+        f"<tr><td>{row.get('carrier') or '-'}</td><td>{row.get('tracking_code') or '-'}</td>"
+        f"<td>{row.get('status') or '-'}</td><td>{row.get('tracking_url') or '-'}</td></tr>"
+        for row in detail.get("trackings") or []
+    ) or "<tr><td colspan='4'>Nenhum rastreamento recebido.</td></tr>"
+
+    event_rows = "".join(
+        f"<tr><td>{row.get('created_at') or '-'}</td><td>{row.get('event_type')}</td>"
+        f"<td>{row.get('source')}</td><td>{row.get('message') or '-'}</td></tr>"
+        for row in detail.get("events") or []
+    ) or "<tr><td colspan='4'>Nenhum evento.</td></tr>"
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Pedido</span><strong>{order.get('external_order_id')}</strong></div>
+  <div class='metric'><span>Fornecedor</span><strong>{order.get('supplier_name') or '-'}</strong></div>
+  <div class='metric'><span>Status</span><strong>{order.get('status')}</strong></div>
+  <div class='metric'><span>Cliente</span><strong>{order.get('customer_notification_status')}</strong></div>
+</div>
+
+<div class='card'>
+<form method='post' action='/api/fulfillment/orders/{fulfillment_order_id}/dispatch'>
+<button class='btn' type='submit'>Enviar ao fornecedor</button>
+</form>
+<a class='btn' href='/api/fulfillment/orders/{fulfillment_order_id}'>Ver JSON técnico</a>
+</div>
+
+<div class='card'>
+<h2>Nota fiscal destinada ao cliente</h2>
+<table><thead><tr><th>Número</th><th>Chave</th><th>Emissão</th><th>DANFE</th></tr></thead>
+<tbody>{invoice_rows}</tbody></table>
+</div>
+
+<div class='card'>
+<h2>Rastreamento</h2>
+<table><thead><tr><th>Transportadora</th><th>Código</th><th>Status</th><th>URL</th></tr></thead>
+<tbody>{tracking_rows}</tbody></table>
+</div>
+
+<div class='card'>
+<h2>Linha do tempo</h2>
+<table><thead><tr><th>Data</th><th>Evento</th><th>Origem</th><th>Mensagem</th></tr></thead>
+<tbody>{event_rows}</tbody></table>
+</div>
+"""
+    return HTMLResponse(shell(f"Fulfillment {order.get('external_order_id')}", content))
