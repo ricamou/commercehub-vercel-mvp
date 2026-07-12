@@ -6,6 +6,10 @@ from api.core.config import APP_VERSION, DEFAULT_COMPANY_ID
 from api.db import store
 from api.services.mercadolivre import auth_url, exchange_code, ml_request, get_token
 from api.ui.templates import shell, btn
+import re
+import json
+import traceback
+import time
 
 app = FastAPI(title="CommerceHub Enterprise V5", version=APP_VERSION)
 
@@ -1824,7 +1828,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v6-sprint47-1-data-repair"
+S13_VERSION = "enterprise-v6-sprint47-2-technical-review"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -15429,7 +15433,7 @@ async def s45_order_detail(fulfillment_order_id):
     }
 
 
-@app.post("/api/fulfillment/sync-orders")
+@app.api_route("/api/fulfillment/sync-orders", methods=["GET", "POST"])
 async def fulfillment_sync_orders(limit: int = 100):
     return await s45_sync_marketplace_orders(limit)
 
@@ -16573,7 +16577,7 @@ async def s46_sync_customer_care(limit=50):
     }
 
 
-@app.post("/api/customer-care/sync")
+@app.api_route("/api/customer-care/sync", methods=["GET", "POST"])
 async def customer_care_sync(limit: int = 50):
     result = await s40_sync_recent_orders(limit)
     if not result.get("success"):
@@ -17131,18 +17135,30 @@ async def s47_complete_core(limit=100):
     results = []
 
     for summary in orders:
-        order_row = await s40_find_order_by_external_id(summary.get("external_order_id"))
-        if not order_row:
-            continue
+        external_order_id = summary.get("external_order_id")
+        try:
+            order_row = await s40_find_order_by_external_id(external_order_id)
+            if not order_row:
+                results.append({
+                    "external_order_id": external_order_id,
+                    "error": "Pedido não encontrado no banco.",
+                })
+                continue
 
-        routing = await s47_resolve_order_supplier(order_row)
-        state = await s47_apply_unified_state(order_row)
+            routing = await s47_resolve_order_supplier(order_row)
+            state = await s47_apply_unified_state(order_row)
 
-        results.append({
-            "external_order_id": order_row.get("external_order_id"),
-            "routing": routing,
-            "state": state,
-        })
+            results.append({
+                "external_order_id": order_row.get("external_order_id"),
+                "routing": routing,
+                "state": state,
+            })
+        except Exception as exc:
+            results.append({
+                "external_order_id": external_order_id,
+                "error": exc.__class__.__name__,
+                "message": str(exc),
+            })
 
     return {
         "success": True,
@@ -17154,7 +17170,7 @@ async def s47_complete_core(limit=100):
     }
 
 
-@app.post("/api/core-completion/run")
+@app.api_route("/api/core-completion/run", methods=["GET", "POST"])
 async def core_completion_run(limit: int = 100):
     sync = await s40_sync_recent_orders(limit)
     if not sync.get("success"):
@@ -17692,7 +17708,7 @@ async def data_repair_order(external_order_id: str):
     )
 
 
-@app.post("/api/data-repair/run")
+@app.api_route("/api/data-repair/run", methods=["GET", "POST"])
 async def data_repair_run(limit: int = 100):
     sync = await s40_sync_recent_orders(limit)
     if not sync.get("success"):
@@ -17705,9 +17721,16 @@ async def data_repair_run(limit: int = 100):
     results = []
 
     for summary in orders:
-        results.append(
-            await s471_repair_order(str(summary.get("external_order_id")))
-        )
+        external_order_id = str(summary.get("external_order_id"))
+        try:
+            results.append(await s471_repair_order(external_order_id))
+        except Exception as exc:
+            results.append({
+                "success": False,
+                "external_order_id": external_order_id,
+                "error": exc.__class__.__name__,
+                "message": str(exc),
+            })
 
     return {
         "success": True,
@@ -17769,3 +17792,94 @@ async def data_repair_page():
 </div>
 """
     return HTMLResponse(shell("Data Repair", content))
+
+# ==========================================================
+# SPRINT 47.2 - TECHNICAL REVIEW
+# ==========================================================
+
+@app.exception_handler(NameError)
+async def s472_name_error_handler(request: Request, exc: NameError):
+    return JSONResponse(
+        status_code=500,
+        content={
+            "success": False,
+            "module": "runtime",
+            "error": "NameError",
+            "message": str(exc),
+            "path": request.url.path,
+            "hint": "Verifique imports e nomes utilizados pelo módulo.",
+        },
+    )
+
+
+@app.exception_handler(Exception)
+async def s472_global_error_handler(request: Request, exc: Exception):
+    trace = traceback.format_exc()
+    print(trace)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "success": False,
+            "module": "commercehub",
+            "error": exc.__class__.__name__,
+            "message": str(exc),
+            "path": request.url.path,
+            "trace_tail": trace[-3500:],
+        },
+    )
+
+
+async def s472_check_table(table_name):
+    try:
+        result = await store.select(table_name, "select=*&limit=1")
+        return {
+            "table": table_name,
+            "ok": bool(result.get("success")),
+            "error": result.get("error") or result.get("raw"),
+        }
+    except Exception as exc:
+        return {"table": table_name, "ok": False, "error": str(exc)}
+
+
+@app.get("/api/health/full")
+async def s472_full_health():
+    started = time.time()
+    tables = [
+        "companies",
+        "suppliers",
+        "products",
+        "inventory",
+        "listings",
+        "marketplace_orders",
+        "marketplace_order_items",
+        "fulfillment_orders",
+        "marketplace_claims",
+        "order_cancellations",
+        "refund_events",
+        "supplier_product_mappings",
+        "order_routing_attempts",
+        "order_state_history",
+    ]
+
+    checks = []
+    for table in tables:
+        checks.append(await s472_check_table(table))
+
+    try:
+        ml_result = await ml_request("/users/me")
+        mercado_livre = {
+            "connected": bool(ml_result.get("success")),
+            "status_code": ml_result.get("status_code"),
+            "error": ml_result.get("error"),
+        }
+    except Exception as exc:
+        mercado_livre = {"connected": False, "error": str(exc)}
+
+    return {
+        "success": all(row.get("ok") for row in checks),
+        "version": APP_VERSION,
+        "supabase_configured": bool(getattr(store, "configured", False)),
+        "tables": checks,
+        "mercado_livre": mercado_livre,
+        "duration_ms": round((time.time() - started) * 1000, 2),
+    }
