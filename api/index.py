@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v6-sprint45-2-controlled-publication"
+S13_VERSION = "enterprise-v6-sprint45-3-stock-sync-fix"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -15892,11 +15892,20 @@ async def s452_publish_cheapest_listing():
 
     result = await s38_publish_one(listing_id)
 
+    stock_sync = None
+    if result.get("status") == "published":
+        stock_sync = await s453_sync_listing_stock(
+            listing_id,
+            S453_CONTROLLED_STOCK_QUANTITY,
+            "post_controlled_publication",
+        )
+
     return {
-        "success": result.get("status") == "published",
+        "success": result.get("status") == "published" and bool((stock_sync or {}).get("success", True)),
         "version": APP_VERSION,
         "preparation": preparation,
         "publication": result,
+        "stock_sync": stock_sync,
         "message": (
             "Produto real mais barato publicado com sucesso."
             if result.get("status") == "published"
@@ -15966,6 +15975,11 @@ async def controlled_publication_page():
 <button class='btn' type='submit'>2. Publicar no Mercado Livre</button>
 </form>
 
+<form method='post' action='/api/controlled-publication/fix-stock' style='display:inline'>
+<button class='btn' type='submit'>3. Corrigir estoque para 1 unidade</button>
+</form>
+
+<a class='btn' href='/api/controlled-publication/verify-stock'>Verificar estoque</a>
 <a class='btn' href='/supplier-hub/hayamax'>Voltar para Hayamax</a>
 </div>
 
@@ -15975,3 +15989,237 @@ async def controlled_publication_page():
 </div>
 """
     return HTMLResponse(shell("Publicação Controlada", content))
+
+
+# ==========================================================
+# SPRINT 45.3 - STOCK SYNC FIX
+# Corrige a divergência entre estoque interno e Mercado Livre.
+# Em publicação controlada, o anúncio fica com 1 unidade.
+# ==========================================================
+
+S453_CONTROLLED_STOCK_QUANTITY = 1
+
+
+async def s453_listing_by_external_id(external_item_id):
+    result = await store.select(
+        "listings",
+        "select=*&external_id=eq."
+        + quote(str(external_item_id), safe="-_")
+        + "&limit=1",
+    )
+    rows = result.get("data") or []
+    return rows[0] if rows else {}
+
+
+async def s453_listing_by_id(listing_id):
+    result = await store.select(
+        "listings",
+        "select=*&id=eq."
+        + quote(str(listing_id), safe="-")
+        + "&limit=1",
+    )
+    rows = result.get("data") or []
+    return rows[0] if rows else {}
+
+
+def s453_normalize_payload_stock(payload, quantity):
+    clean = dict(payload or {})
+    clean["available_quantity"] = int(quantity)
+    return clean
+
+
+async def s453_sync_listing_stock(
+    listing_id,
+    target_quantity=S453_CONTROLLED_STOCK_QUANTITY,
+    reason="controlled_publication",
+):
+    listing = await s453_listing_by_id(listing_id)
+    if not listing:
+        return {
+            "success": False,
+            "status_code": 404,
+            "error": "Listing não encontrado.",
+        }
+
+    target_quantity = max(0, int(target_quantity or 0))
+    external_id = listing.get("external_id")
+    payload = s453_normalize_payload_stock(
+        listing.get("payload") or {},
+        target_quantity,
+    )
+
+    marketplace_result = None
+
+    if external_id:
+        marketplace_result = await ml_request(
+            f"/items/{quote(str(external_id), safe='-_')}",
+            method="PUT",
+            payload={"available_quantity": target_quantity},
+        )
+
+        if not marketplace_result.get("success"):
+            return {
+                "success": False,
+                "status_code": marketplace_result.get("status_code") or 400,
+                "error": marketplace_result.get("error") or "Falha ao atualizar estoque no Mercado Livre.",
+                "marketplace_result": marketplace_result,
+            }
+
+    await store.update(
+        "listings",
+        "id=eq." + quote(str(listing_id), safe="-"),
+        {
+            "available_quantity": target_quantity,
+            "payload": payload,
+            "last_synced_at": s45_now(),
+            "last_error": None,
+        },
+    )
+
+    product_id = listing.get("product_id")
+    if product_id:
+        inventory_result = await store.select(
+            "inventory",
+            "select=*&product_id=eq."
+            + quote(str(product_id), safe="-")
+            + "&limit=1",
+        )
+        inventory_rows = inventory_result.get("data") or []
+        inventory = inventory_rows[0] if inventory_rows else {}
+
+        if inventory:
+            current_quantity = int(inventory.get("quantity") or 0)
+            current_reserved = int(inventory.get("reserved") or 0)
+            controlled_reserved = max(current_reserved, 1 if target_quantity > 0 else current_reserved)
+
+            await store.update(
+                "inventory",
+                "id=eq." + quote(str(inventory.get("id")), safe="-"),
+                {
+                    "reserved": controlled_reserved,
+                    "available": max(0, current_quantity - controlled_reserved),
+                    "status": "reserved" if controlled_reserved > 0 else "available",
+                },
+            )
+
+    await store.insert(
+        "logs",
+        {
+            "company_id": DEFAULT_COMPANY_ID,
+            "level": "info",
+            "source": "stock_sync",
+            "message": "Estoque sincronizado com o Mercado Livre.",
+            "context": {
+                "listing_id": listing_id,
+                "external_item_id": external_id,
+                "target_quantity": target_quantity,
+                "reason": reason,
+            },
+        },
+    )
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "listing_id": listing_id,
+        "external_item_id": external_id,
+        "target_quantity": target_quantity,
+        "internal_payload": payload,
+        "marketplace_updated": bool(external_id),
+        "marketplace_result": marketplace_result,
+    }
+
+
+async def s453_verify_stock(listing_id):
+    listing = await s453_listing_by_id(listing_id)
+    if not listing:
+        return {
+            "success": False,
+            "status_code": 404,
+            "error": "Listing não encontrado.",
+        }
+
+    internal_quantity = int(listing.get("available_quantity") or 0)
+    payload_quantity = int((listing.get("payload") or {}).get("available_quantity") or 0)
+    external_id = listing.get("external_id")
+    marketplace_quantity = None
+    marketplace_item = None
+
+    if external_id:
+        item_result = await ml_request(
+            f"/items/{quote(str(external_id), safe='-_')}"
+        )
+        if item_result.get("success"):
+            marketplace_item = item_result.get("data") or {}
+            marketplace_quantity = int(marketplace_item.get("available_quantity") or 0)
+
+    consistent = (
+        internal_quantity == payload_quantity
+        and (
+            marketplace_quantity is None
+            or marketplace_quantity == internal_quantity
+        )
+    )
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "listing_id": listing_id,
+        "external_item_id": external_id,
+        "internal_quantity": internal_quantity,
+        "payload_quantity": payload_quantity,
+        "marketplace_quantity": marketplace_quantity,
+        "consistent": consistent,
+        "marketplace_item": marketplace_item,
+    }
+
+
+@app.post("/api/controlled-publication/fix-stock")
+async def controlled_publication_fix_stock():
+    candidate = await s452_cheapest_candidate()
+    if not candidate:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "error": "Nenhum candidato controlado encontrado."},
+        )
+
+    listing = await s19_get_listing_by_product(candidate.get("product_id")) or {}
+    if not listing:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "error": "Listing controlado não encontrado."},
+        )
+
+    result = await s453_sync_listing_stock(
+        listing.get("id"),
+        S453_CONTROLLED_STOCK_QUANTITY,
+        "manual_controlled_stock_fix",
+    )
+
+    return JSONResponse(
+        status_code=200 if result.get("success") else int(result.get("status_code") or 400),
+        content=result,
+    )
+
+
+@app.get("/api/controlled-publication/verify-stock")
+async def controlled_publication_verify_stock():
+    candidate = await s452_cheapest_candidate()
+    if not candidate:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "error": "Nenhum candidato controlado encontrado."},
+        )
+
+    listing = await s19_get_listing_by_product(candidate.get("product_id")) or {}
+    if not listing:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "error": "Listing controlado não encontrado."},
+        )
+
+    result = await s453_verify_stock(listing.get("id"))
+    return JSONResponse(
+        status_code=200 if result.get("success") else int(result.get("status_code") or 400),
+        content=result,
+    )
