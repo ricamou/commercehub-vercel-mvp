@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v6-sprint45-3-stock-sync-fix"
+S13_VERSION = "enterprise-v6-sprint46-customer-care-engine"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -13297,7 +13297,12 @@ def s40_order_stage(order_row, jobs):
     order_status = str(order_row.get("status") or "").lower()
     job_statuses = {str(job.get("status") or "").lower() for job in jobs}
 
-    if order_status in {"cancelled", "canceled"}:
+    if order_status in {
+        "cancelled",
+        "canceled",
+        "cancellation_requested",
+        "cancelled_refunded",
+    }:
         return "cancelado"
     if payment not in {"approved", "paid"}:
         return "aguardando_pagamento"
@@ -15175,6 +15180,20 @@ async def s45_dispatch_to_supplier(fulfillment_order_id):
             "error": "Pedido de fulfillment não encontrado.",
         }
 
+    if s46_lower(order.get("status")) in {
+        "cancellation_requested",
+        "cancelled",
+        "canceled",
+        "cancelled_refunded",
+    } or s46_lower(order.get("routing_status")) == "blocked":
+        return {
+            "success": False,
+            "status_code": 409,
+            "error": "Envio bloqueado: o pedido possui cancelamento ou reclamação ativa.",
+            "status": order.get("status"),
+            "routing_status": order.get("routing_status"),
+        }
+
     supplier_name = str(order.get("supplier_name") or "").lower()
 
     connector_result = await store.select(
@@ -16223,3 +16242,515 @@ async def controlled_publication_verify_stock():
         status_code=200 if result.get("success") else int(result.get("status_code") or 400),
         content=result,
     )
+
+
+# ==========================================================
+# SPRINT 46 - CUSTOMER CARE ENGINE
+# Reclamações, cancelamentos, reembolsos e bloqueio seguro
+# do envio ao fornecedor.
+# ==========================================================
+
+def s46_lower(value):
+    return str(value or "").strip().lower()
+
+
+async def s46_log(order_row, event_type, message, payload=None, status=None):
+    try:
+        fulfillment = await s45_find_fulfillment_order(order_row.get("external_order_id"))
+        await store.insert("customer_care_events", {
+            "company_id": DEFAULT_COMPANY_ID,
+            "marketplace_order_id": order_row.get("id"),
+            "fulfillment_order_id": fulfillment.get("id"),
+            "external_order_id": order_row.get("external_order_id"),
+            "event_type": event_type,
+            "source": "mercado_livre",
+            "status": status,
+            "message": message,
+            "payload": payload or {},
+        })
+    except Exception:
+        pass
+
+
+async def s46_fulfillment_for_order(order_row):
+    return await s45_find_fulfillment_order(order_row.get("external_order_id"))
+
+
+def s46_is_cancel_signal(order_row):
+    order_status = s46_lower(order_row.get("status"))
+    payment_status = s46_lower(order_row.get("payment_status"))
+    data = order_row.get("order_data") or {}
+    tags = {s46_lower(item) for item in (data.get("tags") or [])}
+    status_detail = s46_lower(data.get("status_detail"))
+    feedback = s46_lower(data.get("feedback"))
+
+    explicit = order_status in {"cancelled", "canceled"}
+    payment_reversed = payment_status in {
+        "refunded", "cancelled", "canceled", "charged_back", "rejected"
+    }
+    claim_like = any(
+        token in tags
+        for token in {
+            "claim_opened",
+            "cancellation_requested",
+            "buyer_cancelled",
+            "buyer_canceled",
+        }
+    )
+    textual = any(
+        token in f"{status_detail} {feedback}"
+        for token in {
+            "cancel", "reembolso", "refund", "arrepend",
+        }
+    )
+    return explicit or payment_reversed or claim_like or textual
+
+
+def s46_claim_reason(order_row):
+    data = order_row.get("order_data") or {}
+    parts = [
+        data.get("status_detail"),
+        data.get("feedback"),
+        data.get("reason"),
+    ]
+    text = " | ".join(str(p) for p in parts if p)
+    return text or "Cancelamento ou reclamação detectada no marketplace."
+
+
+async def s46_upsert_claim(order_row, claim_type="cancellation_request"):
+    fulfillment = await s46_fulfillment_for_order(order_row)
+    external_order_id = str(order_row.get("external_order_id"))
+
+    existing = await store.select(
+        "marketplace_claims",
+        "select=*&company_id=eq."
+        + quote(str(DEFAULT_COMPANY_ID), safe="-")
+        + "&external_order_id=eq."
+        + quote(external_order_id, safe="-_")
+        + "&claim_type=eq."
+        + quote(claim_type, safe="-_")
+        + "&status=in.(open,pending,action_required)"
+        + "&limit=1",
+    )
+    rows = existing.get("data") or []
+
+    payload = {
+        "company_id": DEFAULT_COMPANY_ID,
+        "marketplace_order_id": order_row.get("id"),
+        "fulfillment_order_id": fulfillment.get("id"),
+        "marketplace": order_row.get("marketplace") or "mercado_livre",
+        "external_order_id": external_order_id,
+        "claim_type": claim_type,
+        "reason": s46_claim_reason(order_row),
+        "status": "action_required",
+        "stage": "pre_dispatch" if s46_lower(fulfillment.get("shipping_status")) in {"", "pending"} else "post_dispatch",
+        "seller_action_required": True,
+        "supplier_action_required": False,
+        "refund_required": True,
+        "marketplace_data": order_row.get("order_data") or {},
+    }
+
+    if rows:
+        await store.update(
+            "marketplace_claims",
+            "id=eq." + quote(str(rows[0].get("id")), safe="-"),
+            payload,
+        )
+        return rows[0].get("id")
+
+    created = await store.insert("marketplace_claims", payload)
+    created_rows = created.get("data") or []
+    if isinstance(created_rows, dict):
+        created_rows = [created_rows]
+    return (created_rows[0] if created_rows else {}).get("id")
+
+
+async def s46_create_cancellation(order_row):
+    fulfillment = await s46_fulfillment_for_order(order_row)
+    external_order_id = str(order_row.get("external_order_id"))
+
+    existing = await store.select(
+        "order_cancellations",
+        "select=*&company_id=eq."
+        + quote(str(DEFAULT_COMPANY_ID), safe="-")
+        + "&external_order_id=eq."
+        + quote(external_order_id, safe="-_")
+        + "&result=in.(pending,processing)"
+        + "&limit=1",
+    )
+    rows = existing.get("data") or []
+    if rows:
+        return rows[0]
+
+    created = await store.insert("order_cancellations", {
+        "company_id": DEFAULT_COMPANY_ID,
+        "marketplace_order_id": order_row.get("id"),
+        "fulfillment_order_id": fulfillment.get("id"),
+        "external_order_id": external_order_id,
+        "source": "marketplace",
+        "reason": s46_claim_reason(order_row),
+        "order_stage": "pre_dispatch" if s46_lower(fulfillment.get("shipping_status")) in {"", "pending"} else "post_dispatch",
+        "action_taken": "blocked_supplier_dispatch",
+        "result": "processing",
+        "refund_status": "pending",
+        "supplier_notified": False,
+        "supplier_cancel_status": "not_required",
+        "raw_payload": order_row.get("order_data") or {},
+    })
+    created_rows = created.get("data") or []
+    if isinstance(created_rows, dict):
+        created_rows = [created_rows]
+    return created_rows[0] if created_rows else {}
+
+
+async def s46_block_order(order_row):
+    fulfillment = await s46_fulfillment_for_order(order_row)
+
+    await store.update(
+        "marketplace_orders",
+        "id=eq." + quote(str(order_row.get("id")), safe="-"),
+        {
+            "status": "cancellation_requested",
+        },
+    )
+
+    jobs = await s40_order_jobs(order_row.get("id"))
+    for job in jobs:
+        if s46_lower(job.get("status")) not in {"shipped", "delivered", "cancelled"}:
+            await store.update(
+                "supplier_order_jobs",
+                "id=eq." + quote(str(job.get("id")), safe="-"),
+                {
+                    "status": "blocked_by_cancellation",
+                    "last_error": "Pedido bloqueado por solicitação de cancelamento/reembolso.",
+                },
+            )
+
+    if fulfillment:
+        await store.update(
+            "fulfillment_orders",
+            "id=eq." + quote(str(fulfillment.get("id")), safe="-"),
+            {
+                "status": "cancellation_requested",
+                "routing_status": "blocked",
+                "shipping_status": "cancelled_before_dispatch",
+                "customer_notification_status": "marketplace_handling",
+                "last_error": "Fluxo interrompido por solicitação de cancelamento.",
+            },
+        )
+
+    await s46_upsert_claim(order_row)
+    await s46_create_cancellation(order_row)
+    await s46_log(
+        order_row,
+        "cancellation_detected",
+        "Cancelamento/reclamação detectado. Envio ao fornecedor bloqueado.",
+        order_row.get("order_data") or {},
+        "blocked",
+    )
+
+
+async def s46_resolve_supplier_for_item(item_row):
+    external_item_id = item_row.get("external_item_id")
+    product_id = item_row.get("product_id")
+    listing = {}
+
+    if external_item_id:
+        listing = await s39_find_listing(external_item_id)
+        if listing:
+            product_id = listing.get("product_id") or product_id
+
+    if not product_id:
+        return {}
+
+    mapping_result = await store.select(
+        "supplier_product_mappings",
+        "select=*&product_id=eq."
+        + quote(str(product_id), safe="-")
+        + "&active=eq.true"
+        + "&order=is_primary.desc,priority.asc"
+        + "&limit=1",
+    )
+    mappings = mapping_result.get("data") or []
+    mapping = mappings[0] if mappings else {}
+
+    supplier_id = mapping.get("supplier_id")
+    if not supplier_id:
+        product = await s44_product_by_id(product_id)
+        supplier_id = product.get("supplier_id")
+
+    supplier = {}
+    if supplier_id:
+        supplier_result = await store.select(
+            "suppliers",
+            "select=*&id=eq."
+            + quote(str(supplier_id), safe="-")
+            + "&limit=1",
+        )
+        supplier_rows = supplier_result.get("data") or []
+        supplier = supplier_rows[0] if supplier_rows else {}
+
+    return {
+        "listing_id": listing.get("id"),
+        "product_id": product_id,
+        "supplier_id": supplier_id,
+        "supplier_name": supplier.get("name") or mapping.get("supplier_name"),
+        "supplier_sku": mapping.get("supplier_sku") or item_row.get("supplier_sku"),
+    }
+
+
+async def s46_repair_supplier_routing(order_row):
+    items = await s40_order_items(order_row.get("id"))
+    suppliers = []
+
+    for item in items:
+        resolved = await s46_resolve_supplier_for_item(item)
+        if not resolved.get("supplier_name"):
+            continue
+
+        await store.update(
+            "marketplace_order_items",
+            "id=eq." + quote(str(item.get("id")), safe="-"),
+            {
+                "listing_id": resolved.get("listing_id"),
+                "product_id": resolved.get("product_id"),
+                "supplier": resolved.get("supplier_name"),
+                "supplier_sku": resolved.get("supplier_sku"),
+            },
+        )
+        suppliers.append(resolved)
+
+    fulfillment = await s46_fulfillment_for_order(order_row)
+
+    if suppliers and fulfillment:
+        first = suppliers[0]
+        await store.update(
+            "fulfillment_orders",
+            "id=eq." + quote(str(fulfillment.get("id")), safe="-"),
+            {
+                "supplier_id": first.get("supplier_id"),
+                "supplier_name": first.get("supplier_name"),
+                "routing_status": "resolved",
+                "last_error": None,
+            },
+        )
+
+    return suppliers
+
+
+async def s46_process_order(order_row):
+    suppliers = await s46_repair_supplier_routing(order_row)
+
+    if s46_is_cancel_signal(order_row):
+        await s46_block_order(order_row)
+        return {
+            "external_order_id": order_row.get("external_order_id"),
+            "status": "cancellation_detected",
+            "suppliers": suppliers,
+        }
+
+    return {
+        "external_order_id": order_row.get("external_order_id"),
+        "status": "active",
+        "suppliers": suppliers,
+    }
+
+
+async def s46_sync_customer_care(limit=50):
+    orders = await s40_recent_orders(limit)
+    results = []
+
+    for summary in orders:
+        order_row = await s40_find_order_by_external_id(summary.get("external_order_id"))
+        if order_row:
+            results.append(await s46_process_order(order_row))
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "processed": len(results),
+        "results": results,
+    }
+
+
+@app.post("/api/customer-care/sync")
+async def customer_care_sync(limit: int = 50):
+    result = await s40_sync_recent_orders(limit)
+    if not result.get("success"):
+        return JSONResponse(
+            status_code=int(result.get("status_code") or 400),
+            content=result,
+        )
+    care = await s46_sync_customer_care(limit)
+    return {
+        "success": True,
+        "order_sync": result,
+        "customer_care": care,
+    }
+
+
+@app.post("/api/customer-care/orders/{external_order_id}/block")
+async def customer_care_block_order(external_order_id: str):
+    order_row = await s40_find_order_by_external_id(external_order_id)
+    if not order_row:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "error": "Pedido não encontrado."},
+        )
+    await s46_block_order(order_row)
+    return {
+        "success": True,
+        "external_order_id": external_order_id,
+        "status": "cancellation_requested",
+        "supplier_dispatch_blocked": True,
+    }
+
+
+@app.post("/api/customer-care/orders/{external_order_id}/mark-refunded")
+async def customer_care_mark_refunded(external_order_id: str, request: Request):
+    payload = await request.json()
+    order_row = await s40_find_order_by_external_id(external_order_id)
+    if not order_row:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "error": "Pedido não encontrado."},
+        )
+
+    fulfillment = await s46_fulfillment_for_order(order_row)
+    amount = payload.get("amount") or order_row.get("total_amount")
+
+    await store.insert("refund_events", {
+        "company_id": DEFAULT_COMPANY_ID,
+        "marketplace_order_id": order_row.get("id"),
+        "fulfillment_order_id": fulfillment.get("id"),
+        "external_order_id": external_order_id,
+        "external_refund_id": payload.get("external_refund_id"),
+        "amount": amount,
+        "currency_id": order_row.get("currency_id") or "BRL",
+        "status": "completed",
+        "reason": payload.get("reason") or "Reembolso confirmado no marketplace.",
+        "marketplace_data": payload,
+        "completed_at": s45_now(),
+    })
+
+    await store.update(
+        "order_cancellations",
+        "external_order_id=eq." + quote(str(external_order_id), safe="-_"),
+        {
+            "result": "completed",
+            "refund_status": "completed",
+        },
+    )
+
+    await store.update(
+        "marketplace_claims",
+        "external_order_id=eq." + quote(str(external_order_id), safe="-_"),
+        {
+            "status": "closed",
+            "closed_at": s45_now(),
+            "seller_action_required": False,
+        },
+    )
+
+    if fulfillment:
+        await store.update(
+            "fulfillment_orders",
+            "id=eq." + quote(str(fulfillment.get("id")), safe="-"),
+            {
+                "status": "cancelled_refunded",
+                "shipping_status": "cancelled_before_dispatch",
+                "customer_notification_status": "completed_by_marketplace",
+                "completed_at": s45_now(),
+            },
+        )
+
+    return {
+        "success": True,
+        "external_order_id": external_order_id,
+        "refund_status": "completed",
+    }
+
+
+@app.get("/api/customer-care")
+async def customer_care_api(limit: int = 100):
+    claims = await store.select(
+        "marketplace_claims",
+        "select=*&order=created_at.desc&limit=" + str(max(1, min(limit, 200))),
+    )
+    cancellations = await store.select(
+        "order_cancellations",
+        "select=*&order=created_at.desc&limit=" + str(max(1, min(limit, 200))),
+    )
+    refunds = await store.select(
+        "refund_events",
+        "select=*&order=created_at.desc&limit=" + str(max(1, min(limit, 200))),
+    )
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "claims": claims.get("data") or [],
+        "cancellations": cancellations.get("data") or [],
+        "refunds": refunds.get("data") or [],
+    }
+
+
+@app.get("/customer-care", response_class=HTMLResponse)
+async def customer_care_page():
+    claims_result = await store.select(
+        "marketplace_claims",
+        "select=*&order=created_at.desc&limit=100",
+    )
+    cancellations_result = await store.select(
+        "order_cancellations",
+        "select=*&order=created_at.desc&limit=100",
+    )
+    refunds_result = await store.select(
+        "refund_events",
+        "select=*&order=created_at.desc&limit=100",
+    )
+
+    claims = claims_result.get("data") or []
+    cancellations = cancellations_result.get("data") or []
+    refunds = refunds_result.get("data") or []
+
+    rows = "".join(
+        f"<tr>"
+        f"<td>{row.get('external_order_id')}</td>"
+        f"<td>{row.get('claim_type')}</td>"
+        f"<td>{row.get('reason') or '-'}</td>"
+        f"<td>{row.get('status')}</td>"
+        f"<td>{row.get('stage')}</td>"
+        f"<td>{row.get('refund_required')}</td>"
+        f"</tr>"
+        for row in claims
+    ) or "<tr><td colspan='6'>Nenhuma reclamação/cancelamento registrado.</td></tr>"
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Reclamações abertas</span><strong>{sum(1 for r in claims if r.get('status') != 'closed')}</strong></div>
+  <div class='metric'><span>Cancelamentos</span><strong>{len(cancellations)}</strong></div>
+  <div class='metric'><span>Reembolsos</span><strong>{len(refunds)}</strong></div>
+  <div class='metric'><span>Proteção</span><strong>Fornecedor bloqueado</strong></div>
+</div>
+
+<div class='card'>
+<h2>Customer Care Engine</h2>
+<p>Sincroniza pedidos, detecta sinais de cancelamento e impede o envio ao fornecedor antes do despacho.</p>
+<form method='post' action='/api/customer-care/sync?limit=50' style='display:inline'>
+<button class='btn' type='submit'>Sincronizar pós-venda</button>
+</form>
+<a class='btn' href='/api/customer-care'>Ver JSON técnico</a>
+</div>
+
+<div class='card'>
+<h2>Reclamações e cancelamentos</h2>
+<table>
+<thead>
+<tr><th>Pedido</th><th>Tipo</th><th>Motivo</th><th>Status</th><th>Etapa</th><th>Reembolso</th></tr>
+</thead>
+<tbody>{rows}</tbody>
+</table>
+</div>
+"""
+    return HTMLResponse(shell("Customer Care", content))
