@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Request, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
-import json, uuid, hashlib, hmac, base64, time, csv, io, os, mimetypes, xml.etree.ElementTree as ET
+import json, uuid, hashlib, hmac, base64, time, csv, io, os, mimetypes, re, unicodedata, traceback, xml.etree.ElementTree as ET
 from urllib.parse import quote, urlparse
 from api.core.config import APP_VERSION, DEFAULT_COMPANY_ID
 from api.db import store
@@ -8,6 +8,23 @@ from api.services.mercadolivre import auth_url, exchange_code, ml_request, get_t
 from api.ui.templates import shell, btn
 
 app = FastAPI(title="CommerceHub Enterprise V5", version=APP_VERSION)
+
+async def safe_route(callable_obj, path: str = ""):
+    """Execute an async route body and return structured JSON instead of a blind 500."""
+    try:
+        return await callable_obj()
+    except Exception as exc:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "success": False,
+                "path": path,
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+                "traceback": traceback.format_exc(limit=8),
+            },
+        )
+
 
 def state():
     return {"version": APP_VERSION, "mode": store.mode(), "supabase_configured": store.configured()}
@@ -1539,12 +1556,13 @@ async def sell_readiness():
         res = await store.select(table, "select=*&limit=1")
         checks[table] = res.get("success") and res.get("rows",0) >= 1
 
+    from api.core.config import ML_CLIENT_ID, ML_CLIENT_SECRET, ML_REDIRECT_URI
     ml = {
         "has_client_id": bool(ML_CLIENT_ID),
         "has_client_secret": bool(ML_CLIENT_SECRET),
         "has_redirect_uri": bool(ML_REDIRECT_URI),
-        "has_access_token": bool(ML_ACCESS_TOKEN),
-        "has_refresh_token": bool(ML_REFRESH_TOKEN),
+        "has_access_token": bool(os.getenv("ML_ACCESS_TOKEN", "").strip()),
+        "has_refresh_token": bool(os.getenv("ML_REFRESH_TOKEN", "").strip()),
     }
 
     ready_base = all(checks.values())
@@ -8619,11 +8637,16 @@ async def discovery_center_run(request: Request):
         await request.form()
         products_result = await store.select(
             "products",
-            "select=id,sku,name&company_id=eq."
+            "select=id,sku,name,sync_status,internal_status&company_id=eq."
             + quote(DEFAULT_COMPANY_ID, safe="-")
-            + "&order=updated_at.asc&limit=1",
+            + "&order=updated_at.asc&limit=100",
         )
-        rows = products_result.get("data") or []
+        all_rows = products_result.get("data") or []
+        # Evita processar eternamente o mesmo item já publicado/pronto.
+        rows = [
+            row for row in all_rows
+            if str(row.get("sync_status") or "").lower() not in {"published", "ready_to_publish"}
+        ]
         if not rows:
             return RedirectResponse(
                 "/discovery-center?status=empty&message=Nenhum+produto+encontrado",
@@ -8649,10 +8672,13 @@ async def discovery_center_run(request: Request):
         try:
             await store.insert("logs", {
                 "company_id": DEFAULT_COMPANY_ID,
+                "event_type": "discovery_center_run_error",
                 "level": "error",
-                "source": "discovery_center_run",
                 "message": str(exc),
-                "payload": {"route": "/discovery-center/run"},
+                "payload": {
+                    "route": "/discovery-center/run",
+                    "exception_type": type(exc).__name__,
+                },
             })
         except Exception:
             pass
@@ -8777,7 +8803,11 @@ async def s29_process_product(product_id):
             {"error": enrichment.get("error"), "details": enrichment}
         )
 
-    correction = await s27_auto_correct_listing(listing_id)
+    # O Discovery Auto Apply já executa o Auto Correction quando conclui com sucesso.
+    # Reutiliza esse resultado para evitar chamadas duplicadas ao ML e ao Publishing Lab.
+    correction = enrichment.get("correction") if enrichment.get("success") else None
+    if not correction:
+        correction = await s27_auto_correct_listing(listing_id)
     if not correction.get("success"):
         await s29_set_stage(product_id, "blocked", {"error": correction.get("error"), "enrichment": enrichment})
         return {"success": False, "product_id": product_id, "listing_id": listing_id, "stage": "blocked", "error": correction.get("error"), "enrichment": enrichment}
