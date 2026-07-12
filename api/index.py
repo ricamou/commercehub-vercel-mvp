@@ -1828,7 +1828,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v6-sprint47-3-database-finalization"
+S13_VERSION = "enterprise-v6-sprint47-4-closing-engine"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -18051,3 +18051,389 @@ async def s473_page():
 </div>
 """
     return HTMLResponse(shell("Database Finalization", content))
+
+
+# ==========================================================
+# SPRINT 47.4 - CLOSING ENGINE
+# Consolida cancelamento, reembolso, reclamação e encerramento.
+# ==========================================================
+
+def s474_payment_rows(order_row):
+    data = order_row.get("order_data") or {}
+    return data.get("payments") or []
+
+
+def s474_refunded_payment(order_row):
+    for payment in s474_payment_rows(order_row):
+        status = s46_lower(payment.get("status"))
+        detail = s46_lower(payment.get("status_detail"))
+        refunded_amount = float(payment.get("transaction_amount_refunded") or 0)
+        if status == "refunded" or detail == "refunded" or refunded_amount > 0:
+            return payment
+    return {}
+
+
+def s474_claim_id(order_row):
+    data = order_row.get("order_data") or {}
+    mediations = data.get("mediations") or []
+    if mediations and isinstance(mediations[0], dict):
+        return str(mediations[0].get("id") or "") or None
+    return None
+
+
+def s474_is_refunded(order_row):
+    return (
+        s46_lower(order_row.get("payment_status")) == "refunded"
+        or bool(s474_refunded_payment(order_row))
+    )
+
+
+def s474_is_cancelled(order_row):
+    return s46_lower(order_row.get("status")) in {"cancelled", "canceled"}
+
+
+async def s474_existing_refund(external_order_id, external_refund_id=None):
+    query = (
+        "select=*&external_order_id=eq."
+        + quote(str(external_order_id), safe="-_")
+    )
+    if external_refund_id:
+        query += (
+            "&external_refund_id=eq."
+            + quote(str(external_refund_id), safe="-_")
+        )
+    query += "&limit=1"
+
+    result = await store.select("refund_events", query)
+    rows = result.get("data") or []
+    return rows[0] if rows else {}
+
+
+async def s474_upsert_refund(order_row, fulfillment):
+    payment = s474_refunded_payment(order_row)
+    external_refund_id = str(payment.get("id") or "") or None
+    existing = await s474_existing_refund(
+        order_row.get("external_order_id"),
+        external_refund_id,
+    )
+
+    refunded_amount = (
+        payment.get("transaction_amount_refunded")
+        or payment.get("total_paid_amount")
+        or order_row.get("total_amount")
+    )
+
+    payload = {
+        "company_id": DEFAULT_COMPANY_ID,
+        "marketplace_order_id": order_row.get("id"),
+        "fulfillment_order_id": fulfillment.get("id") if fulfillment else None,
+        "external_order_id": str(order_row.get("external_order_id")),
+        "external_refund_id": external_refund_id,
+        "amount": refunded_amount,
+        "currency_id": (
+            payment.get("currency_id")
+            or order_row.get("currency_id")
+            or "BRL"
+        ),
+        "status": "completed",
+        "reason": "Reembolso confirmado automaticamente pelo Mercado Livre.",
+        "marketplace_data": payment or (order_row.get("order_data") or {}),
+        "completed_at": (
+            payment.get("date_last_modified")
+            or (order_row.get("order_data") or {}).get("last_updated")
+            or s45_now()
+        ),
+    }
+
+    if existing:
+        await store.update(
+            "refund_events",
+            "id=eq." + quote(str(existing.get("id")), safe="-"),
+            payload,
+        )
+        return {**existing, **payload, "created": False}
+
+    created = await store.insert("refund_events", payload)
+    rows = created.get("data") or []
+    if isinstance(rows, dict):
+        rows = [rows]
+    return {
+        **(rows[0] if rows else payload),
+        "created": True,
+    }
+
+
+async def s474_close_claim(order_row, fulfillment):
+    external_order_id = str(order_row.get("external_order_id"))
+    claim_id = s474_claim_id(order_row)
+    closed_at = (
+        (order_row.get("order_data") or {}).get("last_updated")
+        or s45_now()
+    )
+
+    update_payload = {
+        "external_claim_id": claim_id,
+        "status": "closed",
+        "stage": "pre_dispatch",
+        "seller_action_required": False,
+        "supplier_action_required": False,
+        "refund_required": False,
+        "closed_at": closed_at,
+        "last_error": None,
+    }
+
+    result = await store.update(
+        "marketplace_claims",
+        "external_order_id=eq."
+        + quote(external_order_id, safe="-_"),
+        update_payload,
+    )
+
+    return {
+        "success": bool(result.get("success")),
+        "external_claim_id": claim_id,
+        "closed_at": closed_at,
+        "result": result,
+    }
+
+
+async def s474_complete_cancellation(order_row):
+    external_order_id = str(order_row.get("external_order_id"))
+    result = await store.update(
+        "order_cancellations",
+        "external_order_id=eq."
+        + quote(external_order_id, safe="-_"),
+        {
+            "order_stage": "pre_dispatch",
+            "action_taken": "supplier_dispatch_blocked_and_refunded",
+            "result": "completed",
+            "refund_status": "completed",
+            "supplier_notified": False,
+            "supplier_cancel_status": "not_required",
+            "raw_payload": order_row.get("order_data") or {},
+        },
+    )
+    return result
+
+
+async def s474_refresh_fulfillment_items(order_row):
+    return await s40_order_items(order_row.get("id"))
+
+
+async def s474_close_fulfillment(order_row, fulfillment):
+    if not fulfillment:
+        return {"success": False, "error": "Fulfillment não encontrado."}
+
+    items = await s474_refresh_fulfillment_items(order_row)
+    completed_at = (
+        (order_row.get("order_data") or {}).get("last_updated")
+        or s45_now()
+    )
+
+    result = await store.update(
+        "fulfillment_orders",
+        "id=eq." + quote(str(fulfillment.get("id")), safe="-"),
+        {
+            "status": "cancelled_refunded",
+            "payment_status": "refunded",
+            "routing_status": "closed",
+            "fiscal_status": "not_required",
+            "shipping_status": "cancelled_before_dispatch",
+            "customer_notification_status": "completed_by_marketplace",
+            "items_data": items,
+            "last_error": None,
+            "completed_at": completed_at,
+        },
+    )
+
+    return {
+        "success": bool(result.get("success")),
+        "completed_at": completed_at,
+        "items_count": len(items),
+        "result": result,
+    }
+
+
+async def s474_close_marketplace_order(order_row):
+    return await store.update(
+        "marketplace_orders",
+        "id=eq." + quote(str(order_row.get("id")), safe="-"),
+        {
+            "status": "cancelled",
+            "payment_status": "refunded",
+            "order_data": order_row.get("order_data") or {},
+        },
+    )
+
+
+async def s474_record_closing_state(order_row, fulfillment):
+    await store.insert(
+        "order_state_history",
+        {
+            "company_id": DEFAULT_COMPANY_ID,
+            "marketplace_order_id": order_row.get("id"),
+            "fulfillment_order_id": fulfillment.get("id") if fulfillment else None,
+            "external_order_id": str(order_row.get("external_order_id")),
+            "previous_state": (
+                fulfillment.get("status")
+                if fulfillment
+                else order_row.get("status")
+            ),
+            "new_state": "cancelled_refunded",
+            "source": "closing_engine",
+            "reason": "Pedido cancelado e reembolso confirmado pelo marketplace.",
+            "metadata": {
+                "claim_id": s474_claim_id(order_row),
+                "payment": s474_refunded_payment(order_row),
+                "cancel_detail": (
+                    order_row.get("order_data") or {}
+                ).get("cancel_detail"),
+            },
+        },
+    )
+
+
+async def s474_close_order(external_order_id):
+    order_row = await s40_find_order_by_external_id(external_order_id)
+    if not order_row:
+        return {
+            "success": False,
+            "status_code": 404,
+            "error": "Pedido não encontrado.",
+        }
+
+    if not s474_is_cancelled(order_row):
+        return {
+            "success": False,
+            "status_code": 409,
+            "external_order_id": external_order_id,
+            "error": "O pedido ainda não está cancelado no marketplace.",
+            "marketplace_status": order_row.get("status"),
+        }
+
+    if not s474_is_refunded(order_row):
+        return {
+            "success": False,
+            "status_code": 409,
+            "external_order_id": external_order_id,
+            "error": "O reembolso ainda não foi confirmado pelo marketplace.",
+            "payment_status": order_row.get("payment_status"),
+        }
+
+    fulfillment = await s45_find_fulfillment_order(external_order_id)
+
+    marketplace_update = await s474_close_marketplace_order(order_row)
+    refund = await s474_upsert_refund(order_row, fulfillment)
+    claim = await s474_close_claim(order_row, fulfillment)
+    cancellation = await s474_complete_cancellation(order_row)
+    fulfillment_close = await s474_close_fulfillment(order_row, fulfillment)
+    await s474_record_closing_state(order_row, fulfillment)
+
+    refreshed_order = await s40_find_order_by_external_id(external_order_id)
+    refreshed_fulfillment = await s45_find_fulfillment_order(external_order_id)
+
+    success = bool(
+        marketplace_update.get("success")
+        and refund
+        and claim.get("success")
+        and cancellation.get("success")
+        and fulfillment_close.get("success")
+        and refreshed_order.get("payment_status") == "refunded"
+        and refreshed_fulfillment.get("status") == "cancelled_refunded"
+    )
+
+    return {
+        "success": success,
+        "version": APP_VERSION,
+        "external_order_id": external_order_id,
+        "marketplace_order": refreshed_order,
+        "fulfillment": refreshed_fulfillment,
+        "refund": refund,
+        "claim": claim,
+        "cancellation": cancellation,
+        "closing": fulfillment_close,
+    }
+
+
+@app.api_route("/api/closing-engine/run", methods=["GET", "POST"])
+async def s474_run(limit: int = 100):
+    sync = await s40_sync_recent_orders(limit)
+    if not sync.get("success"):
+        return JSONResponse(
+            status_code=int(sync.get("status_code") or 400),
+            content=sync,
+        )
+
+    orders = await s40_recent_orders(limit)
+    results = []
+
+    for summary in orders:
+        external_order_id = str(summary.get("external_order_id"))
+        order_row = await s40_find_order_by_external_id(external_order_id)
+
+        if not order_row:
+            continue
+
+        if not (s474_is_cancelled(order_row) and s474_is_refunded(order_row)):
+            results.append({
+                "success": False,
+                "skipped": True,
+                "external_order_id": external_order_id,
+                "status": order_row.get("status"),
+                "payment_status": order_row.get("payment_status"),
+                "message": "Pedido ainda não está pronto para encerramento.",
+            })
+            continue
+
+        try:
+            results.append(await s474_close_order(external_order_id))
+        except Exception as exc:
+            results.append({
+                "success": False,
+                "external_order_id": external_order_id,
+                "error": exc.__class__.__name__,
+                "message": str(exc),
+            })
+
+    eligible = [row for row in results if not row.get("skipped")]
+
+    return {
+        "success": all(row.get("success") for row in eligible) if eligible else True,
+        "version": APP_VERSION,
+        "processed": len(results),
+        "closed": sum(1 for row in results if row.get("success")),
+        "skipped": sum(1 for row in results if row.get("skipped")),
+        "failed": sum(
+            1 for row in results
+            if not row.get("success") and not row.get("skipped")
+        ),
+        "results": results,
+    }
+
+
+@app.api_route(
+    "/api/closing-engine/orders/{external_order_id}",
+    methods=["GET", "POST"],
+)
+async def s474_close_one(external_order_id: str):
+    result = await s474_close_order(external_order_id)
+    return JSONResponse(
+        status_code=200 if result.get("success") else int(result.get("status_code") or 422),
+        content=result,
+    )
+
+
+@app.get("/closing-engine", response_class=HTMLResponse)
+async def s474_page():
+    content = """
+<div class='card'>
+<h2>Closing Engine</h2>
+<p>Consolida automaticamente cancelamento, reembolso, reclamação e encerramento do pedido.</p>
+<form method='post' action='/api/closing-engine/run?limit=100'>
+<button class='btn' type='submit'>Encerrar pedidos concluídos</button>
+</form>
+<a class='btn' href='/api/customer-care'>Ver Customer Care</a>
+<a class='btn' href='/api/health/full'>Health Check completo</a>
+</div>
+"""
+    return HTMLResponse(shell("Closing Engine", content))
