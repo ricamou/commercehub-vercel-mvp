@@ -1828,7 +1828,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v6-sprint48-hayamax-30-catalog"
+S13_VERSION = "enterprise-v6-sprint47-4-closing-engine"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -2518,42 +2518,426 @@ async def enterprise_auth_middleware(request: Request, call_next):
 S17_HAYAMAX_SUPPLIER_ID = "00000000-0000-0000-0000-000000001700"
 
 S17_DEMO_PRODUCTS = [
-    {
-        "codigo": "HAYA-1001",
-        "sku": "HAYA-1001",
-        "ean": "7891000001001",
-        "nome": "Mouse Gamer RGB USB",
-        "marca": "Fortrek",
-        "categoria": "Mouse",
-        "descricao": "Mouse gamer RGB com conexão USB.",
-        "preco": 42.90,
-        "estoque": 18,
-        "imagem": "https://example.com/mouse-gamer.jpg"
-    },
-    {
-        "codigo": "HAYA-1002",
-        "sku": "HAYA-1002",
-        "ean": "7891000001002",
-        "nome": "Teclado Mecânico Gamer ABNT2",
-        "marca": "Fortrek",
-        "categoria": "Teclado",
-        "descricao": "Teclado mecânico gamer padrão ABNT2.",
-        "preco": 129.50,
-        "estoque": 9,
-        "imagem": "https://example.com/teclado-gamer.jpg"
-    },
-    {
-        "codigo": "HAYA-1003",
-        "sku": "HAYA-1003",
-        "ean": "7891000001003",
-        "nome": "Headset Gamer USB 7.1",
-        "marca": "Harmonics",
-        "categoria": "Headset",
-        "descricao": "Headset gamer USB com som virtual 7.1.",
-        "preco": 87.40,
-        "estoque": 12,
-        "imagem": "https://example.com/headset-gamer.jpg"
-    }
+    {'codigo': '82416',
+     'sku': 'HMX-82416',
+     'nome': 'Carregador Portátil Power Bank Concept CB144 20000mAh Multilaser',
+     'marca': 'Multilaser',
+     'categoria': 'Power Bank',
+     'descricao': 'Carregador Portátil Power Bank Concept CB144 20000mAh Multilaser. Produto novo, original, com origem no '
+                  'catálogo público Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 118.09,
+     'preco_venda': 129.9,
+     'estoque': 12,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+82416',
+     'source_url': 'https://hayamax.com.br/busca/?q=82416',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '80100',
+     'sku': 'HMX-80100',
+     'nome': 'SSD 240GB 2.5 SATA Hikvision SS230',
+     'marca': 'Hikvision',
+     'categoria': 'SSD',
+     'descricao': 'SSD 240GB 2.5 SATA Hikvision SS230. Produto novo, original, com origem no catálogo público Hayamax. '
+                  'Confira compatibilidade e especificações antes da compra.',
+     'preco': 127.18,
+     'preco_venda': 139.9,
+     'estoque': 10,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+80100',
+     'source_url': 'https://hayamax.com.br/busca/?q=80100',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '82417',
+     'sku': 'HMX-82417',
+     'nome': 'Carregador Portátil Power Bank Pulse CB147 10000mAh Multilaser',
+     'marca': 'Multilaser',
+     'categoria': 'Power Bank',
+     'descricao': 'Carregador Portátil Power Bank Pulse CB147 10000mAh Multilaser. Produto novo, original, com origem no '
+                  'catálogo público Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 81.73,
+     'preco_venda': 89.9,
+     'estoque': 15,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+82417',
+     'source_url': 'https://hayamax.com.br/busca/?q=82417',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '67014',
+     'sku': 'HMX-67014',
+     'nome': 'Leitor Multilaser USB com Cartão SD 32GB',
+     'marca': 'Multilaser',
+     'categoria': 'Leitor de Cartão',
+     'descricao': 'Leitor Multilaser USB com Cartão SD 32GB. Produto novo, original, com origem no catálogo público '
+                  'Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 49.91,
+     'preco_venda': 54.9,
+     'estoque': 18,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+67014',
+     'source_url': 'https://hayamax.com.br/busca/?q=67014',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '80097',
+     'sku': 'HMX-80097',
+     'nome': 'SSD 120GB 2.5 SATA Hikvision SS130',
+     'marca': 'Hikvision',
+     'categoria': 'SSD',
+     'descricao': 'SSD 120GB 2.5 SATA Hikvision SS130. Produto novo, original, com origem no catálogo público Hayamax. '
+                  'Confira compatibilidade e especificações antes da compra.',
+     'preco': 86.27,
+     'preco_venda': 94.9,
+     'estoque': 9,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+80097',
+     'source_url': 'https://hayamax.com.br/busca/?q=80097',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '83570',
+     'sku': 'HMX-83570',
+     'nome': 'Carregador Power Bank 20000mAh XC-BANK-26 Flex',
+     'marca': 'Flex',
+     'categoria': 'Power Bank',
+     'descricao': 'Carregador Power Bank 20000mAh XC-BANK-26 Flex. Produto novo, original, com origem no catálogo público '
+                  'Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 109.0,
+     'preco_venda': 119.9,
+     'estoque': 12,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+83570',
+     'source_url': 'https://hayamax.com.br/busca/?q=83570',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '67013',
+     'sku': 'HMX-67013',
+     'nome': 'Pen Drive Multilaser Twist PD590 64GB Preto',
+     'marca': 'Multilaser',
+     'categoria': 'Pen Drive',
+     'descricao': 'Pen Drive Multilaser Twist PD590 64GB Preto. Produto novo, original, com origem no catálogo público '
+                  'Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 45.36,
+     'preco_venda': 49.9,
+     'estoque': 25,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+67013',
+     'source_url': 'https://hayamax.com.br/busca/?q=67013',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '83572',
+     'sku': 'HMX-83572',
+     'nome': 'Carregador Power Bank 10000mAh XC-BANK-30 Flex',
+     'marca': 'Flex',
+     'categoria': 'Power Bank',
+     'descricao': 'Carregador Power Bank 10000mAh XC-BANK-30 Flex. Produto novo, original, com origem no catálogo público '
+                  'Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 72.64,
+     'preco_venda': 79.9,
+     'estoque': 16,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+83572',
+     'source_url': 'https://hayamax.com.br/busca/?q=83572',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '82415',
+     'sku': 'HMX-82415',
+     'nome': 'Carregador Portátil Power Bank Concept CB142 5000mAh Multilaser',
+     'marca': 'Multilaser',
+     'categoria': 'Power Bank',
+     'descricao': 'Carregador Portátil Power Bank Concept CB142 5000mAh Multilaser. Produto novo, original, com origem no '
+                  'catálogo público Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 54.45,
+     'preco_venda': 59.9,
+     'estoque': 14,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+82415',
+     'source_url': 'https://hayamax.com.br/busca/?q=82415',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '67012',
+     'sku': 'HMX-67012',
+     'nome': 'Pen Drive Multilaser Twist PD589 32GB Preto',
+     'marca': 'Multilaser',
+     'categoria': 'Pen Drive',
+     'descricao': 'Pen Drive Multilaser Twist PD589 32GB Preto. Produto novo, original, com origem no catálogo público '
+                  'Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 31.73,
+     'preco_venda': 34.9,
+     'estoque': 30,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+67012',
+     'source_url': 'https://hayamax.com.br/busca/?q=67012',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '83571',
+     'sku': 'HMX-83571',
+     'nome': 'Carregador Power Bank 8000mAh XC-BANK-29 Flex',
+     'marca': 'Flex',
+     'categoria': 'Power Bank',
+     'descricao': 'Carregador Power Bank 8000mAh XC-BANK-29 Flex. Produto novo, original, com origem no catálogo público '
+                  'Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 63.55,
+     'preco_venda': 69.9,
+     'estoque': 12,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+83571',
+     'source_url': 'https://hayamax.com.br/busca/?q=83571',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '83567',
+     'sku': 'HMX-83567',
+     'nome': 'Carregador Power Bank 10000mAh XC-BANK-20 Flex',
+     'marca': 'Flex',
+     'categoria': 'Power Bank',
+     'descricao': 'Carregador Power Bank 10000mAh XC-BANK-20 Flex. Produto novo, original, com origem no catálogo público '
+                  'Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 68.09,
+     'preco_venda': 74.9,
+     'estoque': 15,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+83567',
+     'source_url': 'https://hayamax.com.br/busca/?q=83567',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '85213',
+     'sku': 'HMX-85213',
+     'nome': 'Bateria Portátil Power Bank 6500mAh PB65 ELG',
+     'marca': 'ELG',
+     'categoria': 'Power Bank',
+     'descricao': 'Bateria Portátil Power Bank 6500mAh PB65 ELG. Produto novo, original, com origem no catálogo público '
+                  'Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 59.0,
+     'preco_venda': 64.9,
+     'estoque': 10,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+85213',
+     'source_url': 'https://hayamax.com.br/busca/?q=85213',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '81468',
+     'sku': 'HMX-81468',
+     'nome': 'Case para HD 2.5 Externo CH-C300BK C3Tech',
+     'marca': 'C3Tech',
+     'categoria': 'Case para HD',
+     'descricao': 'Case para HD 2.5 Externo CH-C300BK C3Tech. Produto novo, original, com origem no catálogo público '
+                  'Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 45.36,
+     'preco_venda': 49.9,
+     'estoque': 18,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+81468',
+     'source_url': 'https://hayamax.com.br/busca/?q=81468',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '59584',
+     'sku': 'HMX-59584',
+     'nome': 'Pen Drive Multilaser Twist PD588 16GB Preto',
+     'marca': 'Multilaser',
+     'categoria': 'Pen Drive',
+     'descricao': 'Pen Drive Multilaser Twist PD588 16GB Preto. Produto novo, original, com origem no catálogo público '
+                  'Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 25.36,
+     'preco_venda': 27.9,
+     'estoque': 35,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+59584',
+     'source_url': 'https://hayamax.com.br/busca/?q=59584',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '52573',
+     'sku': 'HMX-52573',
+     'nome': 'Case para HD 2.5 Externo Fortrek HDC-251 Preto',
+     'marca': 'Fortrek',
+     'categoria': 'Case para HD',
+     'descricao': 'Case para HD 2.5 Externo Fortrek HDC-251 Preto. Produto novo, original, com origem no catálogo público '
+                  'Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 39.0,
+     'preco_venda': 42.9,
+     'estoque': 20,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+52573',
+     'source_url': 'https://hayamax.com.br/busca/?q=52573',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '81469',
+     'sku': 'HMX-81469',
+     'nome': 'Case para HD 2.5 Externo CH-210BK C3Tech',
+     'marca': 'C3Tech',
+     'categoria': 'Case para HD',
+     'descricao': 'Case para HD 2.5 Externo CH-210BK C3Tech. Produto novo, original, com origem no catálogo público '
+                  'Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 40.82,
+     'preco_venda': 44.9,
+     'estoque': 16,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+81469',
+     'source_url': 'https://hayamax.com.br/busca/?q=81469',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '67015',
+     'sku': 'HMX-67015',
+     'nome': 'Leitor Multilaser USB com Cartão SD 16GB',
+     'marca': 'Multilaser',
+     'categoria': 'Leitor de Cartão',
+     'descricao': 'Leitor Multilaser USB com Cartão SD 16GB. Produto novo, original, com origem no catálogo público '
+                  'Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 36.27,
+     'preco_venda': 39.9,
+     'estoque': 22,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+67015',
+     'source_url': 'https://hayamax.com.br/busca/?q=67015',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '85861',
+     'sku': 'HMX-85861',
+     'nome': 'Kit Teclado e Mouse Letron Fini Sem Fio Rosa',
+     'marca': 'Letron',
+     'categoria': 'Kit Teclado e Mouse',
+     'descricao': 'Kit Teclado e Mouse Letron Fini Sem Fio Rosa. Produto novo, original, com origem no catálogo público '
+                  'Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 136.27,
+     'preco_venda': 149.9,
+     'estoque': 8,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+85861',
+     'source_url': 'https://hayamax.com.br/busca/?q=85861',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '74639',
+     'sku': 'HMX-74639',
+     'nome': 'Kit Teclado e Mouse Logitech MK295 Sem Fio Preto',
+     'marca': 'Logitech',
+     'categoria': 'Kit Teclado e Mouse',
+     'descricao': 'Kit Teclado e Mouse Logitech MK295 Sem Fio Preto. Produto novo, original, com origem no catálogo '
+                  'público Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 218.09,
+     'preco_venda': 239.9,
+     'estoque': 7,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+74639',
+     'source_url': 'https://hayamax.com.br/busca/?q=74639',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '84976',
+     'sku': 'HMX-84976',
+     'nome': 'Teclado Gamer Mecânico Fortrek Gravity 100 Switch Outemu Red',
+     'marca': 'Fortrek',
+     'categoria': 'Teclado Gamer',
+     'descricao': 'Teclado Gamer Mecânico Fortrek Gravity 100 Switch Outemu Red. Produto novo, original, com origem no '
+                  'catálogo público Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 199.91,
+     'preco_venda': 219.9,
+     'estoque': 9,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+84976',
+     'source_url': 'https://hayamax.com.br/busca/?q=84976',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '74656',
+     'sku': 'HMX-74656',
+     'nome': 'Mouse Pad Gamer com LED C3Tech MP-G2000BK Speed',
+     'marca': 'C3Tech',
+     'categoria': 'Mouse Pad Gamer',
+     'descricao': 'Mouse Pad Gamer com LED C3Tech MP-G2000BK Speed. Produto novo, original, com origem no catálogo público '
+                  'Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 81.73,
+     'preco_venda': 89.9,
+     'estoque': 14,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+74656',
+     'source_url': 'https://hayamax.com.br/busca/?q=74656',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '79258',
+     'sku': 'HMX-79258',
+     'nome': 'Mousepad Gamer Extra Grande com LED MP-LED3080 Exbom',
+     'marca': 'Exbom',
+     'categoria': 'Mouse Pad Gamer',
+     'descricao': 'Mousepad Gamer Extra Grande com LED MP-LED3080 Exbom. Produto novo, original, com origem no catálogo '
+                  'público Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 72.64,
+     'preco_venda': 79.9,
+     'estoque': 12,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+79258',
+     'source_url': 'https://hayamax.com.br/busca/?q=79258',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '78379',
+     'sku': 'HMX-78379',
+     'nome': 'Mouse Pad Gamer HP MP9040',
+     'marca': 'HP',
+     'categoria': 'Mouse Pad Gamer',
+     'descricao': 'Mouse Pad Gamer HP MP9040. Produto novo, original, com origem no catálogo público Hayamax. Confira '
+                  'compatibilidade e especificações antes da compra.',
+     'preco': 63.55,
+     'preco_venda': 69.9,
+     'estoque': 13,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+78379',
+     'source_url': 'https://hayamax.com.br/busca/?q=78379',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '77543',
+     'sku': 'HMX-77543',
+     'nome': 'Mouse Pad Gamer Fortrek Speed MPG104 900x400mm Verde',
+     'marca': 'Fortrek',
+     'categoria': 'Mouse Pad Gamer',
+     'descricao': 'Mouse Pad Gamer Fortrek Speed MPG104 900x400mm Verde. Produto novo, original, com origem no catálogo '
+                  'público Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 49.91,
+     'preco_venda': 54.9,
+     'estoque': 20,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+77543',
+     'source_url': 'https://hayamax.com.br/busca/?q=77543',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '77542',
+     'sku': 'HMX-77542',
+     'nome': 'Mouse Pad Gamer Fortrek Speed MPG104 900x400mm Preto',
+     'marca': 'Fortrek',
+     'categoria': 'Mouse Pad Gamer',
+     'descricao': 'Mouse Pad Gamer Fortrek Speed MPG104 900x400mm Preto. Produto novo, original, com origem no catálogo '
+                  'público Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 49.91,
+     'preco_venda': 54.9,
+     'estoque': 24,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+77542',
+     'source_url': 'https://hayamax.com.br/busca/?q=77542',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '77541',
+     'sku': 'HMX-77541',
+     'nome': 'Mouse Pad Gamer Fortrek Speed MPG104 900x400mm Vermelho',
+     'marca': 'Fortrek',
+     'categoria': 'Mouse Pad Gamer',
+     'descricao': 'Mouse Pad Gamer Fortrek Speed MPG104 900x400mm Vermelho. Produto novo, original, com origem no catálogo '
+                  'público Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 49.91,
+     'preco_venda': 54.9,
+     'estoque': 18,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+77541',
+     'source_url': 'https://hayamax.com.br/busca/?q=77541',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '77540',
+     'sku': 'HMX-77540',
+     'nome': 'Mouse Pad Gamer Fortrek Speed MPG104 900x400mm Azul',
+     'marca': 'Fortrek',
+     'categoria': 'Mouse Pad Gamer',
+     'descricao': 'Mouse Pad Gamer Fortrek Speed MPG104 900x400mm Azul. Produto novo, original, com origem no catálogo '
+                  'público Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 49.91,
+     'preco_venda': 54.9,
+     'estoque': 18,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+77540',
+     'source_url': 'https://hayamax.com.br/busca/?q=77540',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '84990',
+     'sku': 'HMX-84990',
+     'nome': 'Apoio de Pulso Ergonômico Fortrek Ergow',
+     'marca': 'Fortrek',
+     'categoria': 'Apoio Ergonômico',
+     'descricao': 'Apoio de Pulso Ergonômico Fortrek Ergow. Produto novo, original, com origem no catálogo público '
+                  'Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 36.27,
+     'preco_venda': 39.9,
+     'estoque': 20,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+84990',
+     'source_url': 'https://hayamax.com.br/busca/?q=84990',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
+    {'codigo': '69819',
+     'sku': 'HMX-69819',
+     'nome': 'Microfone Headset Sem Fio Karsect KRD200SH',
+     'marca': 'Karsect',
+     'categoria': 'Microfone Sem Fio',
+     'descricao': 'Microfone Headset Sem Fio Karsect KRD200SH. Produto novo, original, com origem no catálogo público '
+                  'Hayamax. Confira compatibilidade e especificações antes da compra.',
+     'preco': 818.09,
+     'preco_venda': 899.9,
+     'estoque': 5,
+     'imagem': 'https://placehold.co/1200x1200.jpg?text=Hayamax+69819',
+     'source_url': 'https://hayamax.com.br/busca/?q=69819',
+     'pricing_note': 'Preço estimado para preparação. Sincronizar custo oficial Hayamax antes da publicação.',
+     'image_note': 'Imagem temporária de catálogo. Substituir pela imagem oficial Hayamax antes da publicação final.'},
 ]
 
 
@@ -2867,7 +3251,11 @@ async def s17_import_normalized(supplier, normalized, mode="manual"):
                 raise RuntimeError(str(master.get("error") or master.get("raw") or "Falha products"))
             stats["master_created_or_updated"] += 1
 
-            master_rows = master.get("data") or []
+            master_data = master.get("data") or []
+            if isinstance(master_data, dict):
+                master_rows = [master_data]
+            else:
+                master_rows = master_data
             real_product_id = master_rows[0].get("id") if master_rows else product_id
 
             inventory_payload = {
@@ -2959,7 +3347,7 @@ async def supplier_connector_page(request: Request):
 <h2>Universal Supplier Connector</h2>
 <p>Importa catálogos JSON, XML ou CSV, normaliza os dados e atualiza Produtos e Estoque.</p>
 <a class='btn' href='/api/suppliers/hayamax/setup'>Adicionar Hayamax</a>
-<a class='btn' href='/api/suppliers/hayamax/demo-import'>Importação demonstrativa Hayamax</a>
+<a class='btn' href='/api/suppliers/hayamax/load-30'>Carregar lote inicial Hayamax</a>
 <a class='btn' href='/supplier-imports'>Histórico</a>
 <a class='btn' href='/supplier-connector/sql'>SQL Sprint 17</a>
 </div>
@@ -3085,6 +3473,38 @@ async def supplier_hayamax_demo_import():
         for item in S17_DEMO_PRODUCTS
     ]
     return await s17_import_normalized(supplier, normalized, "hayamax_demo")
+
+
+@app.get("/api/suppliers/hayamax/load-30")
+@app.post("/api/suppliers/hayamax/load-30")
+@app.get("/api/suppliers/hayamax/lote-1")
+@app.post("/api/suppliers/hayamax/lote-1")
+async def supplier_hayamax_load_30():
+    """Carrega o lote curado de 30 produtos e prepara candidatos do Mercado Livre."""
+    migration_check = await store.select("supplier_products", "select=id&limit=1")
+    if not migration_check.get("success"):
+        return JSONResponse(status_code=409, content={
+            "success": False,
+            "error": "A tabela supplier_products ainda não existe.",
+            "next_step": "Execute sprint17_supplier_connector.sql no Supabase SQL Editor."
+        })
+
+    await s17_ensure_hayamax_supplier()
+    supplier = await s17_get_supplier(S17_HAYAMAX_SUPPLIER_ID)
+    normalized = [
+        s17_normalize_product(item, supplier["id"], "hayamax_public_catalog_30")
+        for item in S17_DEMO_PRODUCTS
+    ]
+    imported = await s17_import_normalized(supplier, normalized, "hayamax_public_catalog_30")
+    prepared = await s44_prepare_candidates(30)
+    return {
+        "success": bool(imported.get("success")),
+        "message": "Lote de 30 produtos Hayamax carregado e preparado.",
+        "important": "Preços e imagens são estimativas temporárias; sincronize o feed oficial Hayamax antes da publicação final.",
+        "import": imported,
+        "preparation": prepared,
+        "next": "/supplier-hub/hayamax"
+    }
 
 
 async def s17_fetch_supplier_catalog(supplier):
@@ -14817,7 +15237,7 @@ async def s44_prepare_candidates(limit=100):
             or offer.get("cost_price")
             or 0
         )
-        final_price = s43_calculate_price(cost_price, 8, "percentage")
+        final_price = s43_calculate_price(cost_price, 16, "percentage")
         stock = int(
             inventory.get("quantity")
             or offer.get("stock")
@@ -14861,7 +15281,7 @@ async def s44_prepare_candidates(limit=100):
                 "supplier_sku": offer.get("sku"),
                 "marketplace": "mercado_livre",
                 "cost_price": cost_price,
-                "markup_percent": 8,
+                "markup_percent": 16,
                 "final_price": final_price,
                 "stock": stock,
                 "images_count": images_count,
@@ -14996,8 +15416,10 @@ async def hayamax_integration_page():
 <div class='card'>
 <h2>Hayamax Integration Engine</h2>
 <p>Usa os produtos já importados pelo conector universal e os prepara para o pipeline do Mercado Livre.</p>
-<p><b>Markup:</b> 8%</p>
-<form method='post' action='/api/supplier-hub/hayamax/prepare?limit=100' style='display:inline'>
+<p><b>Margem configurada:</b> 16%</p>
+<p><b>Lote 1:</b> 100 posições — 30 produtos confirmados no catálogo público e 70 em pesquisa.</p><p><b>Modo atual:</b> pré-liberação Hayamax. A publicação permanece bloqueada quando faltarem preço, estoque, GTIN, imagens ou atributos oficiais.</p>
+<form method='post' action='/api/suppliers/hayamax/load-30' style='display:inline'><button class='btn' type='submit'>Carregar 30 produtos já confirmados</button></form>
+<form method='post' action='/api/supplier-hub/hayamax/prepare?limit=10000' style='display:inline'>
 <button class='btn' type='submit'>Preparar produtos Hayamax</button>
 </form>
 <a class='btn' href='/supplier-connector/{supplier.get("id")}'>Configurar API/Catálogo</a>
@@ -15009,7 +15431,7 @@ async def hayamax_integration_page():
 <table>
 <thead>
 <tr>
-<th>SKU</th><th>Custo</th><th>Preço +8%</th><th>Estoque</th>
+<th>SKU</th><th>Custo</th><th>Preço +16%</th><th>Estoque</th>
 <th>Fotos</th><th>Atributos</th><th>Score</th><th>Status</th>
 </tr>
 </thead>
@@ -18437,65 +18859,3 @@ async def s474_page():
 </div>
 """
     return HTMLResponse(shell("Closing Engine", content))
-
-
-# ==========================================================
-# SPRINT 48 - HAYAMAX 30 PUBLIC CATALOG
-# ==========================================================
-
-@app.get("/api/hayamax-launch-30")
-async def s48_hayamax_launch_api():
-    result = await store.select(
-        "products",
-        "select=id,sku,name,brand,cost_price,sale_price,internal_status,sync_status,raw_data"
-        "&supplier_id=eq.00000000-0000-0000-0000-000000001700"
-        "&raw_data->>source=eq.hayamax_public_catalog"
-        "&order=name.asc&limit=100"
-    )
-    rows = result.get("data") or []
-    return {
-        "success": True,
-        "version": APP_VERSION,
-        "products": rows,
-        "total": len(rows),
-        "awaiting_supplier_access": sum(
-            1 for row in rows if float(row.get("cost_price") or 0) <= 0
-        ),
-        "publication_blocked": any(
-            float(row.get("cost_price") or 0) <= 0 for row in rows
-        ),
-    }
-
-
-@app.get("/hayamax-launch-30", response_class=HTMLResponse)
-async def s48_hayamax_launch_page():
-    result = await store.select(
-        "products",
-        "select=*&supplier_id=eq.00000000-0000-0000-0000-000000001700"
-        "&raw_data->>source=eq.hayamax_public_catalog"
-        "&order=name.asc&limit=100"
-    )
-    rows = result.get("data") or []
-    table_rows = "".join(
-        f"<tr><td>{row.get('sku')}</td><td>{row.get('name')}</td>"
-        f"<td>{row.get('brand') or '-'}</td>"
-        f"<td>R$ {float(row.get('cost_price') or 0):.2f}</td>"
-        f"<td>{'Aguardando acesso' if float(row.get('cost_price') or 0) == 0 else 'Pronto'}</td></tr>"
-        for row in rows
-    ) or "<tr><td colspan='5'>Execute a query da Sprint 48.</td></tr>"
-
-    content = f"""
-<div class='grid'>
-  <div class='metric'><span>Produtos importados</span><strong>{len(rows)}</strong></div>
-  <div class='metric'><span>Fornecedor</span><strong>Hayamax</strong></div>
-  <div class='metric'><span>Margem alvo</span><strong>10% líquido</strong></div>
-  <div class='metric'><span>Publicação</span><strong>Bloqueada sem custo</strong></div>
-</div>
-<div class='card'>
-<h2>30 produtos Hayamax</h2>
-<p>Os produtos públicos foram importados. Preço, estoque, EAN e imagens comerciais serão atualizados quando o cadastro Hayamax for liberado.</p>
-<table><thead><tr><th>SKU</th><th>Produto</th><th>Marca</th><th>Custo</th><th>Status</th></tr></thead>
-<tbody>{table_rows}</tbody></table>
-</div>
-"""
-    return HTMLResponse(shell("Lançamento Hayamax 30", content))
