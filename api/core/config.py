@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v6-sprint47-core-completion"
+APP_VERSION = "enterprise-v6-sprint47-1-data-repair"
 
 def env(name, default=""):
     value = os.getenv(name, default)

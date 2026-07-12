@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v6-sprint47-core-completion"
+S13_VERSION = "enterprise-v6-sprint47-1-data-repair"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -17268,3 +17268,504 @@ async def core_completion_page():
 </div>
 """
     return HTMLResponse(shell("Core Completion", content))
+
+
+# ==========================================================
+# SPRINT 47.1 - DATA REPAIR ENGINE
+# Repara vínculos históricos:
+# External Item -> Listing -> Product -> Supplier Mapping.
+# ==========================================================
+
+def s471_normalize_identifier(value):
+    return re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+
+
+def s471_json_text(value):
+    try:
+        return json.dumps(value or {}, ensure_ascii=False, default=str).upper()
+    except Exception:
+        return str(value or "").upper()
+
+
+def s471_ml_attribute(item_data, attribute_id):
+    wanted = str(attribute_id or "").upper()
+    for row in item_data.get("attributes") or []:
+        if str(row.get("id") or "").upper() == wanted:
+            return row.get("value_name") or row.get("value_id")
+    for variation in item_data.get("variations") or []:
+        for row in variation.get("attributes") or []:
+            if str(row.get("id") or "").upper() == wanted:
+                return row.get("value_name") or row.get("value_id")
+        for row in variation.get("attribute_combinations") or []:
+            if str(row.get("id") or "").upper() == wanted:
+                return row.get("value_name") or row.get("value_id")
+    return None
+
+
+async def s471_recent_listings(limit=500):
+    result = await store.select(
+        "listings",
+        "select=*&order=updated_at.desc&limit="
+        + str(max(1, min(int(limit or 500), 1000))),
+    )
+    return result.get("data") or []
+
+
+async def s471_match_listing_locally(external_item_id):
+    normalized = s471_normalize_identifier(external_item_id)
+    if not normalized:
+        return {}, None
+
+    listings = await s471_recent_listings(1000)
+
+    for listing in listings:
+        candidates = [
+            listing.get("external_id"),
+            listing.get("item_url"),
+            listing.get("permalink"),
+        ]
+        if any(normalized == s471_normalize_identifier(value) for value in candidates if value):
+            return listing, "listing_local_exact"
+
+    for listing in listings:
+        combined = " ".join(
+            [
+                str(listing.get("external_id") or ""),
+                str(listing.get("item_url") or ""),
+                str(listing.get("permalink") or ""),
+                s471_json_text(listing.get("payload") or {}),
+            ]
+        )
+        if normalized and normalized in s471_normalize_identifier(combined):
+            return listing, "listing_local_embedded"
+
+    return {}, None
+
+
+async def s471_products_by_field(field, value, limit=20):
+    if not value:
+        return []
+
+    result = await store.select(
+        "products",
+        "select=*&"
+        + field
+        + "=eq."
+        + quote(str(value), safe="-_ ")
+        + "&limit="
+        + str(limit),
+    )
+    return result.get("data") or []
+
+
+async def s471_products_by_name(name, limit=30):
+    name = str(name or "").strip()
+    if not name:
+        return []
+
+    result = await store.select(
+        "products",
+        "select=*&name=ilike."
+        + quote(f"%{name}%", safe="%_- ")
+        + "&limit="
+        + str(limit),
+    )
+    return result.get("data") or []
+
+
+async def s471_listing_by_product(product_id):
+    if not product_id:
+        return {}
+
+    result = await store.select(
+        "listings",
+        "select=*&product_id=eq."
+        + quote(str(product_id), safe="-")
+        + "&marketplace=eq.mercado_livre"
+        + "&order=updated_at.desc&limit=1",
+    )
+    rows = result.get("data") or []
+    return rows[0] if rows else {}
+
+
+async def s471_fetch_ml_item(external_item_id):
+    if not external_item_id:
+        return {}
+
+    result = await ml_request(
+        f"/items/{quote(str(external_item_id), safe='-_')}"
+    )
+    if not result.get("success"):
+        return {}
+
+    return result.get("data") or {}
+
+
+async def s471_identify_product(item_row, ml_item):
+    clues = []
+
+    gtin = (
+        s471_ml_attribute(ml_item, "GTIN")
+        or item_row.get("gtin")
+    )
+    seller_sku = (
+        s471_ml_attribute(ml_item, "SELLER_SKU")
+        or ml_item.get("seller_custom_field")
+        or item_row.get("supplier_sku")
+        or item_row.get("seller_sku")
+        or item_row.get("sku")
+    )
+    title = (
+        ml_item.get("title")
+        or ((item_row.get("item_data") or {}).get("title"))
+        or item_row.get("title")
+    )
+
+    if gtin:
+        products = await s471_products_by_field("ean", gtin)
+        if len(products) == 1:
+            return products[0], "ml_gtin_unique", {"gtin": gtin}
+        clues.append({"strategy": "ml_gtin", "value": gtin, "matches": len(products)})
+
+    if seller_sku:
+        products = await s471_products_by_field("sku", seller_sku)
+        if len(products) == 1:
+            return products[0], "ml_seller_sku_unique", {"seller_sku": seller_sku}
+        clues.append({"strategy": "ml_seller_sku", "value": seller_sku, "matches": len(products)})
+
+    if title:
+        products = await s471_products_by_name(title)
+        exact = [
+            row for row in products
+            if str(row.get("name") or "").strip().lower()
+            == str(title).strip().lower()
+        ]
+        if len(exact) == 1:
+            return exact[0], "ml_title_exact_unique", {"title": title}
+        clues.append({"strategy": "ml_title", "value": title, "matches": len(exact)})
+
+    return {}, "product_not_identified", {"clues": clues}
+
+
+async def s471_repair_listing_link(external_item_id, listing, product, ml_item):
+    if not listing and product:
+        listing = await s471_listing_by_product(product.get("id"))
+
+    if not listing:
+        return {}, False
+
+    update_data = {}
+
+    if str(listing.get("external_id") or "") != str(external_item_id):
+        update_data["external_id"] = str(external_item_id)
+
+    permalink = ml_item.get("permalink")
+    if permalink:
+        if not listing.get("item_url"):
+            update_data["item_url"] = permalink
+        if "permalink" in listing and not listing.get("permalink"):
+            update_data["permalink"] = permalink
+
+    if product and listing.get("product_id") != product.get("id"):
+        update_data["product_id"] = product.get("id")
+
+    if update_data:
+        await store.update(
+            "listings",
+            "id=eq." + quote(str(listing.get("id")), safe="-"),
+            update_data,
+        )
+        listing = {**listing, **update_data}
+
+    return listing, bool(update_data)
+
+
+async def s471_repair_mapping(product):
+    if not product:
+        return {}, False
+
+    mapping = await s47_find_mapping(product.get("id"), product.get("sku"))
+    if mapping:
+        return mapping, False
+
+    supplier_id = product.get("supplier_id")
+    if not supplier_id:
+        return {}, False
+
+    supplier = await s47_find_supplier(supplier_id)
+    supplier_sku = product.get("sku")
+
+    created = await store.upsert(
+        "supplier_product_mappings",
+        {
+            "company_id": DEFAULT_COMPANY_ID,
+            "supplier_id": supplier_id,
+            "product_id": product.get("id"),
+            "supplier_sku": supplier_sku,
+            "supplier_product_id": (
+                (product.get("raw_data") or {}).get("external_id")
+                or supplier_sku
+            ),
+            "supplier_barcode": product.get("ean"),
+            "supplier_data": product.get("raw_data") or {},
+            "priority": 1,
+            "is_primary": True,
+            "active": True,
+            "last_price": product.get("cost_price"),
+            "last_sync_at": s45_now(),
+        },
+        "company_id,supplier_id,supplier_sku",
+    )
+
+    rows = created.get("data") or []
+    if isinstance(rows, dict):
+        rows = [rows]
+
+    mapping = rows[0] if rows else {
+        "supplier_id": supplier_id,
+        "product_id": product.get("id"),
+        "supplier_sku": supplier_sku,
+        "supplier_name": supplier.get("name"),
+    }
+
+    return mapping, True
+
+
+async def s471_repair_item(order_row, fulfillment, item_row):
+    external_item_id = item_row.get("external_item_id")
+    listing, listing_strategy = await s471_match_listing_locally(external_item_id)
+    ml_item = await s471_fetch_ml_item(external_item_id)
+
+    product = {}
+    product_strategy = None
+    product_details = {}
+
+    if listing and listing.get("product_id"):
+        product = await s44_product_by_id(listing.get("product_id"))
+        if product:
+            product_strategy = "listing_product_id"
+
+    if not product:
+        product, product_strategy, product_details = await s471_identify_product(
+            item_row,
+            ml_item,
+        )
+
+    listing, listing_repaired = await s471_repair_listing_link(
+        external_item_id,
+        listing,
+        product,
+        ml_item,
+    )
+
+    if not product and listing.get("product_id"):
+        product = await s44_product_by_id(listing.get("product_id"))
+
+    mapping, mapping_created = await s471_repair_mapping(product)
+
+    supplier_id = mapping.get("supplier_id") or product.get("supplier_id")
+    supplier = await s47_find_supplier(supplier_id)
+    supplier_sku = (
+        mapping.get("supplier_sku")
+        or item_row.get("supplier_sku")
+        or product.get("sku")
+    )
+
+    resolved = bool(
+        listing.get("id")
+        and product.get("id")
+        and supplier.get("id")
+    )
+
+    if resolved:
+        await store.update(
+            "marketplace_order_items",
+            "id=eq." + quote(str(item_row.get("id")), safe="-"),
+            {
+                "listing_id": listing.get("id"),
+                "product_id": product.get("id"),
+                "supplier": supplier.get("name"),
+                "supplier_sku": supplier_sku,
+            },
+        )
+
+        if fulfillment:
+            await store.update(
+                "fulfillment_orders",
+                "id=eq." + quote(str(fulfillment.get("id")), safe="-"),
+                {
+                    "supplier_id": supplier.get("id"),
+                    "supplier_name": supplier.get("name"),
+                    "routing_status": (
+                        "blocked"
+                        if s47_lower(fulfillment.get("status")) in S47_CANCEL_STATES
+                        else "resolved"
+                    ),
+                    "last_error": None,
+                },
+            )
+
+    strategy = " > ".join(
+        value for value in [
+            listing_strategy,
+            product_strategy,
+            "mapping_created" if mapping_created else ("mapping_found" if mapping else None),
+        ]
+        if value
+    ) or "data_repair_no_match"
+
+    await s47_log_routing(
+        order_row,
+        fulfillment,
+        item_row,
+        strategy,
+        "resolved" if resolved else "unresolved",
+        listing=listing,
+        product=product,
+        supplier=supplier,
+        supplier_sku=supplier_sku,
+        details={
+            "listing_repaired": listing_repaired,
+            "mapping_created": mapping_created,
+            "product_details": product_details,
+            "ml_item_title": ml_item.get("title"),
+            "ml_item_permalink": ml_item.get("permalink"),
+        },
+    )
+
+    return {
+        "resolved": resolved,
+        "strategy": strategy,
+        "external_item_id": external_item_id,
+        "listing_id": listing.get("id"),
+        "product_id": product.get("id"),
+        "supplier_id": supplier.get("id"),
+        "supplier_name": supplier.get("name"),
+        "supplier_sku": supplier_sku,
+        "listing_repaired": listing_repaired,
+        "mapping_created": mapping_created,
+    }
+
+
+# Sobrescreve o resolvedor da Sprint 47 com o motor de reparo.
+async def s47_resolve_item(order_row, fulfillment, item_row):
+    result = await s471_repair_item(order_row, fulfillment, item_row)
+    return result
+
+
+async def s471_repair_order(external_order_id):
+    order_row = await s40_find_order_by_external_id(external_order_id)
+    if not order_row:
+        return {
+            "success": False,
+            "status_code": 404,
+            "error": "Pedido não encontrado.",
+        }
+
+    fulfillment = await s45_find_fulfillment_order(external_order_id)
+    items = await s40_order_items(order_row.get("id"))
+    results = []
+
+    for item in items:
+        results.append(await s471_repair_item(order_row, fulfillment, item))
+
+    resolved = [row for row in results if row.get("resolved")]
+    state = await s47_apply_unified_state(order_row)
+
+    return {
+        "success": bool(resolved),
+        "version": APP_VERSION,
+        "external_order_id": external_order_id,
+        "resolved_items": len(resolved),
+        "unresolved_items": len(results) - len(resolved),
+        "items": results,
+        "state": state,
+    }
+
+
+@app.post("/api/data-repair/orders/{external_order_id}")
+async def data_repair_order(external_order_id: str):
+    result = await s471_repair_order(external_order_id)
+    return JSONResponse(
+        status_code=200 if result.get("success") else int(result.get("status_code") or 422),
+        content=result,
+    )
+
+
+@app.post("/api/data-repair/run")
+async def data_repair_run(limit: int = 100):
+    sync = await s40_sync_recent_orders(limit)
+    if not sync.get("success"):
+        return JSONResponse(
+            status_code=int(sync.get("status_code") or 400),
+            content=sync,
+        )
+
+    orders = await s40_recent_orders(limit)
+    results = []
+
+    for summary in orders:
+        results.append(
+            await s471_repair_order(str(summary.get("external_order_id")))
+        )
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "processed": len(results),
+        "resolved": sum(1 for row in results if row.get("success")),
+        "unresolved": sum(1 for row in results if not row.get("success")),
+        "results": results,
+    }
+
+
+@app.get("/data-repair", response_class=HTMLResponse)
+async def data_repair_page():
+    attempts_result = await store.select(
+        "order_routing_attempts",
+        "select=*&order=created_at.desc&limit=100",
+    )
+    attempts = attempts_result.get("data") or []
+
+    rows = "".join(
+        f"<tr>"
+        f"<td>{row.get('external_order_id')}</td>"
+        f"<td>{row.get('external_item_id') or '-'}</td>"
+        f"<td>{row.get('strategy')}</td>"
+        f"<td>{row.get('status')}</td>"
+        f"<td>{row.get('supplier_name') or '-'}</td>"
+        f"<td>{row.get('supplier_sku') or '-'}</td>"
+        f"</tr>"
+        for row in attempts
+    ) or "<tr><td colspan='6'>Nenhuma tentativa registrada.</td></tr>"
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Tentativas</span><strong>{len(attempts)}</strong></div>
+  <div class='metric'><span>Resolvidas</span><strong>{sum(1 for r in attempts if r.get('status') == 'resolved')}</strong></div>
+  <div class='metric'><span>Não resolvidas</span><strong>{sum(1 for r in attempts if r.get('status') != 'resolved')}</strong></div>
+  <div class='metric'><span>Engine</span><strong>Data Repair</strong></div>
+</div>
+
+<div class='card'>
+<h2>Data Repair Engine</h2>
+<p>Repara anúncios e pedidos históricos usando Item ID, GTIN, SKU, título, Product Master e Supplier Mapping.</p>
+<form method='post' action='/api/data-repair/run?limit=100' style='display:inline'>
+<button class='btn' type='submit'>Executar reparo completo</button>
+</form>
+</div>
+
+<div class='card'>
+<h2>Auditoria de roteamento</h2>
+<table>
+<thead>
+<tr>
+<th>Pedido</th><th>Item ML</th><th>Estratégia</th>
+<th>Status</th><th>Fornecedor</th><th>SKU</th>
+</tr>
+</thead>
+<tbody>{rows}</tbody>
+</table>
+</div>
+"""
+    return HTMLResponse(shell("Data Repair", content))
