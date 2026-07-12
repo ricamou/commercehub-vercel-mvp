@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint26-publishing-lab"
+APP_VERSION = "enterprise-v5-sprint31-product-discovery-auto-apply"
 
 def env(name, default=""):
     value = os.getenv(name, default)

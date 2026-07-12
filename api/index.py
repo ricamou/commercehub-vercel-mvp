@@ -3485,6 +3485,7 @@ async def product_master_page(request: Request):
 <a class='btn' href='/product-master/sql'>SQL Sprint 18</a>
 <a class='btn' href='/api/product-master/status'>Status do módulo</a>
 <a class='btn' href='/api/images/backfill?limit=10'>Corrigir fotos importadas</a>
+<a class='btn' href='/discovery-center'>Discovery Center</a>
 </form>
 </div>
 <div class='card'>
@@ -8328,6 +8329,284 @@ async def images_backfill(limit: int = 10):
     }
 
 
+
+# ==========================================================
+# SPRINT 31 - PRODUCT DISCOVERY AUTO APPLY
+# Descobre dados no catálogo oficial do Mercado Livre e grava nos módulos
+# corretos: Product Master, Image Manager, Listing e atributos.
+# ==========================================================
+
+S31_MIN_AUTO_APPLY_CONFIDENCE = 85
+S31_MIN_GTIN_CONFIDENCE = 92
+
+
+def s31_clean_supplier_prefix(value):
+    text = str(value or "").strip()
+    return re.sub(r"^(HMX|HAYA|CH)[-_ ]?\d+\s*[-–:]?\s*", "", text, flags=re.I).strip()
+
+
+def s31_query_variants(product, context=None):
+    context = context or {}
+    attrs = {str(x.get("name") or "").lower(): str(x.get("value") or "") for x in context.get("attributes") or []}
+    brand = str(product.get("brand") or "").strip()
+    model = attrs.get("modelo") or attrs.get("model") or ""
+    name = s31_clean_supplier_prefix(product.get("name") or product.get("seo_name") or "")
+    sku = str(product.get("sku") or "").strip()
+    variants = []
+    for value in [
+        " ".join(x for x in [brand, model] if x),
+        " ".join(x for x in [brand, name] if x),
+        name,
+        " ".join(x for x in [name, model] if x),
+        sku if not sku.upper().startswith(("HMX-", "HAYA-")) else "",
+    ]:
+        value = " ".join(value.split())
+        if value and value.lower() not in {x.lower() for x in variants}:
+            variants.append(value)
+    return variants[:5]
+
+
+def s31_build_description(product, catalog_title, catalog_attrs):
+    lines = []
+    title = catalog_title or product.get("name") or "Produto"
+    lines.append(str(title).strip())
+    lines.append("")
+    lines.append("Produto novo, conforme as características técnicas abaixo.")
+    lines.append("")
+    preferred = ["BRAND", "MODEL", "COLOR", "DETAILED_MODEL", "CAPACITY", "MEMORY_CAPACITY", "LINE", "ALPHANUMERIC_MODEL"]
+    used = set()
+    specs = []
+    for aid in preferred + list(catalog_attrs.keys()):
+        if aid in used:
+            continue
+        used.add(aid)
+        row = catalog_attrs.get(aid) or {}
+        value = row.get("value_name") or row.get("value_id")
+        if value in (None, "") or aid in {"GTIN", "EMPTY_GTIN_REASON"}:
+            continue
+        label = aid.replace("_", " ").title()
+        specs.append(f"- {label}: {value}")
+        if len(specs) >= 14:
+            break
+    if specs:
+        lines.append("Características:")
+        lines.extend(specs)
+        lines.append("")
+    lines.append("Conteúdo da embalagem e compatibilidade devem ser conferidos de acordo com o modelo informado no anúncio.")
+    lines.append("Garantia legal de 90 dias contra defeitos de fabricação.")
+    return "\n".join(lines).strip()
+
+
+async def s31_find_best_catalog_match(product, context=None):
+    context = context or {}
+    variants = s31_query_variants(product, context)
+    all_candidates = []
+    seen = set()
+    for query in variants:
+        result = await s28_search_candidates(query, limit=20)
+        if not result.get("success"):
+            continue
+        for item in result.get("results") or []:
+            item_id = str(item.get("id") or "")
+            catalog_id = str(item.get("catalog_product_id") or "")
+            key = catalog_id or item_id
+            if not key or key in seen:
+                continue
+            seen.add(key)
+            title = str(item.get("title") or "")
+            score = max(s28_similarity(q, title) for q in variants) if variants else 0
+            strong_source = set().union(*(s28_strong_tokens(q) for q in variants)) if variants else set()
+            strong_title = s28_strong_tokens(title)
+            if strong_source and not (strong_source & strong_title):
+                score = max(0, score - 12)
+            all_candidates.append({
+                "item": item,
+                "item_id": item_id,
+                "catalog_product_id": catalog_id or None,
+                "title": title,
+                "confidence": round(score, 2),
+                "query": query,
+            })
+    all_candidates.sort(key=lambda x: (bool(x.get("catalog_product_id")), x.get("confidence", 0)), reverse=True)
+    catalog_candidates = [x for x in all_candidates if x.get("catalog_product_id")]
+    best = catalog_candidates[0] if catalog_candidates else None
+    return {"queries": variants, "best": best, "candidates": all_candidates[:10]}
+
+
+async def s31_apply_catalog_match(listing_id, match_result):
+    listing = await s19_get_listing(listing_id)
+    if not listing:
+        return {"success": False, "error": "Anúncio não encontrado."}
+    context = await s19_product_context(listing.get("product_id"))
+    if not context:
+        return {"success": False, "error": "Produto não encontrado."}
+    product = context.get("product") or {}
+    product_id = product.get("id")
+    best = match_result.get("best")
+    if not best or float(best.get("confidence") or 0) < S31_MIN_AUTO_APPLY_CONFIDENCE:
+        await s19_history(listing_id, product_id, "discovery_review_required", "Discovery não encontrou correspondência segura para aplicação automática.", payload=match_result)
+        return {
+            "success": True,
+            "status": "review_required",
+            "confidence": (best or {}).get("confidence", 0),
+            "candidates": match_result.get("candidates") or [],
+            "applied": [],
+            "unresolved": ["catalog_match"],
+        }
+
+    catalog_result = await s28_catalog_product(best.get("catalog_product_id"))
+    if not catalog_result.get("success"):
+        return {"success": False, "error": "Falha ao consultar o produto do catálogo oficial.", "details": catalog_result}
+    catalog = catalog_result.get("data") or {}
+    attrs = s28_attribute_map(catalog.get("attributes") or [])
+    catalog_title = catalog.get("name") or catalog.get("title") or best.get("title") or product.get("name")
+    category_id = str(catalog.get("category_id") or (best.get("item") or {}).get("category_id") or listing.get("category_id") or "")
+    confidence = max(float(best.get("confidence") or 0), s28_similarity(" ".join(s31_query_variants(product, context)), catalog_title))
+    applied, unresolved = [], []
+
+    product_patch = {}
+    brand = (attrs.get("BRAND") or {}).get("value_name")
+    model = (attrs.get("MODEL") or {}).get("value_name") or (attrs.get("ALPHANUMERIC_MODEL") or {}).get("value_name")
+    gtin = (attrs.get("GTIN") or {}).get("value_name")
+    if brand:
+        product_patch["brand"] = brand
+        applied.append({"field": "products.brand", "value": brand})
+    if gtin and s212_valid_gtin(gtin) and confidence >= S31_MIN_GTIN_CONFIDENCE:
+        product_patch["ean"] = s212_digits(gtin)
+        applied.append({"field": "products.ean", "value": s212_digits(gtin)})
+    elif not product.get("ean"):
+        unresolved.append("gtin")
+    if category_id:
+        product_patch["ml_category_id"] = category_id
+        applied.append({"field": "products.ml_category_id", "value": category_id})
+    if not str(product.get("description") or "").strip():
+        product_patch["description"] = s31_build_description(product, catalog_title, attrs)
+        applied.append({"field": "products.description", "value": "generated_from_catalog_data"})
+    if product_patch:
+        await store.update("products", "id=eq." + quote(str(product_id), safe="-"), product_patch)
+
+    if model:
+        await s28_upsert_product_attribute(product_id, "Modelo", model)
+        applied.append({"field": "product_attributes.Modelo", "value": model})
+
+    if category_id:
+        await s21_sync_category(category_id)
+        attrs_applied = await s28_apply_marketplace_attributes(product_id, category_id, attrs, confidence, best.get("catalog_product_id"))
+        applied.append({"field": "product_marketplace_attributes", "count": len(attrs_applied)})
+
+    picture_urls = s28_picture_urls(catalog)
+    stored_images = []
+    for pos, url in enumerate(picture_urls[:8]):
+        result = await s20_ensure_product_image(product_id, source_url=url, mirror_to_storage=True, source="discovery_auto_apply")
+        if result.get("success"):
+            stored_images.append(result.get("url") or result.get("public_url") or url)
+            if pos > 0:
+                await s28_add_catalog_image(product_id, result.get("url") or result.get("public_url") or url, pos)
+    if stored_images:
+        # s20_ensure_product_image atualiza a imagem principal a cada espelhamento;
+        # restaura explicitamente a primeira foto do catálogo como principal.
+        await store.update("products", "id=eq." + quote(str(product_id), safe="-"), {"primary_image_url": stored_images[0], "sync_status": "pending"})
+        await store.update("product_images", "product_id=eq." + quote(str(product_id), safe="-"), {"is_main": False})
+        await store.update("product_images", "product_id=eq." + quote(str(product_id), safe="-") + "&url=eq." + quote(str(stored_images[0]), safe="/:?=&%._-+"), {"is_main": True, "position": 0})
+        applied.append({"field": "product_images", "count": len(stored_images), "primary": stored_images[0]})
+    else:
+        unresolved.append("official_public_image")
+
+    listing_patch = {
+        "title": s27_compact_title(catalog_title),
+        "description": product_patch.get("description") or product.get("description") or s31_build_description(product, catalog_title, attrs),
+    }
+    if category_id:
+        listing_patch["category_id"] = category_id
+    await store.update("listings", "id=eq." + quote(str(listing_id), safe="-"), listing_patch)
+    applied.extend([
+        {"field": "listings.title", "value": listing_patch["title"]},
+        {"field": "listings.description", "value": "synchronized"},
+    ])
+
+    evidence = {
+        "source": "mercado_livre_catalog",
+        "catalog_product_id": best.get("catalog_product_id"),
+        "catalog_title": catalog_title,
+        "confidence": confidence,
+        "queries": match_result.get("queries") or [],
+    }
+    await s19_history(listing_id, product_id, "discovery_auto_applied", "Discovery encontrou e aplicou automaticamente os dados confirmados nos módulos corretos.", payload={"evidence": evidence, "applied": applied, "unresolved": unresolved})
+    return {"success": True, "status": "applied", "confidence": confidence, "evidence": evidence, "applied": applied, "unresolved": unresolved}
+
+
+async def s31_discover_and_apply_listing(listing_id):
+    listing = await s19_get_listing(listing_id)
+    if not listing:
+        return {"success": False, "status_code": 404, "error": "Anúncio não encontrado."}
+    context = await s19_product_context(listing.get("product_id"))
+    if not context:
+        return {"success": False, "status_code": 404, "error": "Produto não encontrado."}
+    product = context.get("product") or {}
+    matches = await s31_find_best_catalog_match(product, context)
+    applied = await s31_apply_catalog_match(listing_id, matches)
+    if not applied.get("success"):
+        return applied
+    correction = await s27_auto_correct_listing(listing_id)
+    return {
+        "success": True,
+        "version": "enterprise-v5-sprint31-product-discovery-auto-apply",
+        "listing_id": listing_id,
+        "product_id": product.get("id"),
+        "discovery": applied,
+        "correction": correction,
+        "ready_to_publish": bool((correction.get("publishing_lab") or {}).get("success")),
+    }
+
+
+@app.post("/api/discovery/listing/{listing_id}/auto-apply")
+async def discovery_auto_apply_api(listing_id: str):
+    result = await s31_discover_and_apply_listing(listing_id)
+    if not result.get("success"):
+        return JSONResponse(status_code=int(result.get("status_code") or 400), content=result)
+    return result
+
+
+@app.post("/discovery/listing/{listing_id}/auto-apply")
+async def discovery_auto_apply_page(listing_id: str):
+    result = await s31_discover_and_apply_listing(listing_id)
+    if not result.get("success"):
+        return JSONResponse(status_code=int(result.get("status_code") or 400), content=result)
+    return RedirectResponse(f"/publishing-lab/listing/{listing_id}", status_code=303)
+
+
+@app.get("/discovery-center", response_class=HTMLResponse)
+async def discovery_center_page():
+    products_result = await store.select("products", "select=*&company_id=eq." + quote(DEFAULT_COMPANY_ID, safe="-") + "&order=updated_at.desc&limit=100")
+    rows = ""
+    for product in products_result.get("data") or []:
+        listing = await s19_get_listing_by_product(product.get("id"))
+        if listing:
+            action = f"<form method='post' action='/discovery/listing/{listing.get('id')}/auto-apply'><button type='submit'>Descobrir e aplicar</button></form>"
+            listing_status = listing.get("status") or "draft"
+        else:
+            action = f"<form method='post' action='/workflow-engine/product/{product.get('id')}/run'><button type='submit'>Criar listing e processar</button></form>"
+            listing_status = "ausente"
+        rows += f"<tr><td>{s18_escape(product.get('sku'))}</td><td>{s18_escape(product.get('name'))}</td><td>{s18_escape(product.get('brand') or '-')}</td><td>{s18_escape(product.get('ean') or '-')}</td><td>{s18_escape(listing_status)}</td><td>{action}</td></tr>"
+    if not rows:
+        rows = "<tr><td colspan='6'>Nenhum produto encontrado.</td></tr>"
+    content = f"""
+<div class='grid'><div class='metric'><span>Produtos</span><strong>{len(products_result.get('data') or [])}</strong></div><div class='metric'><span>Auto Apply</span><strong>ATIVO</strong></div><div class='metric'><span>Fonte</span><strong>Catálogo ML</strong></div></div>
+<div class='card'><h2>Discovery Center</h2><p>Descobre dados confirmados e preenche automaticamente Product Master, imagens, atributos e Listing.</p><form method='post' action='/discovery-center/run'><label>Quantidade</label><input name='limit' value='5' style='max-width:120px'><button type='submit'>Descobrir e aplicar em lote</button></form></div>
+<div class='card'><table><thead><tr><th>SKU</th><th>Produto</th><th>Marca</th><th>GTIN</th><th>Listing</th><th>Ação</th></tr></thead><tbody>{rows}</tbody></table></div>
+"""
+    return HTMLResponse(shell("Discovery Center", content))
+
+
+@app.post("/discovery-center/run")
+async def discovery_center_run(request: Request):
+    form = await request.form()
+    limit = max(1, min(s19int(form.get("limit"), 5), 30))
+    products_result = await store.select("products", "select=id&company_id=eq." + quote(DEFAULT_COMPANY_ID, safe="-") + f"&order=updated_at.asc&limit={limit}")
+    for row in products_result.get("data") or []:
+        await s29_process_product(row.get("id"))
+    return RedirectResponse("/discovery-center", status_code=303)
+
 # ==========================================================
 # SPRINT 29 - WORKFLOW ENGINE
 # Orquestra Product Master -> Listing -> Auto Correction -> Publishing Lab.
@@ -8432,7 +8711,7 @@ async def s29_process_product(product_id):
             None, listing.get("status") or "draft", image_resolution,
         )
 
-    enrichment = await s28_enrich_listing(listing_id)
+    enrichment = await s31_discover_and_apply_listing(listing_id)
     # Falha de correspondência não interrompe o pipeline: a auditoria final mostra
     # exatamente o que ainda precisa de revisão. Falhas técnicas são registradas.
     if not enrichment.get("success"):
@@ -8671,7 +8950,7 @@ async def publishing_lab_page(listing_id: str):
 <div class='card'><h2>Bloqueios</h2><ul>{blockers}</ul><h2>Alertas</h2><ul>{warnings}</ul></div>
 <div class='card'><h2>Comparador</h2><p><b>Enviados:</b> {s19e(', '.join(cmp.get('sent_attribute_ids') or []))}</p><p><b>Condicionais faltando:</b> {s19e(', '.join(cmp.get('missing_conditional_ids') or []))}</p><p><b>Desconhecidos:</b> {s19e(', '.join(cmp.get('unknown_attribute_ids') or []))}</p></div>
 <div class='card'><h2>Estrutura</h2><p><b>Item:</b> {len(disc.get('item_attributes') or [])}</p><p><b>Variação:</b> {len(disc.get('variation_attributes') or [])}</p><p><b>Obrigatórios:</b> {len(disc.get('required_attributes') or [])}</p></div>
-<div class='card'><form method='post' action='/enrichment-resolver/listing/{listing_id}' style='display:inline'><button class='btn' type='submit'>Enriquecer e corrigir automaticamente</button></form><form method='post' action='/auto-correction/listing/{listing_id}' style='display:inline'><button class='btn' type='submit'>Somente corrigir</button></form><a class='btn' href='/api/publishing-lab/listing/{listing_id}'>Relatório JSON</a><a class='btn' href='/product-master/{listing.get('product_id')}/listing'>Voltar ao anúncio</a></div>
+<div class='card'><form method='post' action='/discovery/listing/{listing_id}/auto-apply' style='display:inline'><button class='btn' type='submit'>Descobrir, preencher e corrigir</button></form><form method='post' action='/auto-correction/listing/{listing_id}' style='display:inline'><button class='btn' type='submit'>Somente corrigir</button></form><a class='btn' href='/api/publishing-lab/listing/{listing_id}'>Relatório JSON</a><a class='btn' href='/product-master/{listing.get('product_id')}/listing'>Voltar ao anúncio</a></div>
 """
     return HTMLResponse(shell("Publishing Lab",content))
 
