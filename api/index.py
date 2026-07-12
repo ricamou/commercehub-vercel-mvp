@@ -19307,3 +19307,283 @@ async def product_enrichment_page():
 <div class='card'><table><thead><tr><th>SKU</th><th>Produto</th><th>Marca</th><th>GTIN</th><th>Score</th><th>Status</th><th>Ações</th></tr></thead><tbody>{''.join(rows) or '<tr><td colspan="7">Carregue o lote Hayamax primeiro.</td></tr>'}</tbody></table></div>
 """
     return HTMLResponse(shell("Enriquecimento de Produtos", content))
+
+# ==========================================================
+# SPRINT 49 - ONE CLICK MERCADO LIVRE PUBLICATION CENTER
+# Enriquecer -> completar requisitos -> criar anúncio -> validar -> publicar.
+# ==========================================================
+
+
+def s49_catalog_attribute_map(catalog):
+    output = {}
+    for attr in (catalog or {}).get("attributes") or []:
+        aid = str(attr.get("id") or "").upper().strip()
+        if not aid:
+            continue
+        value_name = s48_attr_value(attr)
+        values = attr.get("values") or []
+        value_id = None
+        if values and isinstance(values[0], dict):
+            value_id = values[0].get("id")
+        output[aid] = {
+            "value_id": value_id,
+            "value_name": value_name or None,
+            "raw": attr,
+        }
+    return output
+
+
+def s49_description(product, catalog):
+    name = str(product.get("name") or catalog.get("name") or "Produto").strip()
+    brand = str(product.get("brand") or catalog.get("brand") or "").strip()
+    model = str(product.get("model") or catalog.get("model") or "").strip()
+    lines = [name, "", "Produto novo e original."]
+    if brand:
+        lines.append(f"Marca: {brand}")
+    if model:
+        lines.append(f"Modelo: {model}")
+    attrs = []
+    ignored = {"GTIN", "EAN", "BRAND", "MODEL", "ALPHANUMERIC_MODEL"}
+    for attr in catalog.get("attributes") or []:
+        aid = s48_attr_id(attr)
+        value = s48_attr_value(attr)
+        label = str(attr.get("name") or aid).strip()
+        if aid in ignored or not value:
+            continue
+        attrs.append(f"- {label}: {value}")
+    if attrs:
+        lines.extend(["", "Características:", *attrs[:35]])
+    lines.extend([
+        "",
+        "Conteúdo da embalagem: conforme especificação do fabricante.",
+        "Garantia: garantia legal de 90 dias, sem prejuízo de eventual garantia adicional do fabricante.",
+        "Antes da compra, confira se o modelo e as características atendem à sua necessidade.",
+    ])
+    return "\n".join(lines)[:50000]
+
+
+async def s49_save_marketplace_attributes(product_id, category_id, catalog, requirements):
+    catalog_map = s49_catalog_attribute_map(catalog)
+    product = await s44_product_by_id(product_id) or {}
+    product_attrs = await s48_existing_product_attributes(product_id)
+    generic = {str(x.get("name") or "").upper(): str(x.get("value") or "").strip() for x in product_attrs}
+    saved = 0
+    missing = []
+
+    all_requirements = requirements.get("attributes") or []
+    for req in all_requirements:
+        aid = str(req.get("id") or "").upper().strip()
+        if not aid:
+            continue
+        tags = req.get("tags") or {}
+        required = bool(tags.get("required") or tags.get("catalog_required") or tags.get("catalog_listing_required") or tags.get("grid_template_required"))
+        candidate = catalog_map.get(aid) or {}
+        value_name = candidate.get("value_name")
+        value_id = candidate.get("value_id")
+
+        if aid == "GTIN" and product.get("ean"):
+            value_name = str(product.get("ean"))
+        elif aid == "BRAND" and product.get("brand"):
+            value_name = str(product.get("brand"))
+        elif aid in {"MODEL", "ALPHANUMERIC_MODEL"} and product.get("model"):
+            value_name = str(product.get("model"))
+        elif not value_name and generic.get(aid):
+            value_name = generic.get(aid)
+
+        if value_name or value_id:
+            payload = {
+                "company_id": DEFAULT_COMPANY_ID,
+                "product_id": product_id,
+                "marketplace": "mercado_livre",
+                "category_id": category_id,
+                "attribute_id": aid,
+                "value_name": value_name,
+                "value_id": value_id,
+                "source": "mercado_livre_catalog_verified",
+                "confidence": 100,
+                "status": "active",
+                "raw_data": candidate.get("raw") or req,
+            }
+            result = await store.upsert("product_marketplace_attributes", payload, "product_id,marketplace,attribute_id")
+            if result.get("success"):
+                saved += 1
+        elif required:
+            missing.append({"id": aid, "name": req.get("name"), "value_type": req.get("value_type")})
+
+    return {"saved": saved, "missing": missing}
+
+
+async def s49_create_or_update_listing(product_id, category_id, catalog):
+    context = await s19_product_context(product_id)
+    if not context:
+        return {"success": False, "error": "Produto não encontrado."}
+    product = context.get("product") or {}
+    inventory = context.get("inventory") or {}
+    current = await s19_get_listing_by_product(product_id) or {}
+    listing_id = current.get("id") or str(uuid.uuid4())
+    title = str(catalog.get("name") or product.get("seo_name") or product.get("name") or "").strip()[:60]
+    description = str(product.get("description") or "").strip() or s49_description(product, catalog)
+    price = s19float(product.get("sale_price"), 0)
+    quantity = s19int(inventory.get("available"), 0)
+    payload = {
+        "id": listing_id,
+        "company_id": DEFAULT_COMPANY_ID,
+        "product_id": product_id,
+        "marketplace": "mercado_livre",
+        "external_id": current.get("external_id"),
+        "title": title,
+        "description": description,
+        "category_id": category_id,
+        "price": price,
+        "available_quantity": quantity,
+        "listing_type_id": current.get("listing_type_id") or "gold_special",
+        "condition": "new",
+        "currency_id": "BRL",
+        "buying_mode": "buy_it_now",
+        "warranty": current.get("warranty") or "Garantia legal: 90 dias",
+        "status": current.get("status") if current.get("external_id") else "draft",
+        "validation_status": "pending",
+        "payload": current.get("payload") or {},
+    }
+    saved = await store.upsert("listings", payload, "company_id,product_id,marketplace")
+    if not saved.get("success"):
+        return {"success": False, "error": saved.get("error") or saved.get("raw")}
+    await store.update("products", "id=eq." + quote(str(product_id), safe="-"), {
+        "ml_category_id": category_id,
+        "description": description,
+        "internal_status": "ready",
+        "sync_status": "pending",
+    })
+    return {"success": True, "listing_id": listing_id, "description": description}
+
+
+async def s49_prepare_product(product_id, supplier_sku=None, minimum_score=72):
+    enriched = await s48_enrich_product(product_id, supplier_sku, minimum_score)
+    if not enriched.get("success"):
+        return enriched
+    catalog = ((enriched.get("catalog") or {}).get("best") or {})
+    if not (enriched.get("catalog") or {}).get("verified_match"):
+        return {
+            "success": False,
+            "status_code": 422,
+            "error": "Nenhuma correspondência segura no catálogo do Mercado Livre.",
+            "enrichment": enriched,
+        }
+    category_id = enriched.get("category_id")
+    requirements = await s48_category_requirements(category_id)
+    mapped = await s49_save_marketplace_attributes(product_id, category_id, catalog, requirements)
+    listing_result = await s49_create_or_update_listing(product_id, category_id, catalog)
+    if not listing_result.get("success"):
+        return listing_result
+    listing_id = listing_result.get("listing_id")
+    try:
+        await s21_sync_category(category_id)
+        await s21_prepare(product_id, category_id)
+    except Exception:
+        pass
+    readiness = await s30_build_readiness(listing_id)
+    return {
+        "success": True,
+        "product_id": product_id,
+        "listing_id": listing_id,
+        "category_id": category_id,
+        "catalog_product_id": catalog.get("catalog_product_id"),
+        "match_score": catalog.get("match_score"),
+        "attributes_saved": mapped.get("saved"),
+        "attributes_missing": mapped.get("missing"),
+        "readiness": readiness,
+        "ready_to_publish": readiness.get("status") == "ready",
+        "next": f"/publication-center/listing/{listing_id}",
+    }
+
+
+@app.post("/api/publication-center/product/{product_id}/prepare")
+async def s49_prepare_product_api(product_id: str, request: Request):
+    form = await request.form()
+    sku = str(form.get("supplier_sku") or "").strip() or None
+    score = float(form.get("minimum_score") or 72)
+    result = await s49_prepare_product(product_id, sku, score)
+    if result.get("success"):
+        return RedirectResponse(result.get("next") or "/publication-center", status_code=303)
+    return JSONResponse(status_code=int(result.get("status_code") or 422), content=result)
+
+
+@app.post("/api/publication-center/listing/{listing_id}/publish")
+async def s49_publish_listing_api(listing_id: str):
+    result = await s38_publish_one(listing_id)
+    if result.get("status") != "published":
+        return JSONResponse(status_code=422, content={"success": False, **result})
+    item = result.get("item") or {}
+    external_id = item.get("id")
+    listing = await s19_get_listing(listing_id) or {}
+    description_result = None
+    if external_id and listing.get("description"):
+        description_result = await ml_request(
+            f"/items/{quote(str(external_id), safe='-_')}/description",
+            method="POST",
+            payload={"plain_text": str(listing.get("description"))},
+        )
+    return {
+        "success": True,
+        "message": "Produto publicado no Mercado Livre.",
+        "item": item,
+        "description": description_result,
+        "permalink": item.get("permalink"),
+    }
+
+
+@app.get("/publication-center/listing/{listing_id}", response_class=HTMLResponse)
+async def s49_listing_page(listing_id: str):
+    listing = await s19_get_listing(listing_id)
+    if not listing:
+        return HTMLResponse(shell("Publicação", "<div class='card'><h2>Anúncio não encontrado.</h2></div>"), status_code=404)
+    readiness = await s30_build_readiness(listing_id)
+    missing = readiness.get("missing_fields") or []
+    invalid = readiness.get("invalid_fields") or []
+    ready = readiness.get("status") == "ready"
+    rows = "".join(f"<li>{s19e(x.get('name') or x.get('field'))}</li>" for x in missing + invalid) or "<li>Nenhuma pendência.</li>"
+    button = (
+        f"<form method='post' action='/api/publication-center/listing/{listing_id}/publish'><button class='btn' type='submit'>Publicar agora no Mercado Livre</button></form>"
+        if ready else
+        f"<a class='btn' href='/product-master/{listing.get('product_id')}/listing'>Revisar dados restantes</a>"
+    )
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Prontidão</span><strong>{readiness.get('readiness_score') or 0}%</strong></div>
+  <div class='metric'><span>Status</span><strong>{'PRONTO' if ready else 'BLOQUEADO'}</strong></div>
+  <div class='metric'><span>Categoria</span><strong>{s19e(listing.get('category_id'))}</strong></div>
+  <div class='metric'><span>Preço</span><strong>R$ {s19e(listing.get('price'))}</strong></div>
+</div>
+<div class='card'><h2>{s19e(listing.get('title'))}</h2><p>O botão de publicação somente é liberado quando a validação oficial não encontra pendências.</p><h3>Pendências</h3><ul>{rows}</ul>{button}</div>
+<div class='card'><a class='btn' href='/publication-center'>Voltar ao lote</a><a class='btn' href='/api/unified-payload/listing/{listing_id}'>Ver payload final</a></div>
+"""
+    return HTMLResponse(shell("Publicação Mercado Livre", content))
+
+
+@app.get("/publication-center", response_class=HTMLResponse)
+async def s49_publication_center():
+    offers = await s44_supplier_products(100)
+    rows = []
+    for offer in offers:
+        product = await s44_product_by_id(offer.get("product_id")) or {}
+        listing = await s19_get_listing_by_product(product.get("id")) or {}
+        status = "Não preparado"
+        action = (
+            f"<form method='post' action='/api/publication-center/product/{product.get('id')}/prepare' style='display:inline'>"
+            f"<input type='hidden' name='supplier_sku' value='{s19e(offer.get('sku'))}'><input type='hidden' name='minimum_score' value='72'>"
+            "<button class='btn' type='submit'>Preparar automaticamente</button></form>"
+        )
+        if listing.get("id"):
+            readiness = await s30_build_readiness(listing.get("id"))
+            status = "Pronto para publicar" if readiness.get("status") == "ready" else f"{readiness.get('readiness_score') or 0}% completo"
+            action = f"<a class='btn' href='/publication-center/listing/{listing.get('id')}'>Abrir publicação</a>"
+        rows.append(
+            "<tr>"
+            f"<td>{s19e(offer.get('sku'))}</td><td>{s19e(product.get('name'))}</td><td>{s19e(product.get('brand'))}</td>"
+            f"<td>{s19e(product.get('ean') or '-')}</td><td>{s19e(status)}</td><td>{action}</td></tr>"
+        )
+    content = f"""
+<div class='card'><h2>Central de Publicação Mercado Livre</h2><p>Use <b>Preparar automaticamente</b>. O CommerceHub consulta o catálogo e a categoria, completa os atributos confirmados, cria o anúncio e libera o botão <b>Publicar</b> quando a prontidão chegar a 100%.</p><p><b>Atenção comercial:</b> confirme que preço e estoque exibidos são valores que você aceita praticar antes de publicar.</p></div>
+<div class='card'><table><thead><tr><th>SKU</th><th>Produto</th><th>Marca</th><th>GTIN</th><th>Status</th><th>Ação</th></tr></thead><tbody>{''.join(rows) or '<tr><td colspan="6">Nenhum produto carregado.</td></tr>'}</tbody></table></div>
+"""
+    return HTMLResponse(shell("Central de Publicação", content))
