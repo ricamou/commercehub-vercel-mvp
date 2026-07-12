@@ -1828,7 +1828,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v6-sprint47-2-technical-review"
+S13_VERSION = "enterprise-v6-sprint47-3-database-finalization"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -17883,3 +17883,171 @@ async def s472_full_health():
         "mercado_livre": mercado_livre,
         "duration_ms": round((time.time() - started) * 1000, 2),
     }
+
+
+# ==========================================================
+# SPRINT 47.3 - DATABASE FINALIZATION
+# ==========================================================
+
+async def s473_finalize_order(external_order_id):
+    order_row = await s40_find_order_by_external_id(external_order_id)
+    if not order_row:
+        return {"success": False, "status_code": 404, "error": "Pedido não encontrado."}
+
+    fulfillment = await s45_find_fulfillment_order(external_order_id)
+    items = await s40_order_items(order_row.get("id"))
+    results = []
+
+    for item in items:
+        repaired = await s471_repair_item(order_row, fulfillment, item)
+        if not repaired.get("resolved"):
+            results.append({"success": False, "repair": repaired})
+            continue
+
+        listing = await s47_find_listing_by_external_item(item.get("external_item_id"))
+        product = await s44_product_by_id(repaired.get("product_id"))
+        supplier = await s47_find_supplier(repaired.get("supplier_id"))
+
+        item_update = await store.update(
+            "marketplace_order_items",
+            "id=eq." + quote(str(item.get("id")), safe="-"),
+            {
+                "listing_id": listing.get("id"),
+                "product_id": product.get("id"),
+                "supplier": supplier.get("name"),
+                "supplier_sku": repaired.get("supplier_sku"),
+            },
+        )
+
+        fulfillment_update = {"success": True}
+        if fulfillment:
+            fulfillment_update = await store.update(
+                "fulfillment_orders",
+                "id=eq." + quote(str(fulfillment.get("id")), safe="-"),
+                {
+                    "supplier_id": supplier.get("id"),
+                    "supplier_name": supplier.get("name"),
+                    "routing_status": (
+                        "blocked"
+                        if s47_lower(fulfillment.get("status")) in S47_CANCEL_STATES
+                        else "resolved"
+                    ),
+                    "last_error": None,
+                },
+            )
+
+        refreshed_item_result = await store.select(
+            "marketplace_order_items",
+            "select=*&id=eq." + quote(str(item.get("id")), safe="-") + "&limit=1",
+        )
+        refreshed_item_rows = refreshed_item_result.get("data") or []
+        refreshed_item = refreshed_item_rows[0] if refreshed_item_rows else {}
+
+        refreshed_fulfillment = {}
+        if fulfillment:
+            refreshed_fulfillment_result = await store.select(
+                "fulfillment_orders",
+                "select=*&id=eq." + quote(str(fulfillment.get("id")), safe="-") + "&limit=1",
+            )
+            refreshed_fulfillment_rows = refreshed_fulfillment_result.get("data") or []
+            refreshed_fulfillment = (
+                refreshed_fulfillment_rows[0] if refreshed_fulfillment_rows else {}
+            )
+
+        persisted = bool(
+            refreshed_item.get("listing_id")
+            and refreshed_item.get("product_id")
+            and refreshed_item.get("supplier")
+            and (
+                not fulfillment
+                or (
+                    refreshed_fulfillment.get("supplier_id")
+                    and refreshed_fulfillment.get("supplier_name")
+                )
+            )
+        )
+
+        await store.insert(
+            "order_routing_attempts",
+            {
+                "company_id": DEFAULT_COMPANY_ID,
+                "marketplace_order_id": order_row.get("id"),
+                "fulfillment_order_id": fulfillment.get("id") if fulfillment else None,
+                "external_order_id": external_order_id,
+                "external_item_id": item.get("external_item_id"),
+                "listing_id": listing.get("id"),
+                "product_id": product.get("id"),
+                "supplier_id": supplier.get("id"),
+                "supplier_name": supplier.get("name"),
+                "supplier_sku": repaired.get("supplier_sku"),
+                "strategy": repaired.get("strategy") or "data_repair_persist",
+                "status": "persisted" if persisted else "persistence_failed",
+                "details": {
+                    "item_update": item_update,
+                    "fulfillment_update": fulfillment_update,
+                    "refreshed_item": refreshed_item,
+                    "refreshed_fulfillment": refreshed_fulfillment,
+                },
+            },
+        )
+
+        results.append({
+            "success": persisted,
+            "repair": repaired,
+            "item": refreshed_item,
+            "fulfillment": refreshed_fulfillment,
+        })
+
+    state = await s47_apply_unified_state(order_row)
+    return {
+        "success": bool(results) and all(x.get("success") for x in results),
+        "version": APP_VERSION,
+        "external_order_id": external_order_id,
+        "items": results,
+        "state": state,
+    }
+
+
+@app.api_route("/api/database-finalization/run", methods=["GET", "POST"])
+async def s473_run(limit: int = 100):
+    sync = await s40_sync_recent_orders(limit)
+    if not sync.get("success"):
+        return JSONResponse(status_code=int(sync.get("status_code") or 400), content=sync)
+
+    orders = await s40_recent_orders(limit)
+    results = []
+    for summary in orders:
+        external_order_id = str(summary.get("external_order_id"))
+        try:
+            results.append(await s473_finalize_order(external_order_id))
+        except Exception as exc:
+            results.append({
+                "success": False,
+                "external_order_id": external_order_id,
+                "error": exc.__class__.__name__,
+                "message": str(exc),
+            })
+
+    return {
+        "success": all(x.get("success") for x in results) if results else True,
+        "version": APP_VERSION,
+        "processed": len(results),
+        "persisted": sum(1 for x in results if x.get("success")),
+        "failed": sum(1 for x in results if not x.get("success")),
+        "results": results,
+    }
+
+
+@app.get("/database-finalization", response_class=HTMLResponse)
+async def s473_page():
+    content = """
+<div class='card'>
+<h2>Database Finalization</h2>
+<p>Cria auditoria e persiste Listing, Product e Supplier nos pedidos e no Fulfillment.</p>
+<form method='post' action='/api/database-finalization/run?limit=100'>
+<button class='btn' type='submit'>Persistir vínculos no banco</button>
+</form>
+<a class='btn' href='/api/health/full'>Health Check completo</a>
+</div>
+"""
+    return HTMLResponse(shell("Database Finalization", content))
