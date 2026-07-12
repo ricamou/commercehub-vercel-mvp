@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v6-sprint45-order-fulfillment-engine"
+S13_VERSION = "enterprise-v6-sprint45-2-controlled-publication"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -14548,6 +14548,7 @@ async def supplier_hub_page():
 <p>Esta camada foi adicionada ao CommerceHub atual. O fluxo do Mercado Livre continua funcionando.</p>
 <a class='btn' href='/api/supplier-hub'>Ver JSON técnico</a>
 <a class='btn' href='/supplier-hub/hayamax'>Abrir Hayamax</a>
+<a class='btn' href='/controlled-publication'>Publicação controlada</a>
 </div>
 
 <div class='card'>
@@ -15565,3 +15566,412 @@ async def fulfillment_center_detail_page(fulfillment_order_id: str):
 </div>
 """
     return HTMLResponse(shell(f"Fulfillment {order.get('external_order_id')}", content))
+
+
+# ==========================================================
+# SPRINT 45.2 - CONTROLLED PUBLICATION
+# Seleciona o produto real mais barato da Hayamax e o prepara
+# para uma compra controlada no Mercado Livre.
+# ==========================================================
+
+async def s452_cheapest_candidate():
+    result = await store.select(
+        "supplier_publication_candidates",
+        "select=*&supplier_id=eq."
+        + quote(str(S17_HAYAMAX_SUPPLIER_ID), safe="-")
+        + "&marketplace=eq.mercado_livre"
+        + "&readiness_status=eq.ready"
+        + "&stock=gt.0"
+        + "&final_price=gt.0"
+        + "&order=final_price.asc"
+        + "&limit=1",
+    )
+    rows = result.get("data") or []
+    return rows[0] if rows else {}
+
+
+async def s452_supplier_assets(product_id, supplier_sku):
+    result = await store.select(
+        "supplier_product_assets",
+        "select=*&product_id=eq."
+        + quote(str(product_id), safe="-")
+        + "&supplier_sku=eq."
+        + quote(str(supplier_sku), safe="-_ ")
+        + "&active=eq.true"
+        + "&order=position.asc",
+    )
+    return result.get("data") or []
+
+
+async def s452_supplier_attributes(product_id, supplier_sku):
+    result = await store.select(
+        "supplier_attribute_values",
+        "select=*&product_id=eq."
+        + quote(str(product_id), safe="-")
+        + "&supplier_sku=eq."
+        + quote(str(supplier_sku), safe="-_ ")
+        + "&order=attribute_key.asc",
+    )
+    return result.get("data") or []
+
+
+async def s452_copy_assets_to_product_master(product_id, supplier_sku):
+    assets = await s452_supplier_assets(product_id, supplier_sku)
+    existing_result = await store.select(
+        "product_images",
+        "select=*&product_id=eq."
+        + quote(str(product_id), safe="-"),
+    )
+    existing = existing_result.get("data") or []
+    existing_urls = {
+        str(row.get("url") or "").split("?")[0].lower()
+        for row in existing
+        if row.get("url")
+    }
+
+    added = 0
+    for position, asset in enumerate(assets[:12]):
+        url = str(asset.get("source_url") or "").strip()
+        key = url.split("?")[0].lower()
+        if not url or key in existing_urls:
+            continue
+
+        payload = {
+            "company_id": DEFAULT_COMPANY_ID,
+            "product_id": product_id,
+            "url": url,
+            "position": position,
+            "is_main": position == 0 and not existing,
+            "alt_text": "Imagem do produto fornecida pela Hayamax",
+            "source": "hayamax_supplier_hub",
+            "hash": hashlib.sha256(url.encode("utf-8")).hexdigest(),
+        }
+        saved = await store.insert("product_images", payload)
+        if saved.get("success"):
+            existing_urls.add(key)
+            added += 1
+
+    if assets:
+        primary_url = assets[0].get("source_url")
+        if primary_url:
+            await store.update(
+                "products",
+                "id=eq." + quote(str(product_id), safe="-"),
+                {
+                    "primary_image_url": primary_url,
+                    "sync_status": "pending",
+                },
+            )
+
+    return {
+        "available": len(assets),
+        "added": added,
+    }
+
+
+async def s452_copy_attributes_to_product_master(product_id, supplier_sku):
+    attributes = await s452_supplier_attributes(product_id, supplier_sku)
+    added = 0
+
+    for row in attributes[:150]:
+        name = str(row.get("attribute_key") or "").strip()
+        value = str(row.get("attribute_value") or "").strip()
+        if not name or not value:
+            continue
+
+        saved = await store.upsert(
+            "product_attributes",
+            {
+                "company_id": DEFAULT_COMPANY_ID,
+                "product_id": product_id,
+                "name": name,
+                "value": value,
+                "unit": None,
+                "is_required": False,
+                "source": "hayamax_supplier_hub",
+            },
+            "product_id,name",
+        )
+        if saved.get("success"):
+            added += 1
+
+    return {
+        "available": len(attributes),
+        "saved": added,
+    }
+
+
+async def s452_predict_category(product):
+    current = product.get("ml_category_id")
+    if current:
+        return current, {"source": "product_master"}
+
+    query = (
+        product.get("seo_name")
+        or product.get("name")
+        or product.get("title")
+        or ""
+    )
+    if not query:
+        return None, {"source": "none", "error": "Produto sem nome."}
+
+    result = await ml_request(
+        "/sites/MLB/domain_discovery/search",
+        params={"q": str(query).strip(), "limit": 8},
+    )
+    data = result.get("data") or []
+    if not result.get("success") or not isinstance(data, list) or not data:
+        return None, {
+            "source": "mercado_livre",
+            "error": result.get("error") or "Categoria não encontrada.",
+            "result": result,
+        }
+
+    first = data[0] if isinstance(data[0], dict) else {}
+    category_id = first.get("category_id")
+    return category_id, {
+        "source": "mercado_livre",
+        "prediction": first,
+        "alternatives": data[:8],
+    }
+
+
+def s452_description(product, supplier_sku):
+    description = (
+        product.get("description")
+        or product.get("long_description")
+        or product.get("short_description")
+    )
+    if description:
+        return str(description).strip()
+
+    name = product.get("name") or "Produto"
+    brand = product.get("brand") or "Consulte a embalagem"
+    model = product.get("model") or name
+
+    return (
+        f"{name}\n\n"
+        "Produto novo, original e enviado conforme disponibilidade do fornecedor.\n\n"
+        "CARACTERÍSTICAS PRINCIPAIS\n"
+        f"- Marca: {brand}\n"
+        f"- Modelo: {model}\n"
+        f"- SKU do fornecedor: {supplier_sku}\n"
+        "- Condição: Novo\n\n"
+        "CONTEÚDO DA EMBALAGEM\n"
+        f"- 1 {name}\n\n"
+        "INFORMAÇÕES IMPORTANTES\n"
+        "- Confira a compatibilidade e as especificações antes da compra.\n"
+        "- As imagens são ilustrativas e podem variar conforme o lote do fabricante."
+    )
+
+
+async def s452_prepare_cheapest_listing():
+    candidate = await s452_cheapest_candidate()
+    if not candidate:
+        return {
+            "success": False,
+            "status_code": 404,
+            "error": (
+                "Nenhum produto Hayamax pronto, com estoque e preço, foi encontrado. "
+                "Execute primeiro Preparar produtos Hayamax."
+            ),
+        }
+
+    product_id = candidate.get("product_id")
+    supplier_sku = candidate.get("supplier_sku")
+    product = await s44_product_by_id(product_id)
+
+    if not product:
+        return {
+            "success": False,
+            "status_code": 404,
+            "error": "Produto vinculado ao candidato não foi encontrado.",
+        }
+
+    images = await s452_copy_assets_to_product_master(product_id, supplier_sku)
+    attributes = await s452_copy_attributes_to_product_master(product_id, supplier_sku)
+    category_id, category_details = await s452_predict_category(product)
+
+    if not category_id:
+        return {
+            "success": False,
+            "status_code": 422,
+            "error": "Não foi possível identificar a categoria do Mercado Livre.",
+            "candidate": candidate,
+            "product": product,
+            "category_details": category_details,
+        }
+
+    current = await s19_get_listing_by_product(product_id) or {}
+    listing_id = current.get("id") or str(uuid.uuid4())
+    title = s42_clean_title(
+        product.get("seo_name")
+        or product.get("name")
+        or "Produto"
+    )
+    final_price = float(candidate.get("final_price") or 0)
+    stock = max(1, min(int(candidate.get("stock") or 1), 1))
+
+    listing_payload = {
+        "id": listing_id,
+        "company_id": DEFAULT_COMPANY_ID,
+        "product_id": product_id,
+        "marketplace": "mercado_livre",
+        "external_id": current.get("external_id"),
+        "title": title,
+        "description": s452_description(product, supplier_sku),
+        "category_id": category_id,
+        "price": final_price,
+        "available_quantity": stock,
+        "listing_type_id": "gold_special",
+        "condition": "new",
+        "currency_id": "BRL",
+        "buying_mode": "buy_it_now",
+        "warranty": current.get("warranty") or "Garantia do vendedor: 30 dias",
+        "status": current.get("status") if current.get("external_id") else "draft",
+        "validation_status": "pending",
+        "payload": current.get("payload") or {},
+    }
+
+    saved = await store.upsert(
+        "listings",
+        listing_payload,
+        "company_id,product_id,marketplace",
+    )
+    if not saved.get("success"):
+        return {
+            "success": False,
+            "status_code": 400,
+            "error": saved.get("error") or saved.get("raw"),
+            "listing_payload": listing_payload,
+        }
+
+    await store.update(
+        "products",
+        "id=eq." + quote(str(product_id), safe="-"),
+        {
+            "ml_category_id": category_id,
+            "sale_price": final_price,
+            "sync_status": "pending",
+        },
+    )
+
+    readiness = await s30_build_readiness(listing_id)
+    unified = await s34_listing_payload(listing_id)
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "candidate": candidate,
+        "product": product,
+        "listing": listing_payload,
+        "images": images,
+        "attributes": attributes,
+        "category_details": category_details,
+        "readiness": readiness,
+        "unified_payload": unified,
+        "can_publish": readiness.get("status") == "ready",
+    }
+
+
+async def s452_publish_cheapest_listing():
+    preparation = await s452_prepare_cheapest_listing()
+    if not preparation.get("success"):
+        return preparation
+
+    listing = preparation.get("listing") or {}
+    listing_id = listing.get("id")
+
+    if not preparation.get("can_publish"):
+        return {
+            **preparation,
+            "success": False,
+            "status_code": 422,
+            "error": "O produto foi preparado, mas ainda possui pendências.",
+        }
+
+    result = await s38_publish_one(listing_id)
+
+    return {
+        "success": result.get("status") == "published",
+        "version": APP_VERSION,
+        "preparation": preparation,
+        "publication": result,
+        "message": (
+            "Produto real mais barato publicado com sucesso."
+            if result.get("status") == "published"
+            else "O Mercado Livre não aceitou a publicação."
+        ),
+    }
+
+
+@app.post("/api/controlled-publication/prepare")
+async def controlled_publication_prepare():
+    result = await s452_prepare_cheapest_listing()
+    return JSONResponse(
+        status_code=200 if result.get("success") else int(result.get("status_code") or 400),
+        content=result,
+    )
+
+
+@app.post("/api/controlled-publication/publish")
+async def controlled_publication_publish():
+    result = await s452_publish_cheapest_listing()
+    return JSONResponse(
+        status_code=200 if result.get("success") else int(result.get("status_code") or 400),
+        content=result,
+    )
+
+
+@app.get("/controlled-publication", response_class=HTMLResponse)
+async def controlled_publication_page():
+    candidate = await s452_cheapest_candidate()
+
+    if candidate:
+        product = await s44_product_by_id(candidate.get("product_id"))
+        candidate_html = f"""
+<div class='grid'>
+  <div class='metric'><span>Produto</span><strong>{product.get('name') or '-'}</strong></div>
+  <div class='metric'><span>Custo</span><strong>R$ {float(candidate.get('cost_price') or 0):.2f}</strong></div>
+  <div class='metric'><span>Preço +8%</span><strong>R$ {float(candidate.get('final_price') or 0):.2f}</strong></div>
+  <div class='metric'><span>Estoque do fornecedor</span><strong>{candidate.get('stock') or 0}</strong></div>
+</div>
+<div class='card'>
+<p><b>SKU:</b> {candidate.get('supplier_sku')}</p>
+<p><b>Score atual:</b> {candidate.get('readiness_score')}%</p>
+<p><b>Fotos encontradas:</b> {candidate.get('images_count')}</p>
+<p><b>Atributos encontrados:</b> {candidate.get('attributes_count')}</p>
+</div>
+"""
+    else:
+        candidate_html = """
+<div class='card'>
+<h2>Nenhum produto disponível</h2>
+<p>Abra Hayamax e clique em Preparar produtos Hayamax.</p>
+</div>
+"""
+
+    content = f"""
+{candidate_html}
+
+<div class='card'>
+<h2>Publicação controlada</h2>
+<p>O sistema seleciona o produto real mais barato, copia fotos e atributos, aplica 8%, identifica a categoria e monta o anúncio.</p>
+
+<form method='post' action='/api/controlled-publication/prepare' style='display:inline'>
+<button class='btn' type='submit'>1. Preparar e validar</button>
+</form>
+
+<form method='post' action='/api/controlled-publication/publish' style='display:inline'>
+<button class='btn' type='submit'>2. Publicar no Mercado Livre</button>
+</form>
+
+<a class='btn' href='/supplier-hub/hayamax'>Voltar para Hayamax</a>
+</div>
+
+<div class='card'>
+<h2>Depois da publicação</h2>
+<p>Abra o link retornado pelo Mercado Livre e faça a compra por outra conta. Em seguida, use o Order Center e o Fulfillment Center para sincronizar o pedido.</p>
+</div>
+"""
+    return HTMLResponse(shell("Publicação Controlada", content))
