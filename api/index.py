@@ -8576,8 +8576,11 @@ async def discovery_auto_apply_page(listing_id: str):
 
 
 @app.get("/discovery-center", response_class=HTMLResponse)
-async def discovery_center_page():
-    products_result = await store.select("products", "select=*&company_id=eq." + quote(DEFAULT_COMPANY_ID, safe="-") + "&order=updated_at.desc&limit=100")
+async def discovery_center_page(request: Request):
+    products_result = await store.select(
+        "products",
+        "select=*&company_id=eq." + quote(DEFAULT_COMPANY_ID, safe="-") + "&order=updated_at.desc&limit=100",
+    )
     rows = ""
     for product in products_result.get("data") or []:
         listing = await s19_get_listing_by_product(product.get("id"))
@@ -8590,9 +8593,20 @@ async def discovery_center_page():
         rows += f"<tr><td>{s18_escape(product.get('sku'))}</td><td>{s18_escape(product.get('name'))}</td><td>{s18_escape(product.get('brand') or '-')}</td><td>{s18_escape(product.get('ean') or '-')}</td><td>{s18_escape(listing_status)}</td><td>{action}</td></tr>"
     if not rows:
         rows = "<tr><td colspan='6'>Nenhum produto encontrado.</td></tr>"
+
+    status = request.query_params.get("status") or ""
+    message = request.query_params.get("message") or ""
+    stage = request.query_params.get("stage") or ""
+    banner = ""
+    if message:
+        css = "success" if status == "success" else "error" if status == "error" else "warning"
+        extra = f" — etapa: {s18_escape(stage)}" if stage else ""
+        banner = f"<div class='card {css}'><strong>{s18_escape(message)}</strong>{extra}</div>"
+
     content = f"""
+{banner}
 <div class='grid'><div class='metric'><span>Produtos</span><strong>{len(products_result.get('data') or [])}</strong></div><div class='metric'><span>Auto Apply</span><strong>ATIVO</strong></div><div class='metric'><span>Fonte</span><strong>Catálogo ML</strong></div></div>
-<div class='card'><h2>Discovery Center</h2><p>Descobre dados confirmados e preenche automaticamente Product Master, imagens, atributos e Listing.</p><form method='post' action='/discovery-center/run'><label>Quantidade</label><input name='limit' value='5' style='max-width:120px'><button type='submit'>Descobrir e aplicar em lote</button></form></div>
+<div class='card'><h2>Discovery Center</h2><p>Descobre dados confirmados e preenche automaticamente Product Master, imagens, atributos e Listing.</p><form method='post' action='/discovery-center/run'><label>Produtos nesta execução</label><input name='limit' value='1' readonly style='max-width:120px'><button type='submit'>Descobrir e aplicar 1 produto</button></form></div>
 <div class='card'><table><thead><tr><th>SKU</th><th>Produto</th><th>Marca</th><th>GTIN</th><th>Listing</th><th>Ação</th></tr></thead><tbody>{rows}</tbody></table></div>
 """
     return HTMLResponse(shell("Discovery Center", content))
@@ -8600,12 +8614,53 @@ async def discovery_center_page():
 
 @app.post("/discovery-center/run")
 async def discovery_center_run(request: Request):
-    form = await request.form()
-    limit = max(1, min(s19int(form.get("limit"), 5), 30))
-    products_result = await store.select("products", "select=id&company_id=eq." + quote(DEFAULT_COMPANY_ID, safe="-") + f"&order=updated_at.asc&limit={limit}")
-    for row in products_result.get("data") or []:
-        await s29_process_product(row.get("id"))
-    return RedirectResponse("/discovery-center", status_code=303)
+    """Executa um produto por requisição para evitar timeout na Vercel."""
+    try:
+        await request.form()
+        products_result = await store.select(
+            "products",
+            "select=id,sku,name&company_id=eq."
+            + quote(DEFAULT_COMPANY_ID, safe="-")
+            + "&order=updated_at.asc&limit=1",
+        )
+        rows = products_result.get("data") or []
+        if not rows:
+            return RedirectResponse(
+                "/discovery-center?status=empty&message=Nenhum+produto+encontrado",
+                status_code=303,
+            )
+
+        row = rows[0]
+        result = await s29_process_product(row.get("id"))
+        if result.get("success"):
+            stage = quote(str(result.get("stage") or "processed"), safe="")
+            sku = quote(str(row.get("sku") or "produto"), safe="")
+            return RedirectResponse(
+                f"/discovery-center?status=success&message={sku}+processado&stage={stage}",
+                status_code=303,
+            )
+
+        error = quote(str(result.get("error") or "Falha no processamento"), safe="")
+        return RedirectResponse(
+            f"/discovery-center?status=error&message={error}",
+            status_code=303,
+        )
+    except Exception as exc:
+        try:
+            await store.insert("logs", {
+                "company_id": DEFAULT_COMPANY_ID,
+                "level": "error",
+                "source": "discovery_center_run",
+                "message": str(exc),
+                "payload": {"route": "/discovery-center/run"},
+            })
+        except Exception:
+            pass
+        error = quote(f"{type(exc).__name__}: {exc}", safe="")
+        return RedirectResponse(
+            f"/discovery-center?status=error&message={error}",
+            status_code=303,
+        )
 
 # ==========================================================
 # SPRINT 29 - WORKFLOW ENGINE
