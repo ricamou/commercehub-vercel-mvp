@@ -15437,7 +15437,7 @@ async def hayamax_integration_page():
         f"<td>{row.get('readiness_status')}</td>"
         f"<td>{', '.join(row.get('missing_fields') or []) or '—'}</td>"
         f"<td><a class='btn' href='/product-master/{row.get('product_id')}'>Completar produto</a> "
-        f"<a class='btn' href='/product-master/{row.get('product_id')}/listing'>Preparar anúncio ML</a></td>"
+        f"<form method='post' action='/api/product-enrichment/{row.get('product_id')}/run' style='display:inline'><input type='hidden' name='supplier_sku' value='{row.get('supplier_sku') or ''}'><button class='btn' type='submit'>Buscar dados oficiais</button></form> <a class='btn' href='/product-master/{row.get('product_id')}'>Completar produto</a> <a class='btn' href='/product-master/{row.get('product_id')}/listing'>Preparar anúncio ML</a></td>"
         f"</tr>"
         for row in candidates
     ) or "<tr><td colspan='10'>Nenhum candidato preparado.</td></tr>"
@@ -15460,6 +15460,7 @@ async def hayamax_integration_page():
 <button class='btn' type='submit'>Preparar produtos Hayamax</button>
 </form>
 <a class='btn' href='/supplier-connector/{supplier.get("id")}'>Configurar API/Catálogo</a>
+<a class='btn' href='/product-enrichment'>Motor de Enriquecimento</a>
 <a class='btn' href='/api/supplier-hub/hayamax/status'>Ver JSON técnico</a>
 </div>
 
@@ -16424,7 +16425,7 @@ async def controlled_publication_page():
 <div class='grid'>
   <div class='metric'><span>Produto</span><strong>{product.get('name') or '-'}</strong></div>
   <div class='metric'><span>Custo</span><strong>R$ {float(candidate.get('cost_price') or 0):.2f}</strong></div>
-  <div class='metric'><span>Preço +8%</span><strong>R$ {float(candidate.get('final_price') or 0):.2f}</strong></div>
+  <div class='metric'><span>Preço +16%</span><strong>R$ {float(candidate.get('final_price') or 0):.2f}</strong></div>
   <div class='metric'><span>Estoque do fornecedor</span><strong>{candidate.get('stock') or 0}</strong></div>
 </div>
 <div class='card'>
@@ -16447,7 +16448,7 @@ async def controlled_publication_page():
 
 <div class='card'>
 <h2>Publicação controlada</h2>
-<p>O sistema seleciona o produto real mais barato, copia fotos e atributos, aplica 8%, identifica a categoria e monta o anúncio.</p>
+<p>O sistema seleciona o produto real mais barato, copia fotos e atributos, aplica 16%, identifica a categoria e monta o anúncio.</p>
 
 <form method='post' action='/api/controlled-publication/prepare' style='display:inline'>
 <button class='btn' type='submit'>1. Preparar e validar</button>
@@ -18896,3 +18897,413 @@ async def s474_page():
 </div>
 """
     return HTMLResponse(shell("Closing Engine", content))
+
+
+# ==========================================================
+# SPRINT 48 - PRODUCT ENRICHMENT ENGINE
+# Completa produtos com dados confirmados do catálogo oficial
+# do Mercado Livre e mapeia atributos obrigatórios da categoria.
+# Nunca inventa GTIN, preço, estoque, imagens ou especificações.
+# ==========================================================
+
+S48_GTIN_IDS = {"GTIN", "EAN", "EAN_13", "UPC", "ISBN", "JAN"}
+
+
+def s48_norm(value):
+    value = str(value or "").lower()
+    value = __import__("unicodedata").normalize("NFKD", value)
+    value = "".join(ch for ch in value if not __import__("unicodedata").combining(ch))
+    return re.sub(r"[^a-z0-9]+", " ", value).strip()
+
+
+def s48_tokens(value):
+    return {x for x in s48_norm(value).split() if len(x) >= 2}
+
+
+def s48_attr_value(attr):
+    if not isinstance(attr, dict):
+        return ""
+    value = attr.get("value_name")
+    if value not in (None, ""):
+        return str(value).strip()
+    value_struct = attr.get("value_struct") or {}
+    if isinstance(value_struct, dict) and value_struct.get("number") is not None:
+        unit = str(value_struct.get("unit") or "").strip()
+        return f"{value_struct.get('number')} {unit}".strip()
+    values = attr.get("values") or []
+    if values and isinstance(values[0], dict):
+        return str(values[0].get("name") or values[0].get("id") or "").strip()
+    return ""
+
+
+def s48_attr_id(attr):
+    return str((attr or {}).get("id") or (attr or {}).get("name") or "").strip().upper()
+
+
+def s48_extract_catalog_item(item):
+    if not isinstance(item, dict):
+        return {}
+    attrs = item.get("attributes") or []
+    gtin = ""
+    brand = ""
+    model = ""
+    for attr in attrs:
+        aid = s48_attr_id(attr)
+        value = s48_attr_value(attr)
+        if aid in S48_GTIN_IDS and value:
+            digits = re.sub(r"\D", "", value)
+            if 8 <= len(digits) <= 14:
+                gtin = digits
+        elif aid == "BRAND" and value:
+            brand = value
+        elif aid in {"MODEL", "ALPHANUMERIC_MODEL"} and value:
+            model = value
+
+    pictures = []
+    for pic in item.get("pictures") or []:
+        if isinstance(pic, dict):
+            url = pic.get("secure_url") or pic.get("url")
+            if url and str(url).startswith("http"):
+                pictures.append(str(url))
+
+    return {
+        "catalog_product_id": item.get("id") or item.get("catalog_product_id"),
+        "name": item.get("name") or item.get("title"),
+        "domain_id": item.get("domain_id"),
+        "status": item.get("status"),
+        "gtin": gtin,
+        "brand": brand,
+        "model": model,
+        "attributes": attrs,
+        "pictures": pictures,
+        "raw": item,
+    }
+
+
+def s48_match_score(product, catalog):
+    p_name = product.get("name") or ""
+    c_name = catalog.get("name") or ""
+    p_tokens = s48_tokens(p_name)
+    c_tokens = s48_tokens(c_name)
+    overlap = len(p_tokens & c_tokens) / max(1, len(p_tokens | c_tokens))
+    score = overlap * 70
+
+    p_brand = s48_norm(product.get("brand"))
+    c_brand = s48_norm(catalog.get("brand"))
+    if p_brand and c_brand and p_brand == c_brand:
+        score += 20
+
+    p_model = s48_norm(product.get("model") or product.get("sku"))
+    c_model = s48_norm(catalog.get("model"))
+    if p_model and c_model and (p_model in c_model or c_model in p_model):
+        score += 10
+    return round(min(score, 100), 2)
+
+
+async def s48_catalog_search(product):
+    query = " ".join(
+        str(x).strip() for x in [product.get("brand"), product.get("name")]
+        if x
+    )[:180]
+    if not query:
+        return {"success": False, "error": "Produto sem nome para pesquisa."}
+
+    # Catálogo oficial do Mercado Livre. O formato pode variar por domínio;
+    # por isso o parser aceita results/products/data.
+    result = await ml_request(
+        "/products/search",
+        params={"site_id": "MLB", "q": query, "status": "active", "limit": 20},
+    )
+    if not result.get("success"):
+        return {"success": False, "error": result.get("error") or result.get("raw"), "response": result}
+
+    data = result.get("data") or {}
+    rows = []
+    if isinstance(data, list):
+        rows = data
+    elif isinstance(data, dict):
+        rows = data.get("results") or data.get("products") or data.get("data") or []
+
+    candidates = []
+    for row in rows:
+        parsed = s48_extract_catalog_item(row)
+        product_id = parsed.get("catalog_product_id")
+        # Quando a busca retorna apenas resumo, consulta o produto completo.
+        if product_id and not parsed.get("attributes"):
+            detail = await ml_request("/products/" + quote(str(product_id), safe="-_"))
+            if detail.get("success") and isinstance(detail.get("data"), dict):
+                parsed = s48_extract_catalog_item(detail.get("data"))
+        parsed["match_score"] = s48_match_score(product, parsed)
+        candidates.append(parsed)
+
+    candidates.sort(key=lambda x: x.get("match_score") or 0, reverse=True)
+    return {"success": True, "query": query, "candidates": candidates[:10]}
+
+
+async def s48_category_requirements(category_id):
+    if not category_id:
+        return {"success": False, "error": "Categoria não definida.", "attributes": []}
+    result = await ml_request("/categories/" + quote(str(category_id), safe="-_") + "/attributes")
+    if not result.get("success"):
+        return {"success": False, "error": result.get("error") or result.get("raw"), "attributes": []}
+    rows = result.get("data") or []
+    required = []
+    for row in rows if isinstance(rows, list) else []:
+        tags = row.get("tags") or {}
+        required_flag = bool(tags.get("required") or tags.get("catalog_required") or tags.get("grid_template_required"))
+        if not required_flag:
+            continue
+        required.append({
+            "id": row.get("id"),
+            "name": row.get("name"),
+            "value_type": row.get("value_type"),
+            "allowed_units": row.get("allowed_units") or [],
+            "values": (row.get("values") or [])[:100],
+            "tags": tags,
+        })
+    return {"success": True, "attributes": rows if isinstance(rows, list) else [], "required": required}
+
+
+async def s48_existing_product_attributes(product_id):
+    result = await store.select(
+        "product_attributes",
+        "select=*&product_id=eq." + quote(str(product_id), safe="-") + "&limit=500",
+    )
+    return result.get("data") or []
+
+
+async def s48_save_catalog_data(product, supplier_sku, catalog, category_id):
+    product_id = product.get("id")
+    saved_attributes = 0
+    saved_images = 0
+
+    for attr in catalog.get("attributes") or []:
+        name = str(attr.get("id") or attr.get("name") or "").strip()
+        value = s48_attr_value(attr)
+        if not name or not value:
+            continue
+        saved = await store.upsert(
+            "product_attributes",
+            {
+                "company_id": DEFAULT_COMPANY_ID,
+                "product_id": product_id,
+                "name": name,
+                "value": value,
+                "unit": ((attr.get("value_struct") or {}).get("unit") if isinstance(attr.get("value_struct"), dict) else None),
+                "is_required": False,
+                "source": "mercado_livre_catalog",
+            },
+            "product_id,name",
+        )
+        if saved.get("success"):
+            saved_attributes += 1
+
+    existing_result = await store.select(
+        "product_images",
+        "select=*&product_id=eq." + quote(str(product_id), safe="-") + "&limit=100",
+    )
+    existing = existing_result.get("data") or []
+    existing_urls = {str(row.get("url") or "").split("?")[0].lower() for row in existing}
+    for position, url in enumerate((catalog.get("pictures") or [])[:12]):
+        key = str(url).split("?")[0].lower()
+        if not url or key in existing_urls:
+            continue
+        saved = await store.insert("product_images", {
+            "company_id": DEFAULT_COMPANY_ID,
+            "product_id": product_id,
+            "url": url,
+            "position": position,
+            "is_main": position == 0 and not existing,
+            "source": "mercado_livre_catalog",
+            "alt_text": catalog.get("name") or product.get("name"),
+            "hash": hashlib.sha256(str(url).encode("utf-8")).hexdigest(),
+        })
+        if saved.get("success"):
+            saved_images += 1
+            existing_urls.add(key)
+
+    updates = {"sync_status": "pending"}
+    if category_id:
+        updates["ml_category_id"] = category_id
+    if catalog.get("gtin") and not (product.get("ean") or product.get("gtin_ean")):
+        # O schema principal usa ean; instalações mais novas também podem ter gtin_ean.
+        updates["ean"] = catalog.get("gtin")
+    if catalog.get("brand") and not product.get("brand"):
+        updates["brand"] = catalog.get("brand")
+    if catalog.get("model") and not product.get("model"):
+        updates["model"] = catalog.get("model")
+    if catalog.get("pictures") and not product.get("primary_image_url"):
+        updates["primary_image_url"] = catalog.get("pictures")[0]
+
+    updated = await store.update(
+        "products",
+        "id=eq." + quote(str(product_id), safe="-"),
+        updates,
+    )
+    # Compatibilidade com bancos antigos sem algumas colunas.
+    if not updated.get("success"):
+        safe_updates = {k: v for k, v in updates.items() if k in {"ean", "brand", "sync_status", "primary_image_url"}}
+        updated = await store.update("products", "id=eq." + quote(str(product_id), safe="-"), safe_updates)
+
+    await store.insert("logs", {
+        "company_id": DEFAULT_COMPANY_ID,
+        "event_type": "product_enrichment",
+        "level": "info",
+        "message": f"Produto {supplier_sku} enriquecido pelo catálogo oficial do Mercado Livre",
+        "payload": {
+            "product_id": product_id,
+            "supplier_sku": supplier_sku,
+            "catalog_product_id": catalog.get("catalog_product_id"),
+            "match_score": catalog.get("match_score"),
+            "saved_attributes": saved_attributes,
+            "saved_images": saved_images,
+        },
+    })
+    return {"attributes": saved_attributes, "images": saved_images, "product_update": updated}
+
+
+async def s48_enrich_product(product_id, supplier_sku=None, minimum_score=72):
+    product = await s44_product_by_id(product_id)
+    if not product:
+        return {"success": False, "status_code": 404, "error": "Produto não encontrado."}
+
+    category_id, category_prediction = await s452_predict_category(product)
+    requirements = await s48_category_requirements(category_id) if category_id else {"success": False, "required": []}
+    catalog_result = await s48_catalog_search(product)
+    candidates = catalog_result.get("candidates") or []
+    best = candidates[0] if candidates else {}
+
+    verified = bool(best and float(best.get("match_score") or 0) >= float(minimum_score))
+    saved = {"attributes": 0, "images": 0}
+    if verified:
+        saved = await s48_save_catalog_data(product, supplier_sku or product.get("sku"), best, category_id)
+
+    # Marca no Product Master quais atributos da categoria são obrigatórios.
+    existing = await s48_existing_product_attributes(product_id)
+    existing_map = {str(x.get("name") or "").upper(): x for x in existing}
+    required_missing = []
+    for req in requirements.get("required") or []:
+        rid = str(req.get("id") or "").upper()
+        row = existing_map.get(rid)
+        if row and str(row.get("value") or "").strip():
+            await store.upsert("product_attributes", {**row, "is_required": True}, "product_id,name")
+        else:
+            required_missing.append({"id": req.get("id"), "name": req.get("name"), "value_type": req.get("value_type")})
+
+    refreshed = await s44_product_by_id(product_id)
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "product": refreshed,
+        "category_id": category_id,
+        "category_prediction": category_prediction,
+        "category_requirements": {
+            "required_count": len(requirements.get("required") or []),
+            "missing_count": len(required_missing),
+            "missing": required_missing,
+        },
+        "catalog": {
+            "verified_match": verified,
+            "minimum_score": minimum_score,
+            "best": best,
+            "alternatives": candidates[1:5],
+            "error": catalog_result.get("error"),
+        },
+        "saved": saved,
+        "message": (
+            "Dados confirmados aplicados ao produto. Revise os atributos obrigatórios restantes."
+            if verified else
+            "Nenhuma correspondência suficientemente segura foi aplicada. Escolha uma alternativa ou complete manualmente."
+        ),
+    }
+
+
+@app.post("/api/product-enrichment/{product_id}/run")
+async def product_enrichment_run(product_id: str, request: Request):
+    form = await request.form()
+    supplier_sku = str(form.get("supplier_sku") or "").strip() or None
+    minimum_score = float(form.get("minimum_score") or 72)
+    result = await s48_enrich_product(product_id, supplier_sku, minimum_score)
+    return JSONResponse(status_code=200 if result.get("success") else int(result.get("status_code") or 400), content=result)
+
+
+@app.post("/api/product-enrichment/hayamax/run-batch")
+async def product_enrichment_hayamax_batch(limit: int = 30, minimum_score: float = 72):
+    offers = await s44_supplier_products(max(1, min(int(limit or 30), 100)))
+    results = []
+    enriched = 0
+    review = 0
+    for offer in offers:
+        result = await s48_enrich_product(offer.get("product_id"), offer.get("sku"), minimum_score)
+        verified = bool(((result.get("catalog") or {}).get("verified_match")))
+        enriched += 1 if verified else 0
+        review += 0 if verified else 1
+        results.append({
+            "supplier_sku": offer.get("sku"),
+            "product_id": offer.get("product_id"),
+            "success": result.get("success"),
+            "verified_match": verified,
+            "match_score": (((result.get("catalog") or {}).get("best") or {}).get("match_score")),
+            "catalog_product_id": (((result.get("catalog") or {}).get("best") or {}).get("catalog_product_id")),
+            "required_missing": ((result.get("category_requirements") or {}).get("missing_count")),
+            "message": result.get("message") or result.get("error"),
+        })
+    preparation = await s44_prepare_candidates(limit)
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "processed": len(results),
+        "automatically_enriched": enriched,
+        "needs_review": review,
+        "results": results,
+        "preparation": {"ready": preparation.get("ready"), "blocked": preparation.get("blocked")},
+        "next": "/product-enrichment",
+    }
+
+
+@app.get("/product-enrichment", response_class=HTMLResponse)
+async def product_enrichment_page():
+    offers = await s44_supplier_products(100)
+    candidates_result = await store.select(
+        "supplier_publication_candidates",
+        "select=*&supplier_id=eq." + quote(str(S17_HAYAMAX_SUPPLIER_ID), safe="-") + "&marketplace=eq.mercado_livre&limit=100",
+    )
+    candidate_map = {str(x.get("product_id")): x for x in (candidates_result.get("data") or [])}
+    rows = []
+    for offer in offers:
+        product = await s44_product_by_id(offer.get("product_id"))
+        candidate = candidate_map.get(str(offer.get("product_id"))) or {}
+        rows.append(
+            "<tr>"
+            f"<td>{offer.get('sku') or '-'}</td>"
+            f"<td>{product.get('name') or '-'}</td>"
+            f"<td>{product.get('brand') or '-'}</td>"
+            f"<td>{product.get('ean') or product.get('gtin_ean') or '-'}</td>"
+            f"<td>{candidate.get('readiness_score') or 0}%</td>"
+            f"<td>{candidate.get('readiness_status') or 'não preparado'}</td>"
+            f"<td><form method='post' action='/api/product-enrichment/{product.get('id')}/run' style='display:inline'>"
+            f"<input type='hidden' name='supplier_sku' value='{offer.get('sku') or ''}'>"
+            "<input type='hidden' name='minimum_score' value='72'>"
+            "<button class='btn' type='submit'>Buscar dados oficiais</button></form> "
+            f"<a class='btn' href='/product-master/{product.get('id')}'>Revisar</a></td>"
+            "</tr>"
+        )
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Produtos no lote</span><strong>{len(offers)}</strong></div>
+  <div class='metric'><span>Fonte automática</span><strong>Catálogo ML</strong></div>
+  <div class='metric'><span>Aplicação automática</span><strong>Score ≥ 72%</strong></div>
+  <div class='metric'><span>Margem</span><strong>16%</strong></div>
+</div>
+<div class='card'>
+<h2>Motor de Enriquecimento</h2>
+<p>Consulta o catálogo oficial do Mercado Livre, identifica a categoria e seus atributos obrigatórios, e aplica apenas correspondências com confiança mínima de 72%.</p>
+<p><b>Segurança:</b> preço e estoque continuam dependendo da Hayamax; o sistema não inventa GTIN, fotos nem especificações.</p>
+<form method='post' action='/api/product-enrichment/hayamax/run-batch?limit=30&minimum_score=72' style='display:inline'>
+<button class='btn' type='submit'>Enriquecer lote de 30</button>
+</form>
+<a class='btn' href='/supplier-hub/hayamax'>Voltar para Hayamax</a>
+</div>
+<div class='card'><table><thead><tr><th>SKU</th><th>Produto</th><th>Marca</th><th>GTIN</th><th>Score</th><th>Status</th><th>Ações</th></tr></thead><tbody>{''.join(rows) or '<tr><td colspan="7">Carregue o lote Hayamax primeiro.</td></tr>'}</tbody></table></div>
+"""
+    return HTMLResponse(shell("Enriquecimento de Produtos", content))

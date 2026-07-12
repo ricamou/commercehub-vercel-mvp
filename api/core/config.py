@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v6-sprint47-8-ml-publication-ready"
+APP_VERSION = "enterprise-v6-sprint48-product-enrichment"
 
 def env(name, default=""):
     value = os.getenv(name, default)
