@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint29-workflow-engine"
+S13_VERSION = "enterprise-v5-sprint30-audited-integrated-pipeline"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -7874,6 +7874,324 @@ async def auto_correction_listing_page(listing_id: str):
 
 
 # ==========================================================
+# SPRINT 28 - ENRICHMENT RESOLVER
+# Usa somente dados retornados pelo catálogo oficial do Mercado Livre.
+# Dados ambíguos permanecem pendentes; nenhum GTIN é inventado.
+# ==========================================================
+
+S28_MIN_CATALOG_CONFIDENCE = 85
+S28_MIN_GTIN_CONFIDENCE = 92
+
+
+def s28_normalize(value):
+    text = unicodedata.normalize("NFKD", str(value or ""))
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = " ".join(re.sub(r"[^a-zA-Z0-9]+", " ", text).lower().split())
+    # Normaliza unidades frequentemente escritas juntas ou separadas.
+    text = re.sub(r"\b(\d+)\s+(gb|tb|mb|mah|hz|khz|mhz|ghz|mm|cm|w)\b", r"\1\2", text)
+    return text
+
+
+def s28_tokens(value):
+    return {x for x in s28_normalize(value).split() if len(x) >= 2}
+
+
+def s28_strong_tokens(value):
+    # Códigos/modelos normalmente contêm números ou mistura de letras e números.
+    return {
+        x for x in s28_tokens(value)
+        if any(ch.isdigit() for ch in x) and len(x) >= 3
+    }
+
+
+def s28_similarity(source, candidate):
+    a, b = s28_tokens(source), s28_tokens(candidate)
+    if not a or not b:
+        return 0
+    overlap = len(a & b) / max(1, len(a | b))
+    coverage = len(a & b) / max(1, len(a))
+    score = overlap * 55 + coverage * 35
+    strong_a, strong_b = s28_strong_tokens(source), s28_strong_tokens(candidate)
+    if strong_a:
+        if strong_a & strong_b:
+            score += 10
+        else:
+            score -= 25
+    return max(0, min(100, round(score, 2)))
+
+
+def s28_attribute_map(rows):
+    result = {}
+    for row in rows or []:
+        aid = str(row.get("id") or row.get("attribute_id") or "").upper()
+        if not aid:
+            continue
+        value_name = row.get("value_name")
+        value_id = row.get("value_id")
+        if value_name is None and isinstance(row.get("value"), dict):
+            value_name = row["value"].get("name")
+            value_id = row["value"].get("id")
+        result[aid] = {
+            "value_name": value_name,
+            "value_id": value_id,
+            "raw": row,
+        }
+    return result
+
+
+def s28_picture_urls(data):
+    urls = []
+    for row in (data or {}).get("pictures") or []:
+        if isinstance(row, str):
+            url = row
+        else:
+            url = row.get("secure_url") or row.get("url") or row.get("source")
+        if url and str(url).startswith("https://") and url not in urls:
+            urls.append(url)
+    return urls
+
+
+async def s28_catalog_product(product_id):
+    if not product_id:
+        return {"success": False, "error": "catalog_product_id ausente"}
+    return await ml_request("/products/" + quote(str(product_id), safe="-_"))
+
+
+async def s28_search_candidates(query, limit=12):
+    result = await ml_request("/sites/MLB/search", params={"q": query, "limit": limit})
+    if not result.get("success"):
+        return {"success": False, "error": "A busca oficial do Mercado Livre não respondeu.", "result": result}
+    data = result.get("data") or {}
+    rows = data.get("results") if isinstance(data, dict) else []
+    return {"success": True, "results": rows or []}
+
+
+async def s28_upsert_product_attribute(product_id, name, value):
+    if not name or value in (None, ""):
+        return
+    await store.upsert(
+        "product_attributes",
+        {
+            "company_id": DEFAULT_COMPANY_ID,
+            "product_id": product_id,
+            "name": str(name),
+            "value": str(value),
+        },
+        "product_id,name",
+    )
+
+
+async def s28_add_catalog_image(product_id, url, position=0):
+    if not url:
+        return False
+    check = await s20_check_public_image(url)
+    if not check.get("success"):
+        return False
+    exists = await store.select(
+        "product_images",
+        "select=id&product_id=eq." + quote(str(product_id), safe="-")
+        + "&url=eq." + quote(str(url), safe="/:?=&%._-+") + "&limit=1",
+    )
+    if exists.get("data"):
+        return True
+    saved = await store.insert(
+        "product_images",
+        {
+            "company_id": DEFAULT_COMPANY_ID,
+            "product_id": product_id,
+            "url": url,
+            "position": position,
+            "is_main": position == 0,
+        },
+    )
+    return bool(saved.get("success"))
+
+
+async def s28_apply_marketplace_attributes(product_id, category_id, attributes, confidence, source_id):
+    official = {
+        str(x.get("attribute_id") or "").upper(): x
+        for x in await s21_category_attrs(category_id)
+    }
+    applied = []
+    for aid, value in attributes.items():
+        if aid not in official or aid in {"GTIN", "EMPTY_GTIN_REASON"}:
+            continue
+        value_name = value.get("value_name")
+        value_id = value.get("value_id")
+        if value_name in (None, "") and value_id in (None, ""):
+            continue
+        await store.upsert(
+            "product_marketplace_attributes",
+            {
+                "company_id": DEFAULT_COMPANY_ID,
+                "product_id": product_id,
+                "marketplace": "mercado_livre",
+                "category_id": category_id,
+                "attribute_id": aid,
+                "value_id": value_id,
+                "value_name": value_name,
+                "source": "ml_catalog",
+                "confidence": confidence,
+                "status": "active",
+                "raw_data": {"catalog_product_id": source_id, "evidence": value.get("raw")},
+            },
+            "product_id,marketplace,attribute_id",
+        )
+        applied.append(aid)
+    return applied
+
+
+async def s28_enrich_listing(listing_id):
+    listing = await s19_get_listing(listing_id)
+    if not listing:
+        return {"success": False, "status_code": 404, "error": "Anúncio não encontrado."}
+    context = await s19_product_context(listing.get("product_id"))
+    if not context:
+        return {"success": False, "status_code": 404, "error": "Produto não encontrado."}
+
+    product = context.get("product") or {}
+    product_id = product.get("id")
+    query = " ".join(x for x in [product.get("brand"), product.get("name")] if x)
+    search = await s28_search_candidates(query)
+    if not search.get("success"):
+        return {**search, "status_code": 502}
+
+    ranked = []
+    for item in search.get("results") or []:
+        title = item.get("title") or ""
+        score = s28_similarity(query, title)
+        catalog_id = item.get("catalog_product_id")
+        ranked.append({"item": item, "score": score, "catalog_product_id": catalog_id})
+    ranked.sort(key=lambda x: x["score"], reverse=True)
+
+    # Catálogo oficial é preferido. Resultados sem catalog_product_id servem apenas como evidência.
+    catalog_ranked = [x for x in ranked if x.get("catalog_product_id")]
+    best = catalog_ranked[0] if catalog_ranked else None
+    if not best or best.get("score", 0) < S28_MIN_CATALOG_CONFIDENCE:
+        evidence = [{
+            "item_id": x["item"].get("id"),
+            "title": x["item"].get("title"),
+            "catalog_product_id": x.get("catalog_product_id"),
+            "confidence": x.get("score"),
+        } for x in ranked[:5]]
+        await s19_history(
+            listing_id, product_id, "enrichment_review_required",
+            "Nenhuma correspondência de catálogo atingiu a confiança mínima.",
+            payload={"query": query, "candidates": evidence},
+        )
+        return {
+            "success": True,
+            "status": "review_required",
+            "applied": [],
+            "unresolved": ["catalog_match"],
+            "candidates": evidence,
+            "minimum_confidence": S28_MIN_CATALOG_CONFIDENCE,
+        }
+
+    catalog_result = await s28_catalog_product(best.get("catalog_product_id"))
+    if not catalog_result.get("success"):
+        return {"success": False, "status_code": 502, "error": "Não foi possível ler o produto do catálogo oficial.", "result": catalog_result}
+    catalog = catalog_result.get("data") or {}
+    catalog_title = catalog.get("name") or catalog.get("title") or best["item"].get("title") or ""
+    final_confidence = max(best.get("score", 0), s28_similarity(query, catalog_title))
+    catalog_attrs = s28_attribute_map(catalog.get("attributes") or [])
+    category_id = str(
+        catalog.get("category_id")
+        or best["item"].get("category_id")
+        or listing.get("category_id")
+        or ""
+    )
+    applied, unresolved = [], []
+
+    if category_id:
+        await s21_sync_category(category_id)
+        if str(listing.get("category_id") or "") != category_id:
+            await store.update("listings", "id=eq." + quote(str(listing_id), safe="-"), {"category_id": category_id})
+            listing["category_id"] = category_id
+            applied.append({"field": "category_id", "value": category_id, "source": "ml_catalog"})
+
+    brand = (catalog_attrs.get("BRAND") or {}).get("value_name")
+    model = (catalog_attrs.get("MODEL") or {}).get("value_name")
+    patch = {}
+    if brand and not product.get("brand"):
+        patch["brand"] = brand
+        applied.append({"field": "brand", "value": brand, "source": "ml_catalog"})
+    if patch:
+        await store.update("products", "id=eq." + quote(str(product_id), safe="-"), patch)
+    if model:
+        await s28_upsert_product_attribute(product_id, "Modelo", model)
+        applied.append({"field": "model", "value": model, "source": "ml_catalog"})
+
+    # GTIN só é aplicado com confiança alta e valor formalmente válido.
+    gtin = (catalog_attrs.get("GTIN") or {}).get("value_name")
+    if gtin and s212_valid_gtin(gtin) and final_confidence >= S28_MIN_GTIN_CONFIDENCE:
+        await store.update("products", "id=eq." + quote(str(product_id), safe="-"), {"ean": s212_digits(gtin)})
+        await store.delete(
+            "product_marketplace_attributes",
+            "product_id=eq." + quote(str(product_id), safe="-") + "&marketplace=eq.mercado_livre&attribute_id=eq.EMPTY_GTIN_REASON",
+        )
+        applied.append({"field": "ean", "value": s212_digits(gtin), "source": "ml_catalog", "confidence": final_confidence})
+    elif not product.get("ean"):
+        unresolved.append("gtin")
+
+    pictures = s28_picture_urls(catalog)
+    image_applied = False
+    for position, url in enumerate(pictures[:8]):
+        if await s28_add_catalog_image(product_id, url, position):
+            image_applied = True
+    if image_applied:
+        if pictures and not product.get("primary_image_url"):
+            # Algumas instalações possuem esta coluna; falha de atualização não interrompe o fluxo.
+            await store.update("products", "id=eq." + quote(str(product_id), safe="-"), {"primary_image_url": pictures[0]})
+        applied.append({"field": "images", "count": len(pictures[:8]), "source": "ml_catalog"})
+    elif not context.get("images"):
+        unresolved.append("official_public_image")
+
+    if category_id:
+        attrs_applied = await s28_apply_marketplace_attributes(
+            product_id, category_id, catalog_attrs, final_confidence, best.get("catalog_product_id")
+        )
+        if attrs_applied:
+            applied.append({"field": "marketplace_attributes", "attributes": attrs_applied, "source": "ml_catalog"})
+
+    evidence = {
+        "query": query,
+        "catalog_product_id": best.get("catalog_product_id"),
+        "catalog_title": catalog_title,
+        "confidence": final_confidence,
+        "source": "mercado_livre_catalog",
+    }
+    await s19_history(
+        listing_id, product_id, "product_enriched",
+        "Produto enriquecido com dados do catálogo oficial do Mercado Livre.",
+        payload={"evidence": evidence, "applied": applied, "unresolved": unresolved},
+    )
+    return {
+        "success": True,
+        "status": "enriched",
+        "listing_id": listing_id,
+        "product_id": product_id,
+        "evidence": evidence,
+        "applied": applied,
+        "unresolved": unresolved,
+    }
+
+
+@app.post("/api/enrichment-resolver/listing/{listing_id}")
+async def enrichment_resolver_listing(listing_id: str):
+    result = await s28_enrich_listing(listing_id)
+    if not result.get("success"):
+        return JSONResponse(status_code=int(result.get("status_code") or 400), content=result)
+    return result
+
+
+@app.post("/enrichment-resolver/listing/{listing_id}")
+async def enrichment_resolver_listing_page(listing_id: str):
+    # O Auto Correction já inicia pelo Enrichment Resolver e depois reaudita.
+    await s27_auto_correct_listing(listing_id)
+    return RedirectResponse(f"/publishing-lab/listing/{listing_id}", status_code=303)
+
+# ==========================================================
 # SPRINT 29 - WORKFLOW ENGINE
 # Orquestra Product Master -> Listing -> Auto Correction -> Publishing Lab.
 # Não publica sem confirmação explícita do usuário.
@@ -7962,10 +8280,21 @@ async def s29_process_product(product_id):
 
     listing = created.get("listing") or {}
     listing_id = listing.get("id")
+    enrichment = await s28_enrich_listing(listing_id)
+    # Falha de correspondência não interrompe o pipeline: a auditoria final mostra
+    # exatamente o que ainda precisa de revisão. Falhas técnicas são registradas.
+    if not enrichment.get("success"):
+        await s19_history(
+            listing_id, product_id, "workflow_enrichment_failed",
+            "Enrichment Resolver não concluiu a busca automática.",
+            None, listing.get("status") or "draft",
+            {"error": enrichment.get("error"), "details": enrichment}
+        )
+
     correction = await s27_auto_correct_listing(listing_id)
     if not correction.get("success"):
-        await s29_set_stage(product_id, "blocked", {"error": correction.get("error")})
-        return {"success": False, "product_id": product_id, "listing_id": listing_id, "stage": "blocked", "error": correction.get("error")}
+        await s29_set_stage(product_id, "blocked", {"error": correction.get("error"), "enrichment": enrichment})
+        return {"success": False, "product_id": product_id, "listing_id": listing_id, "stage": "blocked", "error": correction.get("error"), "enrichment": enrichment}
 
     simulation = correction.get("publishing_lab") or {}
     stage = "ready_to_publish" if simulation.get("success") else "blocked"
@@ -7983,6 +8312,7 @@ async def s29_process_product(product_id):
         "score": simulation.get("score"),
         "blockers": simulation.get("blockers") or [],
         "warnings": simulation.get("warnings") or [],
+        "enrichment": enrichment,
     }
 
 
@@ -8125,7 +8455,7 @@ async def workflow_engine_status():
     listings = listings_result.get("data") or []
     return {
         "success": True,
-        "version": "enterprise-v5-sprint29-workflow-engine",
+        "version": "enterprise-v5-sprint30-audited-integrated-pipeline",
         "products": len(products),
         "listings": len(listings),
         "published": sum(1 for row in listings if row.get("external_id")),
@@ -8188,7 +8518,7 @@ async def publishing_lab_page(listing_id: str):
 <div class='card'><h2>Bloqueios</h2><ul>{blockers}</ul><h2>Alertas</h2><ul>{warnings}</ul></div>
 <div class='card'><h2>Comparador</h2><p><b>Enviados:</b> {s19e(', '.join(cmp.get('sent_attribute_ids') or []))}</p><p><b>Condicionais faltando:</b> {s19e(', '.join(cmp.get('missing_conditional_ids') or []))}</p><p><b>Desconhecidos:</b> {s19e(', '.join(cmp.get('unknown_attribute_ids') or []))}</p></div>
 <div class='card'><h2>Estrutura</h2><p><b>Item:</b> {len(disc.get('item_attributes') or [])}</p><p><b>Variação:</b> {len(disc.get('variation_attributes') or [])}</p><p><b>Obrigatórios:</b> {len(disc.get('required_attributes') or [])}</p></div>
-<div class='card'><form method='post' action='/auto-correction/listing/{listing_id}' style='display:inline'><button class='btn' type='submit'>Corrigir automaticamente</button></form><a class='btn' href='/api/publishing-lab/listing/{listing_id}'>Relatório JSON</a><a class='btn' href='/product-master/{listing.get('product_id')}/listing'>Voltar ao anúncio</a></div>
+<div class='card'><form method='post' action='/enrichment-resolver/listing/{listing_id}' style='display:inline'><button class='btn' type='submit'>Enriquecer e corrigir automaticamente</button></form><form method='post' action='/auto-correction/listing/{listing_id}' style='display:inline'><button class='btn' type='submit'>Somente corrigir</button></form><a class='btn' href='/api/publishing-lab/listing/{listing_id}'>Relatório JSON</a><a class='btn' href='/product-master/{listing.get('product_id')}/listing'>Voltar ao anúncio</a></div>
 """
     return HTMLResponse(shell("Publishing Lab",content))
 
