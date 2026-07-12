@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v5-sprint41-marketplace-quality-engine"
+S13_VERSION = "enterprise-v6-sprint43-supplier-hub-core"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -13803,3 +13803,758 @@ async def marketplace_optimization_page(limit: int = 50):
 <div class='card'><h2>Marketplace Optimization Center</h2><table><thead><tr><th>Item ML</th><th>Produto</th><th>Score</th><th>Nível</th><th>Fotos</th><th>Ações</th></tr></thead><tbody>{rows}</tbody></table></div>
 """
     return HTMLResponse(shell("Marketplace Optimization", content))
+
+
+# ==========================================================
+# SPRINT 42 - AI LISTING OPTIMIZER
+# Preview e aplicação segura de fotos, atributos e descrição.
+# ==========================================================
+
+def s42_norm_key(value):
+    return "".join(
+        char for char in str(value or "").upper()
+        if char.isalnum()
+    )
+
+
+def s42_flatten_values(value, prefix="", output=None, depth=0):
+    output = output or {}
+    if depth > 6:
+        return output
+
+    if isinstance(value, dict):
+        for key, child in value.items():
+            current = f"{prefix}.{key}" if prefix else str(key)
+            s42_flatten_values(child, current, output, depth + 1)
+    elif isinstance(value, list):
+        for index, child in enumerate(value[:100]):
+            current = f"{prefix}[{index}]"
+            s42_flatten_values(child, current, output, depth + 1)
+    elif value not in (None, "", [], {}):
+        output[prefix] = value
+
+    return output
+
+
+def s42_collect_urls(value, output=None, depth=0):
+    output = output or []
+    if depth > 7:
+        return output
+
+    if isinstance(value, dict):
+        for child in value.values():
+            s42_collect_urls(child, output, depth + 1)
+    elif isinstance(value, list):
+        for child in value[:200]:
+            s42_collect_urls(child, output, depth + 1)
+    elif isinstance(value, str):
+        candidate = value.strip()
+        lower = candidate.lower()
+        if (
+            candidate.startswith(("https://", "http://"))
+            and any(ext in lower for ext in (".jpg", ".jpeg", ".png", ".webp"))
+        ):
+            output.append(candidate)
+
+    unique = []
+    seen = set()
+    for url in output:
+        normalized = url.split("?")[0].lower()
+        if normalized not in seen:
+            seen.add(normalized)
+            unique.append(url)
+    return unique
+
+
+def s42_product_source(context):
+    product = context.get("product") or {}
+    supplier = context.get("supplier") or {}
+    inventory = context.get("inventory") or {}
+    return {
+        "product": product,
+        "supplier": supplier,
+        "inventory": inventory,
+        "context": context,
+    }
+
+
+def s42_find_value(flat, aliases):
+    normalized = {
+        s42_norm_key(key): value
+        for key, value in flat.items()
+        if value not in (None, "")
+    }
+
+    for alias in aliases:
+        target = s42_norm_key(alias)
+        for key, value in normalized.items():
+            if key == target or key.endswith(target) or target in key:
+                return value
+    return None
+
+
+def s42_text(value):
+    if value in (None, "", [], {}):
+        return None
+    if isinstance(value, (dict, list)):
+        return None
+    return str(value).strip()
+
+
+def s42_clean_title(text, max_length=60):
+    text = " ".join(str(text or "").split())
+    if len(text) <= max_length:
+        return text
+    shortened = text[:max_length].rsplit(" ", 1)[0]
+    return shortened or text[:max_length]
+
+
+def s42_generate_title(product, item, flat):
+    brand = (
+        s42_text(product.get("brand"))
+        or s42_text(s42_find_value(flat, ["brand", "marca", "fabricante"]))
+    )
+    model = (
+        s42_text(product.get("model"))
+        or s42_text(s42_find_value(flat, ["model", "modelo", "part_number", "mpn"]))
+    )
+    name = (
+        s42_text(product.get("name"))
+        or s42_text(product.get("title"))
+        or s42_text(item.get("title"))
+        or "Produto"
+    )
+
+    additions = []
+    for aliases in (
+        ["color", "cor"],
+        ["resolution", "dpi", "sensor_resolution"],
+        ["wireless", "sem_fio"],
+        ["bluetooth"],
+        ["rgb", "with_lights", "iluminacao"],
+        ["connection", "conexao", "interface"],
+    ):
+        value = s42_text(s42_find_value(flat, aliases))
+        if value and value.lower() not in name.lower():
+            additions.append(value)
+
+    parts = []
+    for value in (name, brand, model, *additions[:3]):
+        if value and value.lower() not in " ".join(parts).lower():
+            parts.append(value)
+
+    return s42_clean_title(" ".join(parts))
+
+
+def s42_generate_description(product, item, flat):
+    name = s42_text(product.get("name")) or s42_text(item.get("title")) or "Produto"
+    brand = s42_text(product.get("brand")) or s42_text(s42_find_value(flat, ["brand", "marca"]))
+    model = s42_text(product.get("model")) or s42_text(s42_find_value(flat, ["model", "modelo"]))
+    source_description = (
+        s42_text(product.get("description"))
+        or s42_text(product.get("long_description"))
+        or s42_text(s42_find_value(flat, ["description", "descricao", "descricao_longa"]))
+    )
+
+    feature_aliases = [
+        ("Marca", ["brand", "marca"]),
+        ("Modelo", ["model", "modelo"]),
+        ("Cor", ["color", "cor"]),
+        ("Conexão", ["connection", "conexao", "interface"]),
+        ("Resolução", ["resolution", "dpi", "sensor_resolution"]),
+        ("Tecnologia", ["technology", "tecnologia", "sensor_technology"]),
+        ("Compatibilidade", ["compatibility", "compatibilidade", "operating_system"]),
+        ("Peso", ["weight", "peso"]),
+        ("Dimensões", ["dimensions", "dimensoes"]),
+        ("Garantia", ["warranty", "garantia"]),
+    ]
+
+    features = []
+    for label, aliases in feature_aliases:
+        value = s42_text(s42_find_value(flat, aliases))
+        if value:
+            features.append(f"- {label}: {value}")
+
+    intro = source_description or (
+        f"O {name} foi desenvolvido para oferecer praticidade, desempenho e "
+        f"uma experiência confiável no uso diário."
+    )
+
+    lines = [
+        name,
+        "",
+        intro,
+        "",
+        "PRINCIPAIS CARACTERÍSTICAS",
+    ]
+    lines.extend(features or [
+        f"- Marca: {brand or 'Consulte a embalagem'}",
+        f"- Modelo: {model or name}",
+        "- Produto novo",
+    ])
+    lines.extend([
+        "",
+        "CONTEÚDO DA EMBALAGEM",
+        f"- 1 {name}",
+        "",
+        "INFORMAÇÕES IMPORTANTES",
+        "- Confira a compatibilidade e as especificações antes da compra.",
+        "- As imagens são ilustrativas e podem variar conforme o lote do fabricante.",
+    ])
+
+    return "\n".join(lines).strip()
+
+
+def s42_generate_faq(product, item, flat):
+    name = s42_text(product.get("name")) or s42_text(item.get("title")) or "produto"
+    connection = s42_text(s42_find_value(flat, ["connection", "conexao", "interface"]))
+    warranty = s42_text(s42_find_value(flat, ["warranty", "garantia"]))
+    compatibility = s42_text(s42_find_value(flat, ["compatibility", "compatibilidade"]))
+
+    faq = [
+        {
+            "question": "O produto é novo?",
+            "answer": "Sim, o produto é novo.",
+        },
+        {
+            "question": "O produto acompanha nota fiscal?",
+            "answer": "Sim, a venda é realizada com nota fiscal.",
+        },
+        {
+            "question": f"O que acompanha o {name}?",
+            "answer": f"A embalagem acompanha 1 {name}.",
+        },
+    ]
+
+    if connection:
+        faq.append({
+            "question": "Qual é o tipo de conexão?",
+            "answer": f"A conexão informada pelo fabricante é {connection}.",
+        })
+    if compatibility:
+        faq.append({
+            "question": "Com quais dispositivos é compatível?",
+            "answer": f"A compatibilidade informada é: {compatibility}.",
+        })
+    if warranty:
+        faq.append({
+            "question": "Possui garantia?",
+            "answer": f"A garantia informada é: {warranty}.",
+        })
+
+    return faq[:6]
+
+
+def s42_attribute_aliases(attribute):
+    attribute_id = str(attribute.get("id") or "").upper()
+    name = str(attribute.get("name") or "")
+    aliases = [attribute_id, name]
+
+    mapping = {
+        "BRAND": ["brand", "marca", "manufacturer", "fabricante"],
+        "MODEL": ["model", "modelo"],
+        "COLOR": ["color", "cor"],
+        "MAIN_COLOR": ["main_color", "cor_principal", "color"],
+        "GTIN": ["gtin", "ean", "barcode", "codigo_barras"],
+        "MPN": ["mpn", "part_number", "codigo_fabricante"],
+        "MANUFACTURER": ["manufacturer", "fabricante", "brand"],
+        "WEIGHT": ["weight", "peso"],
+        "WIDTH": ["width", "largura"],
+        "HEIGHT": ["height", "altura"],
+        "LENGTH": ["length", "comprimento"],
+        "WITH_BLUETOOTH": ["bluetooth", "with_bluetooth"],
+        "IS_WIRELESS": ["wireless", "sem_fio"],
+        "WITH_LIGHTS": ["rgb", "lights", "iluminacao"],
+        "SENSOR_RESOLUTION": ["dpi", "sensor_resolution", "resolucao"],
+        "COMPATIBLE_OPERATING_SYSTEMS": ["operating_system", "compatibility", "sistema_operacional"],
+        "BUTTONS_NUMBER": ["buttons", "buttons_number", "quantidade_botoes"],
+    }
+    aliases.extend(mapping.get(attribute_id, []))
+    return aliases
+
+
+def s42_candidate_attribute(attribute, flat):
+    value = s42_find_value(flat, s42_attribute_aliases(attribute))
+    text = s42_text(value)
+    if not text:
+        return None
+
+    values = attribute.get("values") or []
+    normalized_text = s42_norm_key(text)
+
+    for allowed in values:
+        if not isinstance(allowed, dict):
+            continue
+        allowed_name = str(allowed.get("name") or "")
+        if s42_norm_key(allowed_name) == normalized_text:
+            return {
+                "id": attribute.get("id"),
+                "value_id": allowed.get("id"),
+                "value_name": allowed_name,
+            }
+
+    return {
+        "id": attribute.get("id"),
+        "value_name": text,
+    }
+
+
+async def s42_build_preview(external_item_id):
+    analysis = await s41_analyze_item(external_item_id)
+    if not analysis.get("success"):
+        return analysis
+
+    listing = await s41_get_listing_by_external_id(external_item_id)
+    context = await s19_product_context(listing.get("product_id"))
+    source = s42_product_source(context)
+    flat = s42_flatten_values(source)
+    item = analysis.get("item") or {}
+
+    all_urls = s42_collect_urls(source)
+    current_urls = [
+        picture.get("secure_url") or picture.get("url")
+        for picture in (item.get("pictures") or [])
+        if isinstance(picture, dict)
+    ]
+
+    pictures = []
+    seen = set()
+    for url in [*all_urls, *current_urls]:
+        if not url:
+            continue
+        key = url.split("?")[0].lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        pictures.append({"source": url})
+
+    category_attributes = await s41_category_attributes(item.get("category_id"))
+    sent_ids = s41_attribute_ids(item)
+    protected = {"GTIN", "BRAND", "MODEL", "ITEM_CONDITION"}
+
+    attribute_candidates = []
+    for attribute in category_attributes:
+        attribute_id = str(attribute.get("id") or "").upper()
+        if not attribute_id or attribute_id in sent_ids or attribute_id in protected:
+            continue
+        candidate = s42_candidate_attribute(attribute, flat)
+        if candidate:
+            attribute_candidates.append(candidate)
+
+    title = s42_generate_title(source.get("product") or {}, item, flat)
+    description = s42_generate_description(source.get("product") or {}, item, flat)
+    faq = s42_generate_faq(source.get("product") or {}, item, flat)
+
+    current_score = int(analysis.get("score") or 0)
+    expected_score = current_score
+    if len(pictures) >= 6 and len(item.get("pictures") or []) < 6:
+        expected_score += 25
+    if attribute_candidates:
+        expected_score += min(25, 5 + len(attribute_candidates))
+    if description and not item.get("descriptions"):
+        expected_score += 10
+    expected_score = min(100, expected_score)
+
+    preview = {
+        "external_item_id": external_item_id,
+        "listing_id": listing.get("id"),
+        "product_id": listing.get("product_id"),
+        "before_score": current_score,
+        "expected_score": expected_score,
+        "optimized_title": title,
+        "optimized_description": description,
+        "optimized_pictures": pictures[:12],
+        "optimized_attributes": attribute_candidates,
+        "faq": faq,
+        "source_snapshot": source,
+        "current_item": item,
+    }
+
+    saved = await store.insert("marketplace_listing_enrichments", {
+        "company_id": DEFAULT_COMPANY_ID,
+        "marketplace": "mercado_livre",
+        "listing_id": listing.get("id"),
+        "product_id": listing.get("product_id"),
+        "external_item_id": external_item_id,
+        "source_snapshot": source,
+        "optimized_title": title,
+        "optimized_description": description,
+        "optimized_pictures": pictures[:12],
+        "optimized_attributes": attribute_candidates,
+        "faq": faq,
+        "expected_score": expected_score,
+        "status": "preview",
+    })
+
+    preview["saved"] = bool(saved.get("success"))
+    preview["save_error"] = saved.get("error")
+    return {"success": True, "version": APP_VERSION, "preview": preview}
+
+
+async def s42_log_action(external_item_id, action, status, request_payload, response_payload=None, error=None, job_id=None):
+    await store.insert("marketplace_optimization_action_log", {
+        "company_id": DEFAULT_COMPANY_ID,
+        "optimization_job_id": job_id,
+        "external_item_id": external_item_id,
+        "action": action,
+        "status": status,
+        "request_payload": request_payload or {},
+        "response_payload": response_payload or {},
+        "error_message": error,
+    })
+
+
+async def s42_latest_enrichment(external_item_id):
+    result = await store.select(
+        "marketplace_listing_enrichments",
+        "select=*&external_item_id=eq."
+        + quote(str(external_item_id), safe="-_")
+        + "&order=created_at.desc&limit=1"
+    )
+    rows = result.get("data") or []
+    return rows[0] if rows else {}
+
+
+async def s42_apply_safe_optimization(external_item_id):
+    preview_result = await s42_build_preview(external_item_id)
+    if not preview_result.get("success"):
+        return preview_result
+
+    preview = preview_result.get("preview") or {}
+    current = preview.get("current_item") or {}
+    actions = []
+    failures = []
+
+    update_payload = {}
+    current_pictures = current.get("pictures") or []
+    candidate_pictures = preview.get("optimized_pictures") or []
+    if len(candidate_pictures) > len(current_pictures):
+        update_payload["pictures"] = candidate_pictures
+        actions.append("pictures")
+
+    current_attributes = current.get("attributes") or []
+    candidate_attributes = preview.get("optimized_attributes") or []
+    if candidate_attributes:
+        update_payload["attributes"] = [*current_attributes, *candidate_attributes]
+        actions.append("attributes")
+
+    # Title changes can be restricted for user products. Keep it in preview,
+    # but do not alter automatically in this safe mode.
+    item_result = None
+    if update_payload:
+        item_result = await ml_request(
+            f"/items/{quote(str(external_item_id), safe='-_')}",
+            method="PUT",
+            payload=update_payload,
+        )
+        await s42_log_action(
+            external_item_id,
+            "update_item",
+            "success" if item_result.get("success") else "failed",
+            update_payload,
+            item_result,
+            None if item_result.get("success") else item_result.get("error"),
+        )
+        if not item_result.get("success"):
+            failures.append({
+                "action": "update_item",
+                "error": item_result.get("error"),
+                "result": item_result,
+            })
+
+    description_result = None
+    if preview.get("optimized_description") and not current.get("descriptions"):
+        description_payload = {
+            "plain_text": preview.get("optimized_description")
+        }
+        description_result = await ml_request(
+            f"/items/{quote(str(external_item_id), safe='-_')}/description",
+            method="POST",
+            payload=description_payload,
+        )
+        await s42_log_action(
+            external_item_id,
+            "create_description",
+            "success" if description_result.get("success") else "failed",
+            description_payload,
+            description_result,
+            None if description_result.get("success") else description_result.get("error"),
+        )
+        if description_result.get("success"):
+            actions.append("description")
+        else:
+            failures.append({
+                "action": "description",
+                "error": description_result.get("error"),
+                "result": description_result,
+            })
+
+    reanalysis = await s41_analyze_item(external_item_id)
+    after_score = reanalysis.get("score") if reanalysis.get("success") else None
+
+    enrichment = await s42_latest_enrichment(external_item_id)
+    if enrichment.get("id"):
+        await store.update(
+            "marketplace_listing_enrichments",
+            "id=eq." + quote(str(enrichment.get("id")), safe="-"),
+            {
+                "status": "applied" if not failures else "partial",
+            },
+        )
+
+    return {
+        "success": not bool(failures),
+        "version": APP_VERSION,
+        "external_item_id": external_item_id,
+        "before_score": preview.get("before_score"),
+        "after_score": after_score,
+        "applied_actions": actions,
+        "failed_actions": failures,
+        "preview": {
+            "optimized_title": preview.get("optimized_title"),
+            "faq": preview.get("faq"),
+        },
+        "item_update": item_result,
+        "description_update": description_result,
+        "reanalysis": reanalysis,
+    }
+
+
+@app.post("/api/ai-listing-optimizer/preview/{external_item_id}")
+async def ai_listing_optimizer_preview(external_item_id: str):
+    result = await s42_build_preview(external_item_id)
+    return JSONResponse(
+        status_code=200 if result.get("success") else int(result.get("status_code") or 400),
+        content=result,
+    )
+
+
+@app.post("/api/ai-listing-optimizer/apply/{external_item_id}")
+async def ai_listing_optimizer_apply(external_item_id: str):
+    result = await s42_apply_safe_optimization(external_item_id)
+    return JSONResponse(
+        status_code=200 if result.get("success") else 207,
+        content=result,
+    )
+
+
+@app.get("/ai-listing-optimizer/{external_item_id}", response_class=HTMLResponse)
+async def ai_listing_optimizer_page(external_item_id: str):
+    result = await s42_build_preview(external_item_id)
+    if not result.get("success"):
+        return HTMLResponse(
+            shell(
+                "AI Listing Optimizer",
+                f"<div class='card'><h2>Erro</h2><p>{result.get('error')}</p></div>",
+            ),
+            status_code=int(result.get("status_code") or 400),
+        )
+
+    preview = result.get("preview") or {}
+    attributes = preview.get("optimized_attributes") or []
+    pictures = preview.get("optimized_pictures") or []
+    faq = preview.get("faq") or []
+
+    attribute_rows = "".join(
+        f"<tr><td>{row.get('id')}</td><td>{row.get('value_name') or row.get('value_id')}</td></tr>"
+        for row in attributes
+    ) or "<tr><td colspan='2'>Nenhum atributo adicional encontrado.</td></tr>"
+
+    picture_rows = "".join(
+        f"<li>{row.get('source')}</li>"
+        for row in pictures
+    ) or "<li>Nenhuma imagem adicional encontrada.</li>"
+
+    faq_rows = "".join(
+        f"<li><b>{row.get('question')}</b><br>{row.get('answer')}</li>"
+        for row in faq
+    ) or "<li>Nenhuma FAQ gerada.</li>"
+
+    description = str(preview.get("optimized_description") or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Score atual</span><strong>{preview.get('before_score')}</strong></div>
+  <div class='metric'><span>Score previsto</span><strong>{preview.get('expected_score')}</strong></div>
+  <div class='metric'><span>Fotos encontradas</span><strong>{len(pictures)}</strong></div>
+  <div class='metric'><span>Atributos encontrados</span><strong>{len(attributes)}</strong></div>
+</div>
+
+<div class='card'>
+<h2>Título sugerido</h2>
+<p>{preview.get('optimized_title') or '-'}</p>
+</div>
+
+<div class='card'>
+<h2>Descrição sugerida</h2>
+<pre style='white-space:pre-wrap'>{description}</pre>
+</div>
+
+<div class='card'>
+<h2>Fotos candidatas</h2>
+<ul>{picture_rows}</ul>
+</div>
+
+<div class='card'>
+<h2>Atributos candidatos</h2>
+<table><thead><tr><th>Campo</th><th>Valor</th></tr></thead><tbody>{attribute_rows}</tbody></table>
+</div>
+
+<div class='card'>
+<h2>FAQ sugerida</h2>
+<ul>{faq_rows}</ul>
+</div>
+
+<div class='card'>
+<form method='post' action='/api/ai-listing-optimizer/apply/{external_item_id}' style='display:inline'>
+<button class='btn' type='submit'>Aplicar otimização segura</button>
+</form>
+<a class='btn' href='/api/ai-listing-optimizer/preview/{external_item_id}'>Ver JSON técnico</a>
+<a class='btn' href='/marketplace-optimization'>Voltar</a>
+</div>
+"""
+    return HTMLResponse(shell("AI Listing Optimizer", content))
+
+
+# ==========================================================
+# SPRINT 43 - SUPPLIER HUB CORE
+# ==========================================================
+
+def s43_default_capabilities():
+    return {
+        "catalog": False,
+        "prices": False,
+        "stock": False,
+        "images": False,
+        "attributes": False,
+        "orders": False,
+        "invoice": False,
+        "tracking": False,
+    }
+
+
+async def s43_suppliers():
+    result = await store.select("suppliers", "select=*&order=created_at.asc")
+    return result.get("data") or []
+
+
+async def s43_connectors():
+    result = await store.select(
+        "supplier_hub_connectors",
+        "select=*&company_id=eq."
+        + quote(str(DEFAULT_COMPANY_ID), safe="-")
+        + "&order=created_at.asc",
+    )
+    return result.get("data") or []
+
+
+async def s43_ensure_connectors():
+    suppliers = await s43_suppliers()
+    connectors = await s43_connectors()
+    existing = {str(row.get("supplier_id")) for row in connectors}
+
+    for supplier in suppliers:
+        supplier_id = supplier.get("id")
+        if not supplier_id or str(supplier_id) in existing:
+            continue
+
+        name = (
+            supplier.get("name")
+            or supplier.get("display_name")
+            or supplier.get("slug")
+            or "Fornecedor"
+        )
+        adapter_key = (
+            supplier.get("slug")
+            or str(name).lower().replace(" ", "_")
+        )
+
+        await store.insert("supplier_hub_connectors", {
+            "company_id": DEFAULT_COMPANY_ID,
+            "supplier_id": supplier_id,
+            "supplier_name": name,
+            "adapter_key": adapter_key,
+            "connector_type": "api",
+            "status": "draft",
+            "auth_type": "none",
+            "capabilities": s43_default_capabilities(),
+            "settings": {},
+            "active": True,
+        })
+
+
+def s43_calculate_price(cost, markup_value=8, markup_type="percentage"):
+    cost = float(cost or 0)
+    markup_value = float(markup_value or 0)
+    if markup_type == "fixed":
+        return round(cost + markup_value, 2)
+    return round(cost * (1 + markup_value / 100), 2)
+
+
+@app.get("/api/supplier-hub")
+async def supplier_hub_api():
+    await s43_ensure_connectors()
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "suppliers": await s43_suppliers(),
+        "connectors": await s43_connectors(),
+    }
+
+
+@app.get("/api/supplier-hub/price-preview")
+async def supplier_hub_price_preview(
+    cost: float,
+    markup_value: float = 8,
+    markup_type: str = "percentage",
+):
+    return {
+        "success": True,
+        "cost": cost,
+        "markup_value": markup_value,
+        "markup_type": markup_type,
+        "final_price": s43_calculate_price(cost, markup_value, markup_type),
+    }
+
+
+@app.get("/supplier-hub", response_class=HTMLResponse)
+async def supplier_hub_page():
+    await s43_ensure_connectors()
+    suppliers = await s43_suppliers()
+    connectors = await s43_connectors()
+    supplier_map = {str(row.get("id")): row for row in suppliers}
+
+    rows = "".join(
+        f"<tr>"
+        f"<td>{supplier_map.get(str(row.get('supplier_id')), {}).get('name') or row.get('supplier_name')}</td>"
+        f"<td>{row.get('adapter_key')}</td>"
+        f"<td>{row.get('status')}</td>"
+        f"<td>{', '.join(k for k,v in (row.get('capabilities') or {}).items() if v) or 'não configurado'}</td>"
+        f"<td>{row.get('last_sync_at') or 'Nunca'}</td>"
+        f"</tr>"
+        for row in connectors
+    ) or "<tr><td colspan='5'>Nenhum fornecedor cadastrado.</td></tr>"
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Fornecedores</span><strong>{len(connectors)}</strong></div>
+  <div class='metric'><span>Markup padrão</span><strong>8%</strong></div>
+  <div class='metric'><span>Marketplace atual</span><strong>Mercado Livre</strong></div>
+  <div class='metric'><span>Arquitetura</span><strong>Supplier Hub</strong></div>
+</div>
+
+<div class='card'>
+<h2>Supplier Hub</h2>
+<p>Esta camada foi adicionada ao CommerceHub atual. O fluxo do Mercado Livre continua funcionando.</p>
+<a class='btn' href='/api/supplier-hub'>Ver JSON técnico</a>
+</div>
+
+<div class='card'>
+<h2>Fornecedores</h2>
+<table>
+<thead><tr><th>Fornecedor</th><th>Adapter</th><th>Status</th><th>Capacidades</th><th>Última sincronização</th></tr></thead>
+<tbody>{rows}</tbody>
+</table>
+</div>
+"""
+    return HTMLResponse(shell("Supplier Hub", content))

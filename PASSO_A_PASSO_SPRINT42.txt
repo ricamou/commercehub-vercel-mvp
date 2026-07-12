@@ -1,0 +1,12 @@
+SPRINT 42 — AI LISTING OPTIMIZER
+
+1. Envie todos os arquivos pelo GitHub Web.
+2. Aguarde o deploy.
+3. Confirme /api/health:
+   enterprise-v5-sprint42-ai-listing-optimizer
+4. Crie uma nova query no Supabase e execute o SQL da Sprint 42.
+5. Abra /marketplace-optimization.
+6. No anúncio publicado, clique em Otimizar.
+7. Revise título, descrição, fotos e atributos encontrados.
+8. Clique em Aplicar otimização segura.
+9. O sistema atualizará fotos, atributos e descrição e fará nova análise.

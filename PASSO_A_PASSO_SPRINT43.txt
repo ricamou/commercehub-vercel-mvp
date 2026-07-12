@@ -1,0 +1,6 @@
+1. Envie todos os arquivos pelo GitHub Web.
+2. Aguarde o deploy.
+3. Confirme /api/health.
+4. Execute Sprint43_Supplier_Hub_Core.sql no Supabase.
+5. Abra /supplier-hub.
+6. Confirme que os fornecedores cadastrados aparecem.
