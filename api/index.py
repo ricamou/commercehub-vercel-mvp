@@ -1824,7 +1824,7 @@ import time as _s13_time
 import uuid as _s13_uuid
 import traceback as _s13_traceback
 
-S13_VERSION = "enterprise-v6-sprint46-customer-care-engine"
+S13_VERSION = "enterprise-v6-sprint47-core-completion"
 S13_COMPANY_ID = "00000000-0000-0000-0000-000000000001"
 
 def _s13_env(name, default=""):
@@ -16754,3 +16754,517 @@ async def customer_care_page():
 </div>
 """
     return HTMLResponse(shell("Customer Care", content))
+
+
+# ==========================================================
+# SPRINT 47 - CORE COMPLETION
+# Supplier Routing Engine definitivo + estado operacional único.
+# ==========================================================
+
+S47_TERMINAL_STATES = {
+    "delivered",
+    "cancelled_refunded",
+    "cancelled",
+    "returned",
+}
+
+S47_CANCEL_STATES = {
+    "cancellation_requested",
+    "cancelled_before_dispatch",
+    "cancelled_refunded",
+}
+
+
+def s47_text(value):
+    return str(value or "").strip()
+
+
+def s47_lower(value):
+    return s47_text(value).lower()
+
+
+async def s47_record_state(order_row, fulfillment, new_state, source, reason=None, metadata=None):
+    previous_state = fulfillment.get("status") if fulfillment else order_row.get("status")
+    if s47_lower(previous_state) == s47_lower(new_state):
+        return
+
+    await store.insert("order_state_history", {
+        "company_id": DEFAULT_COMPANY_ID,
+        "marketplace_order_id": order_row.get("id"),
+        "fulfillment_order_id": fulfillment.get("id") if fulfillment else None,
+        "external_order_id": order_row.get("external_order_id"),
+        "previous_state": previous_state,
+        "new_state": new_state,
+        "source": source,
+        "reason": reason,
+        "metadata": metadata or {},
+    })
+
+
+async def s47_log_routing(
+    order_row,
+    fulfillment,
+    item_row,
+    strategy,
+    status,
+    listing=None,
+    product=None,
+    supplier=None,
+    supplier_sku=None,
+    details=None,
+):
+    await store.insert("order_routing_attempts", {
+        "company_id": DEFAULT_COMPANY_ID,
+        "marketplace_order_id": order_row.get("id"),
+        "fulfillment_order_id": fulfillment.get("id") if fulfillment else None,
+        "external_order_id": order_row.get("external_order_id"),
+        "external_item_id": item_row.get("external_item_id"),
+        "listing_id": (listing or {}).get("id"),
+        "product_id": (product or {}).get("id"),
+        "supplier_id": (supplier or {}).get("id"),
+        "supplier_name": (supplier or {}).get("name"),
+        "supplier_sku": supplier_sku,
+        "strategy": strategy,
+        "status": status,
+        "details": details or {},
+    })
+
+
+async def s47_find_listing_by_external_item(external_item_id):
+    if not external_item_id:
+        return {}
+
+    result = await store.select(
+        "listings",
+        "select=*&external_id=eq."
+        + quote(str(external_item_id), safe="-_")
+        + "&limit=1",
+    )
+    rows = result.get("data") or []
+    return rows[0] if rows else {}
+
+
+async def s47_find_product_by_listing(listing):
+    product_id = listing.get("product_id")
+    if not product_id:
+        return {}
+    return await s44_product_by_id(product_id)
+
+
+async def s47_find_mapping(product_id, supplier_sku=None):
+    if product_id:
+        result = await store.select(
+            "supplier_product_mappings",
+            "select=*&product_id=eq."
+            + quote(str(product_id), safe="-")
+            + "&active=eq.true"
+            + "&order=is_primary.desc,priority.asc"
+            + "&limit=1",
+        )
+        rows = result.get("data") or []
+        if rows:
+            return rows[0]
+
+    if supplier_sku:
+        result = await store.select(
+            "supplier_product_mappings",
+            "select=*&supplier_sku=eq."
+            + quote(str(supplier_sku), safe="-_ ")
+            + "&active=eq.true"
+            + "&order=is_primary.desc,priority.asc"
+            + "&limit=1",
+        )
+        rows = result.get("data") or []
+        if rows:
+            return rows[0]
+
+    return {}
+
+
+async def s47_find_product_by_sku(sku):
+    if not sku:
+        return {}
+
+    result = await store.select(
+        "products",
+        "select=*&sku=eq."
+        + quote(str(sku), safe="-_ ")
+        + "&limit=1",
+    )
+    rows = result.get("data") or []
+    return rows[0] if rows else {}
+
+
+async def s47_find_supplier(supplier_id):
+    if not supplier_id:
+        return {}
+
+    result = await store.select(
+        "suppliers",
+        "select=*&id=eq."
+        + quote(str(supplier_id), safe="-")
+        + "&limit=1",
+    )
+    rows = result.get("data") or []
+    return rows[0] if rows else {}
+
+
+async def s47_resolve_item(order_row, fulfillment, item_row):
+    external_item_id = item_row.get("external_item_id")
+    supplier_sku = item_row.get("supplier_sku")
+    listing = {}
+    product = {}
+    mapping = {}
+    supplier = {}
+    strategy = None
+
+    # Estratégia 1: external_item_id -> listing -> product -> mapping -> supplier
+    if external_item_id:
+        listing = await s47_find_listing_by_external_item(external_item_id)
+        if listing:
+            product = await s47_find_product_by_listing(listing)
+            mapping = await s47_find_mapping(product.get("id"), supplier_sku)
+            strategy = "external_item_listing_product_mapping"
+
+    # Estratégia 2: supplier_sku -> mapping -> product -> supplier
+    if not mapping and supplier_sku:
+        mapping = await s47_find_mapping(None, supplier_sku)
+        if mapping:
+            product = await s44_product_by_id(mapping.get("product_id"))
+            strategy = "supplier_sku_mapping"
+
+    # Estratégia 3: item SKU -> product -> supplier
+    if not product:
+        possible_sku = (
+            item_row.get("seller_sku")
+            or item_row.get("sku")
+            or supplier_sku
+        )
+        product = await s47_find_product_by_sku(possible_sku)
+        if product:
+            mapping = await s47_find_mapping(product.get("id"), possible_sku)
+            strategy = "item_sku_product"
+
+    supplier_id = (
+        mapping.get("supplier_id")
+        or product.get("supplier_id")
+    )
+
+    if supplier_id:
+        supplier = await s47_find_supplier(supplier_id)
+
+    resolved_supplier_sku = (
+        mapping.get("supplier_sku")
+        or supplier_sku
+        or product.get("sku")
+    )
+
+    if supplier.get("id"):
+        await store.update(
+            "marketplace_order_items",
+            "id=eq." + quote(str(item_row.get("id")), safe="-"),
+            {
+                "listing_id": listing.get("id") or item_row.get("listing_id"),
+                "product_id": product.get("id") or item_row.get("product_id"),
+                "supplier": supplier.get("name"),
+                "supplier_sku": resolved_supplier_sku,
+            },
+        )
+
+        await s47_log_routing(
+            order_row,
+            fulfillment,
+            item_row,
+            strategy or "resolved",
+            "resolved",
+            listing=listing,
+            product=product,
+            supplier=supplier,
+            supplier_sku=resolved_supplier_sku,
+        )
+
+        return {
+            "resolved": True,
+            "strategy": strategy,
+            "listing_id": listing.get("id"),
+            "product_id": product.get("id"),
+            "supplier_id": supplier.get("id"),
+            "supplier_name": supplier.get("name"),
+            "supplier_sku": resolved_supplier_sku,
+        }
+
+    await s47_log_routing(
+        order_row,
+        fulfillment,
+        item_row,
+        strategy or "no_match",
+        "unresolved",
+        listing=listing,
+        product=product,
+        supplier=supplier,
+        supplier_sku=resolved_supplier_sku,
+        details={
+            "external_item_id": external_item_id,
+            "item_supplier": item_row.get("supplier"),
+            "item_product_id": item_row.get("product_id"),
+        },
+    )
+
+    return {
+        "resolved": False,
+        "strategy": strategy or "no_match",
+        "external_item_id": external_item_id,
+    }
+
+
+async def s47_resolve_order_supplier(order_row):
+    fulfillment = await s45_find_fulfillment_order(order_row.get("external_order_id"))
+    items = await s40_order_items(order_row.get("id"))
+    results = []
+
+    for item in items:
+        results.append(await s47_resolve_item(order_row, fulfillment, item))
+
+    resolved = [row for row in results if row.get("resolved")]
+
+    if resolved and fulfillment:
+        primary = resolved[0]
+        await store.update(
+            "fulfillment_orders",
+            "id=eq." + quote(str(fulfillment.get("id")), safe="-"),
+            {
+                "supplier_id": primary.get("supplier_id"),
+                "supplier_name": primary.get("supplier_name"),
+                "routing_status": (
+                    "blocked"
+                    if s47_lower(fulfillment.get("status")) in S47_CANCEL_STATES
+                    else "resolved"
+                ),
+                "last_error": None,
+            },
+        )
+
+    return {
+        "resolved": bool(resolved),
+        "suppliers": resolved,
+        "attempts": results,
+    }
+
+
+def s47_unified_state(order_row, fulfillment):
+    order_status = s47_lower(order_row.get("status"))
+    payment_status = s47_lower(order_row.get("payment_status"))
+    fulfillment_status = s47_lower((fulfillment or {}).get("status"))
+    routing_status = s47_lower((fulfillment or {}).get("routing_status"))
+    fiscal_status = s47_lower((fulfillment or {}).get("fiscal_status"))
+    shipping_status = s47_lower((fulfillment or {}).get("shipping_status"))
+
+    if fulfillment_status in S47_TERMINAL_STATES:
+        return fulfillment_status
+
+    if fulfillment_status in S47_CANCEL_STATES or order_status in {
+        "cancelled",
+        "canceled",
+        "cancellation_requested",
+    }:
+        if fulfillment_status == "cancelled_refunded":
+            return "cancelled_refunded"
+        return "cancellation_requested"
+
+    if shipping_status == "delivered":
+        return "delivered"
+    if shipping_status in {"shipped", "in_transit"}:
+        return "shipped"
+    if fiscal_status == "received":
+        return "invoice_received"
+    if fulfillment_status == "supplier_confirmed":
+        return "supplier_confirmed"
+    if fulfillment_status in {"sent_to_supplier", "ready_for_supplier_adapter"}:
+        return "sent_to_supplier"
+    if routing_status == "resolved":
+        return "supplier_resolved"
+    if payment_status in {"approved", "paid"}:
+        return "payment_approved"
+    if order_status in {"waiting_payment", "payment_required"}:
+        return "waiting_payment"
+    return "received"
+
+
+async def s47_apply_unified_state(order_row):
+    fulfillment = await s45_find_fulfillment_order(order_row.get("external_order_id"))
+    if not fulfillment:
+        return {}
+
+    new_state = s47_unified_state(order_row, fulfillment)
+    previous = fulfillment.get("status")
+
+    if s47_lower(previous) != s47_lower(new_state):
+        await s47_record_state(
+            order_row,
+            fulfillment,
+            new_state,
+            "core_state_engine",
+            "Estado operacional consolidado.",
+            {
+                "marketplace_status": order_row.get("status"),
+                "payment_status": order_row.get("payment_status"),
+                "routing_status": fulfillment.get("routing_status"),
+                "fiscal_status": fulfillment.get("fiscal_status"),
+                "shipping_status": fulfillment.get("shipping_status"),
+            },
+        )
+
+        await store.update(
+            "fulfillment_orders",
+            "id=eq." + quote(str(fulfillment.get("id")), safe="-"),
+            {"status": new_state},
+        )
+
+    return {
+        "previous_state": previous,
+        "new_state": new_state,
+    }
+
+
+async def s47_complete_core(limit=100):
+    orders = await s40_recent_orders(limit)
+    results = []
+
+    for summary in orders:
+        order_row = await s40_find_order_by_external_id(summary.get("external_order_id"))
+        if not order_row:
+            continue
+
+        routing = await s47_resolve_order_supplier(order_row)
+        state = await s47_apply_unified_state(order_row)
+
+        results.append({
+            "external_order_id": order_row.get("external_order_id"),
+            "routing": routing,
+            "state": state,
+        })
+
+    return {
+        "success": True,
+        "version": APP_VERSION,
+        "processed": len(results),
+        "resolved": sum(1 for row in results if row.get("routing", {}).get("resolved")),
+        "unresolved": sum(1 for row in results if not row.get("routing", {}).get("resolved")),
+        "results": results,
+    }
+
+
+@app.post("/api/core-completion/run")
+async def core_completion_run(limit: int = 100):
+    sync = await s40_sync_recent_orders(limit)
+    if not sync.get("success"):
+        return JSONResponse(
+            status_code=int(sync.get("status_code") or 400),
+            content=sync,
+        )
+
+    customer_care = await s46_sync_customer_care(limit)
+    completion = await s47_complete_core(limit)
+
+    return {
+        "success": True,
+        "order_sync": sync,
+        "customer_care": customer_care,
+        "core_completion": completion,
+    }
+
+
+@app.post("/api/core-completion/orders/{external_order_id}/resolve-supplier")
+async def core_completion_resolve_supplier(external_order_id: str):
+    order_row = await s40_find_order_by_external_id(external_order_id)
+    if not order_row:
+        return JSONResponse(
+            status_code=404,
+            content={"success": False, "error": "Pedido não encontrado."},
+        )
+
+    routing = await s47_resolve_order_supplier(order_row)
+    state = await s47_apply_unified_state(order_row)
+
+    return {
+        "success": routing.get("resolved"),
+        "external_order_id": external_order_id,
+        "routing": routing,
+        "state": state,
+    }
+
+
+@app.get("/api/core-completion/orders/{external_order_id}/routing")
+async def core_completion_routing_history(external_order_id: str):
+    attempts = await store.select(
+        "order_routing_attempts",
+        "select=*&external_order_id=eq."
+        + quote(str(external_order_id), safe="-_")
+        + "&order=created_at.desc",
+    )
+    states = await store.select(
+        "order_state_history",
+        "select=*&external_order_id=eq."
+        + quote(str(external_order_id), safe="-_")
+        + "&order=created_at.asc",
+    )
+
+    return {
+        "success": True,
+        "external_order_id": external_order_id,
+        "routing_attempts": attempts.get("data") or [],
+        "state_history": states.get("data") or [],
+    }
+
+
+@app.get("/core-completion", response_class=HTMLResponse)
+async def core_completion_page():
+    orders = await store.select(
+        "fulfillment_orders",
+        "select=*&order=created_at.desc&limit=100",
+    )
+    rows_data = orders.get("data") or []
+
+    rows = "".join(
+        f"<tr>"
+        f"<td>{row.get('external_order_id')}</td>"
+        f"<td>{row.get('supplier_name') or '-'}</td>"
+        f"<td>{row.get('routing_status')}</td>"
+        f"<td>{row.get('status')}</td>"
+        f"<td>{row.get('fiscal_status')}</td>"
+        f"<td>{row.get('shipping_status')}</td>"
+        f"<td><a href='/api/core-completion/orders/{row.get('external_order_id')}/routing'>Histórico</a></td>"
+        f"</tr>"
+        for row in rows_data
+    ) or "<tr><td colspan='7'>Nenhum pedido.</td></tr>"
+
+    content = f"""
+<div class='grid'>
+  <div class='metric'><span>Pedidos</span><strong>{len(rows_data)}</strong></div>
+  <div class='metric'><span>Fornecedor resolvido</span><strong>{sum(1 for r in rows_data if r.get('supplier_name'))}</strong></div>
+  <div class='metric'><span>Sem fornecedor</span><strong>{sum(1 for r in rows_data if not r.get('supplier_name'))}</strong></div>
+  <div class='metric'><span>Core</span><strong>Completion</strong></div>
+</div>
+
+<div class='card'>
+<h2>Core Completion</h2>
+<p>Resolve fornecedor, consolida estados e registra auditoria do núcleo operacional.</p>
+<form method='post' action='/api/core-completion/run?limit=100' style='display:inline'>
+<button class='btn' type='submit'>Concluir núcleo operacional</button>
+</form>
+</div>
+
+<div class='card'>
+<h2>Estado operacional</h2>
+<table>
+<thead>
+<tr>
+<th>Pedido</th><th>Fornecedor</th><th>Roteamento</th><th>Estado</th>
+<th>Fiscal</th><th>Envio</th><th>Auditoria</th>
+</tr>
+</thead>
+<tbody>{rows}</tbody>
+</table>
+</div>
+"""
+    return HTMLResponse(shell("Core Completion", content))
