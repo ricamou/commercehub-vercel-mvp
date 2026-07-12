@@ -3838,11 +3838,21 @@ async def product_master_page(request: Request):
     for product in products:
         image = product.get("primary_image_url") or ""
         image_html = (
-            f"<img src='{s18_escape(image)}' alt='' style='width:48px;height:48px;object-fit:contain;border-radius:8px'>"
+            f"<img src='{s18_escape(image)}' alt='' style='width:48px;height:48px;object-fit:contain;border-radius:8px' onerror=\"this.style.display='none';this.nextElementSibling.style.display='grid'\"><div style='width:48px;height:48px;border:1px solid #d1d5db;border-radius:8px;display:none;place-items:center'>—</div>"
             if image else
             "<div style='width:48px;height:48px;border:1px solid #d1d5db;border-radius:8px;display:grid;place-items:center'>—</div>"
         )
         supplier_name = suppliers_map.get(str(product.get("supplier_id")), "-")
+        listing = await s19_get_listing_by_product(product.get("id")) or {}
+        if listing.get("id"):
+            action_html = f"<a class='btn' href='/publication-center/listing/{listing.get('id')}'>Abrir publicação</a>"
+        else:
+            action_html = (
+                f"<form method='post' action='/api/publication-center/product/{product.get('id')}/prepare' style='display:inline'>"
+                f"<input type='hidden' name='supplier_sku' value='{s18_escape(product.get('sku') or '')}'>"
+                "<input type='hidden' name='minimum_score' value='72'>"
+                "<button type='submit'>Preparar automaticamente</button></form>"
+            )
         rows += f"""
 <tr>
 <td>{image_html}</td>
@@ -3854,10 +3864,11 @@ async def product_master_page(request: Request):
 <td>{s18_money(product.get('sale_price'))}</td>
 <td>{s18_escape(product.get('internal_status') or 'draft')}</td>
 <td>{s18_escape(product.get('sync_status') or 'pending')}</td>
+<td>{action_html}</td>
 </tr>
 """
     if not rows:
-        rows = "<tr><td colspan='9'>Nenhum produto encontrado.</td></tr>"
+        rows = "<tr><td colspan='10'>Nenhum produto encontrado.</td></tr>"
 
 
     content = f"""
@@ -3884,11 +3895,14 @@ async def product_master_page(request: Request):
 <a class='btn' href='/product-master/new'>Novo produto</a>
 <a class='btn' href='/product-master/sql'>SQL Sprint 18</a>
 <a class='btn' href='/api/product-master/status'>Status do módulo</a>
+<a class='btn' href='/product-enrichment'>Motor de Enriquecimento</a>
+<a class='btn' href='/publication-center'>Central de Publicação</a>
+<form method='post' action='/api/publication-center/prepare-batch?limit=30' style='display:inline'><button type='submit'>Preparar 30 automaticamente</button></form>
 </form>
 </div>
 <div class='card'>
 <table>
-<thead><tr><th>Foto</th><th>SKU</th><th>Produto</th><th>Marca</th><th>Fornecedor</th><th>Custo</th><th>Venda</th><th>Status</th><th>Sync</th></tr></thead>
+<thead><tr><th>Foto</th><th>SKU</th><th>Produto</th><th>Marca</th><th>Fornecedor</th><th>Custo</th><th>Venda</th><th>Status</th><th>Sync</th><th>Ação</th></tr></thead>
 <tbody>{rows}</tbody>
 </table>
 <div style='margin-top:14px'>
@@ -19695,6 +19709,43 @@ async def s49_listing_page(listing_id: str):
     return HTMLResponse(shell("Publicação Mercado Livre", content))
 
 
+
+
+@app.post("/api/publication-center/prepare-batch")
+async def s50_prepare_batch(limit: int = 30, minimum_score: float = 72):
+    limit = max(1, min(int(limit or 30), 100))
+    offers = await s44_supplier_products(limit)
+    results = []
+    prepared = 0
+    ready = 0
+    blocked = 0
+    for offer in offers:
+        product_id = offer.get("product_id")
+        if not product_id:
+            continue
+        try:
+            result = await s49_prepare_product(product_id, offer.get("sku"), minimum_score)
+        except Exception as exc:
+            result = {"success": False, "product_id": product_id, "error": str(exc)}
+        if result.get("success"):
+            prepared += 1
+            if result.get("ready_to_publish"):
+                ready += 1
+            else:
+                blocked += 1
+        else:
+            blocked += 1
+        results.append({
+            "product_id": product_id,
+            "sku": offer.get("sku"),
+            "success": bool(result.get("success")),
+            "ready_to_publish": bool(result.get("ready_to_publish")),
+            "listing_id": result.get("listing_id"),
+            "error": result.get("error"),
+        })
+    return RedirectResponse("/publication-center", status_code=303)
+
+
 @app.get("/publication-center", response_class=HTMLResponse)
 async def s49_publication_center():
     offers = await s44_supplier_products(100)
@@ -19718,7 +19769,7 @@ async def s49_publication_center():
             f"<td>{s19e(product.get('ean') or '-')}</td><td>{s19e(status)}</td><td>{action}</td></tr>"
         )
     content = f"""
-<div class='card'><h2>Central de Publicação Mercado Livre</h2><p>Use <b>Preparar automaticamente</b>. O CommerceHub consulta o catálogo e a categoria, completa os atributos confirmados, cria o anúncio e libera o botão <b>Publicar</b> quando a prontidão chegar a 100%.</p><p><b>Atenção comercial:</b> confirme que preço e estoque exibidos são valores que você aceita praticar antes de publicar.</p></div>
+<div class='card'><h2>Central de Publicação Mercado Livre</h2><form method='post' action='/api/publication-center/prepare-batch?limit=30' style='display:inline'><button class='btn' type='submit'>Preparar lote de 30 automaticamente</button></form><p>Use <b>Preparar automaticamente</b>. O CommerceHub consulta o catálogo e a categoria, completa os atributos confirmados, cria o anúncio e libera o botão <b>Publicar</b> quando a prontidão chegar a 100%.</p><p><b>Atenção comercial:</b> confirme que preço e estoque exibidos são valores que você aceita praticar antes de publicar.</p></div>
 <div class='card'><table><thead><tr><th>SKU</th><th>Produto</th><th>Marca</th><th>GTIN</th><th>Status</th><th>Ação</th></tr></thead><tbody>{''.join(rows) or '<tr><td colspan="6">Nenhum produto carregado.</td></tr>'}</tbody></table></div>
 """
     return HTMLResponse(shell("Central de Publicação", content))
