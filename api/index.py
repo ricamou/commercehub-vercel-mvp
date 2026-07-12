@@ -3499,8 +3499,8 @@ async def supplier_hayamax_load_30():
     prepared = await s44_prepare_candidates(30)
     return {
         "success": bool(imported.get("success")),
-        "message": "Lote de 30 produtos Hayamax carregado e preparado.",
-        "important": "Preços e imagens são estimativas temporárias; sincronize o feed oficial Hayamax antes da publicação final.",
+        "message": "Lote de 30 produtos Hayamax carregado para complementação e validação.",
+        "important": "Este lote é bloqueado para publicação enquanto usar preços estimados, estoque provisório ou imagens temporárias. Complete os dados reais no Product Master.",
         "import": imported,
         "preparation": prepared,
         "next": "/supplier-hub/hayamax"
@@ -15046,7 +15046,23 @@ def s44_collect_images(value, output=None, depth=0):
     return unique
 
 
-def s44_publication_score(product, stock, images_count, attributes_count):
+def s44_is_temporary_image(url):
+    value = str(url or "").lower()
+    return (not value) or "placehold.co" in value or "placeholder" in value or "dummyimage" in value
+
+
+def s44_is_estimated_offer(offer, product):
+    raw = offer.get("raw_data") or {}
+    text = " ".join([
+        str(raw.get("pricing_note") or ""),
+        str(raw.get("image_note") or ""),
+        str(raw.get("source_format") or ""),
+        str(offer.get("source_format") or ""),
+    ]).lower()
+    return any(term in text for term in ("estimad", "tempor", "public_catalog", "demo"))
+
+
+def s44_publication_score(product, stock, images_count, attributes_count, real_images_count=0, estimated=False):
     missing = []
     score = 0
 
@@ -15092,7 +15108,12 @@ def s44_publication_score(product, stock, images_count, attributes_count):
     else:
         missing.append("description")
 
-    return min(score, 100), missing
+    if real_images_count < 1:
+        missing.append("official_public_image")
+    if estimated:
+        missing.append("official_supplier_price_stock")
+
+    return min(score, 100), list(dict.fromkeys(missing))
 
 
 async def s44_hayamax_supplier():
@@ -15244,13 +15265,26 @@ async def s44_prepare_candidates(limit=100):
             or 0
         )
 
+        raw_offer = offer.get("raw_data") or {}
+        discovered_images = s44_collect_images(raw_offer)
+        if offer.get("image_url"):
+            discovered_images = [offer.get("image_url"), *discovered_images]
+        real_images_count = sum(1 for url in set(discovered_images) if not s44_is_temporary_image(url))
+        estimated = s44_is_estimated_offer(offer, product)
+
         score, missing = s44_publication_score(
             product,
             stock,
             images_count,
             attributes_count,
+            real_images_count=real_images_count,
+            estimated=estimated,
         )
-        status = "ready" if score >= 70 and not {"name", "cost_price", "stock"} & set(missing) else "blocked"
+        hard_requirements = {
+            "name", "brand", "gtin_ean", "cost_price", "stock", "images",
+            "official_public_image", "attributes", "description", "official_supplier_price_stock"
+        }
+        status = "ready" if score >= 90 and not hard_requirements.intersection(set(missing)) else "blocked"
 
         await store.upsert(
             "supplier_product_mappings",
@@ -15401,15 +15435,18 @@ async def hayamax_integration_page():
         f"<td>{row.get('attributes_count') or 0}</td>"
         f"<td>{row.get('readiness_score') or 0}%</td>"
         f"<td>{row.get('readiness_status')}</td>"
+        f"<td>{', '.join(row.get('missing_fields') or []) or '—'}</td>"
+        f"<td><a class='btn' href='/product-master/{row.get('product_id')}'>Completar produto</a> "
+        f"<a class='btn' href='/product-master/{row.get('product_id')}/listing'>Preparar anúncio ML</a></td>"
         f"</tr>"
         for row in candidates
-    ) or "<tr><td colspan='8'>Nenhum candidato preparado.</td></tr>"
+    ) or "<tr><td colspan='10'>Nenhum candidato preparado.</td></tr>"
 
     content = f"""
 <div class='grid'>
   <div class='metric'><span>Status</span><strong>{connector.get('status') or 'draft'}</strong></div>
   <div class='metric'><span>Catálogo importado</span><strong>{status.get('catalog_products', 0)}</strong></div>
-  <div class='metric'><span>Prontos</span><strong>{status.get('ready', 0)}</strong></div>
+  <div class='metric'><span>Publicáveis agora</span><strong>{status.get('ready', 0)}</strong></div>
   <div class='metric'><span>Bloqueados</span><strong>{status.get('blocked', 0)}</strong></div>
 </div>
 
@@ -15417,9 +15454,9 @@ async def hayamax_integration_page():
 <h2>Hayamax Integration Engine</h2>
 <p>Usa os produtos já importados pelo conector universal e os prepara para o pipeline do Mercado Livre.</p>
 <p><b>Margem configurada:</b> 16%</p>
-<p><b>Lote 1:</b> 100 posições — 30 produtos confirmados no catálogo público e 70 em pesquisa.</p><p><b>Modo atual:</b> pré-liberação Hayamax. A publicação permanece bloqueada quando faltarem preço, estoque, GTIN, imagens ou atributos oficiais.</p>
+<p><b>Lote 1:</b> 100 posições — 30 produtos confirmados no catálogo público e 70 em pesquisa.</p><p><b>Modo atual:</b> publicação segura. Produtos com preço/estoque estimados, imagem temporária, GTIN ausente ou atributos incompletos ficam bloqueados.</p><p><b>Como publicar:</b> clique em <i>Completar produto</i>, informe os dados reais; depois clique em <i>Preparar anúncio ML</i>, selecione a categoria, valide e use o botão Publicar.</p>
 <form method='post' action='/api/suppliers/hayamax/load-30' style='display:inline'><button class='btn' type='submit'>Carregar 30 produtos já confirmados</button></form>
-<form method='post' action='/api/supplier-hub/hayamax/prepare?limit=10000' style='display:inline'>
+<form method='post' action='/api/supplier-hub/hayamax/prepare?limit=100' style='display:inline'>
 <button class='btn' type='submit'>Preparar produtos Hayamax</button>
 </form>
 <a class='btn' href='/supplier-connector/{supplier.get("id")}'>Configurar API/Catálogo</a>
@@ -15432,7 +15469,7 @@ async def hayamax_integration_page():
 <thead>
 <tr>
 <th>SKU</th><th>Custo</th><th>Preço +16%</th><th>Estoque</th>
-<th>Fotos</th><th>Atributos</th><th>Score</th><th>Status</th>
+<th>Fotos</th><th>Atributos</th><th>Score</th><th>Status</th><th>Pendências</th><th>Ações</th>
 </tr>
 </thead>
 <tbody>{rows}</tbody>
