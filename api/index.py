@@ -3478,7 +3478,10 @@ async def product_master_page(request: Request):
         rows = "<tr><td colspan='9'>Nenhum produto encontrado.</td></tr>"
 
 
+    sync_message = str(request.query_params.get("sync_message") or "").strip()
+    sync_notice = f"<div class='card'><b>{s18_escape(sync_message)}</b></div>" if sync_message else ""
     content = f"""
+{sync_notice}
 <div class='grid'>
 <div class='metric'><span>Produtos nesta página</span><strong>{len(products)}</strong></div>
 <div class='metric'><span>Página</span><strong>{page}</strong></div>
@@ -3504,6 +3507,10 @@ async def product_master_page(request: Request):
 <a class='btn' href='/api/product-master/status'>Status do módulo</a>
 <a class='btn' href='/api/images/backfill?limit=10'>Corrigir fotos importadas</a>
 <a class='btn' href='/discovery-center'>Discovery Center</a>
+</form>
+<form method='post' action='/synchronization/run' style='display:inline-block;margin-top:10px'>
+<input type='hidden' name='limit' value='50'>
+<button type='submit'>Sincronizar módulos</button>
 </form>
 </div>
 <div class='card'>
@@ -4108,6 +4115,92 @@ async def s19_product_context(product_id):
         "images": picture_urls,
         "attributes": attributes,
         "marketplace_attributes": marketplace_attributes
+    }
+
+
+async def s19_sync_product_to_listing(product_id, listing_id=None, source="direct_sync"):
+    """Sincroniza Product Master, estoque, imagens e atributos com o Listing.
+
+    O Listing continua sendo a camada de publicação, mas a fonte de verdade é o
+    Product Master. A função é idempotente e pode ser chamada depois de qualquer
+    importação, descoberta ou edição de produto.
+    """
+    context = await s19_product_context(product_id)
+    if not context:
+        return {"success": False, "error": "Produto não encontrado."}
+
+    product = context.get("product") or {}
+    inventory = context.get("inventory") or {}
+    listing = await s19_get_listing(listing_id) if listing_id else await s19_get_listing_by_product(product_id)
+    if not listing:
+        return {"success": True, "status": "no_listing", "product_id": product_id}
+
+    current_payload = listing.get("payload") if isinstance(listing.get("payload"), dict) else {}
+    pictures = [url for url in (context.get("images") or []) if str(url or "").startswith(("http://", "https://"))]
+    attrs = {}
+    for row in context.get("attributes") or []:
+        name = str(row.get("name") or "").strip()
+        value = str(row.get("value") or "").strip()
+        if name and value:
+            attrs[name] = value
+    marketplace_attrs = []
+    for row in context.get("marketplace_attributes") or []:
+        aid = str(row.get("attribute_id") or "").strip()
+        if aid:
+            marketplace_attrs.append({
+                "id": aid,
+                "value_id": row.get("value_id"),
+                "value_name": row.get("value_name"),
+            })
+
+    patch = {
+        "title": s27_compact_title(product.get("seo_name") or product.get("name") or listing.get("title") or product.get("sku") or "Produto"),
+        "description": product.get("description") or product.get("short_description") or listing.get("description"),
+        "category_id": product.get("ml_category_id") or listing.get("category_id"),
+        "validation_status": "pending",
+    }
+    sale_price = s19float(product.get("sale_price"), 0)
+    if sale_price > 0:
+        patch["price"] = sale_price
+    if inventory.get("available") is not None:
+        patch["available_quantity"] = max(s19int(inventory.get("available"), 0), 0)
+
+    sync_snapshot = {
+        "source": source,
+        "product_id": product_id,
+        "primary_image_url": product.get("primary_image_url"),
+        "pictures": pictures,
+        "pictures_count": len(pictures),
+        "ean": product.get("ean"),
+        "brand": product.get("brand"),
+        "category_id": patch.get("category_id"),
+        "attributes": attrs,
+        "marketplace_attributes": marketplace_attrs,
+        "price": patch.get("price", listing.get("price")),
+        "available_quantity": patch.get("available_quantity", listing.get("available_quantity")),
+        "synchronized_at": datetime.now(timezone.utc).isoformat(),
+    }
+    current_payload["product_sync"] = sync_snapshot
+    patch["payload"] = current_payload
+
+    saved = await store.update("listings", "id=eq." + quote(str(listing.get("id")), safe="-"), patch)
+    if not saved.get("success"):
+        return {"success": False, "error": saved.get("error") or saved.get("raw"), "patch": patch}
+
+    await s19_history(
+        listing.get("id"), product_id, "product_listing_synchronized",
+        "Product Master sincronizado diretamente com o Listing.",
+        listing.get("status"), listing.get("status"), sync_snapshot,
+    )
+    return {
+        "success": True,
+        "status": "synchronized",
+        "listing_id": listing.get("id"),
+        "product_id": product_id,
+        "pictures_count": len(pictures),
+        "ean": product.get("ean"),
+        "price": patch.get("price", listing.get("price")),
+        "available_quantity": patch.get("available_quantity", listing.get("available_quantity")),
     }
 
 
@@ -8681,7 +8774,8 @@ async def s32_apply_external_candidate(listing_id, discovery):
     await store.update("products", "id=eq." + quote(str(product_id), safe="-"), {"description": generated})
     await store.update("listings", "id=eq." + quote(str(listing_id), safe="-"), {"title": s27_compact_title(best.get("name") or product.get("name")), "description": generated})
     applied.extend([{"field": "products.description", "value": "generated"}, {"field": "listings.description", "value": "generated"}])
-    return {"success": True, "status": "applied", "confidence": best.get("score"), "source_url": best.get("source_url"), "applied": applied, "unresolved": unresolved}
+    synchronization = await s19_sync_product_to_listing(product_id, listing_id, source="discovery_external_apply")
+    return {"success": True, "status": "applied", "confidence": best.get("score"), "source_url": best.get("source_url"), "applied": applied, "unresolved": unresolved, "synchronization": synchronization}
 
 
 async def s32_discover_product(product_id):
@@ -8930,8 +9024,9 @@ async def s31_apply_catalog_match(listing_id, match_result):
         "confidence": confidence,
         "queries": match_result.get("queries") or [],
     }
-    await s19_history(listing_id, product_id, "discovery_auto_applied", "Discovery encontrou e aplicou automaticamente os dados confirmados nos módulos corretos.", payload={"evidence": evidence, "applied": applied, "unresolved": unresolved})
-    return {"success": True, "status": "applied", "confidence": confidence, "evidence": evidence, "applied": applied, "unresolved": unresolved}
+    synchronization = await s19_sync_product_to_listing(product_id, listing_id, source="discovery_auto_apply")
+    await s19_history(listing_id, product_id, "discovery_auto_applied", "Discovery encontrou, aplicou e sincronizou os dados confirmados.", payload={"evidence": evidence, "applied": applied, "unresolved": unresolved, "synchronization": synchronization})
+    return {"success": True, "status": "applied", "confidence": confidence, "evidence": evidence, "applied": applied, "unresolved": unresolved, "synchronization": synchronization}
 
 
 async def s31_discover_and_apply_listing(listing_id):
@@ -9057,6 +9152,64 @@ async def discovery_center_run(request: Request):
             pass
         return RedirectResponse(f"/discovery-center?status=error&message={quote(f'{type(exc).__name__}: {exc}', safe='')}", status_code=303)
 
+@app.post("/api/synchronization/product/{product_id}")
+async def synchronization_product_api(product_id: str):
+    result = await s19_sync_product_to_listing(product_id, source="manual_api")
+    if not result.get("success"):
+        return JSONResponse(status_code=400, content=result)
+    return result
+
+
+@app.post("/api/synchronization/run")
+async def synchronization_run_api(limit: int = 30):
+    limit = max(1, min(int(limit or 30), 100))
+    products_result = await store.select(
+        "products",
+        "select=id,sku&company_id=eq." + quote(DEFAULT_COMPANY_ID, safe="-") + "&order=updated_at.asc&limit=" + str(limit),
+    )
+    rows = products_result.get("data") or []
+    results = []
+    for row in rows:
+        try:
+            results.append(await s19_sync_product_to_listing(row.get("id"), source="batch_sync"))
+        except Exception as exc:
+            results.append({"success": False, "product_id": row.get("id"), "sku": row.get("sku"), "error": str(exc)})
+    return {
+        "success": True,
+        "processed": len(results),
+        "synchronized": sum(1 for item in results if item.get("status") == "synchronized"),
+        "without_listing": sum(1 for item in results if item.get("status") == "no_listing"),
+        "errors": [item for item in results if not item.get("success")],
+        "results": results,
+    }
+
+
+@app.post("/synchronization/run")
+async def synchronization_run_page(request: Request):
+    form = await request.form()
+    limit = max(1, min(s19int(form.get("limit"), 50), 100))
+    products_result = await store.select(
+        "products",
+        "select=id,sku&company_id=eq." + quote(DEFAULT_COMPANY_ID, safe="-") + "&order=updated_at.asc&limit=" + str(limit),
+    )
+    rows = products_result.get("data") or []
+    synchronized = 0
+    errors = 0
+    for row in rows:
+        try:
+            result = await s19_sync_product_to_listing(row.get("id"), source="product_master_button")
+            if result.get("status") == "synchronized":
+                synchronized += 1
+            elif not result.get("success"):
+                errors += 1
+        except Exception:
+            errors += 1
+    return RedirectResponse(
+        f"/product-master?sync_message={quote(f'{synchronized} listings sincronizados; {errors} erros', safe='')}",
+        status_code=303,
+    )
+
+
 # ==========================================================
 # SPRINT 29 - WORKFLOW ENGINE
 # Orquestra Product Master -> Listing -> Auto Correction -> Publishing Lab.
@@ -9095,7 +9248,9 @@ async def s29_create_listing_from_product(product_id):
     product = context.get("product") or {}
     current = await s19_get_listing_by_product(product_id)
     if current:
-        return {"success": True, "created": False, "listing": current}
+        sync_result = await s19_sync_product_to_listing(product_id, current.get("id"), source="workflow_existing_listing")
+        current = await s19_get_listing(current.get("id")) or current
+        return {"success": True, "created": False, "listing": current, "synchronization": sync_result}
 
     title = s27_compact_title(product.get("seo_name") or product.get("name") or product.get("sku") or "Produto")
     category_id = str(product.get("ml_category_id") or "").strip()
@@ -9133,6 +9288,7 @@ async def s29_create_listing_from_product(product_id):
         await store.update("products", "id=eq." + quote(str(product_id), safe="-"), {"ml_category_id": category_id})
     await s19_history(listing_id, product_id, "workflow_listing_created", "Listing criado automaticamente pelo Workflow Engine.", None, "draft", {"category_id": category_id})
     await s29_set_stage(product_id, "listing_created", {"listing_id": listing_id})
+    await s19_sync_product_to_listing(product_id, listing_id, source="workflow_listing_created")
     listing = await s19_get_listing(listing_id)
     return {"success": True, "created": True, "listing": listing or payload}
 
@@ -9162,6 +9318,7 @@ async def s29_process_product(product_id):
         )
 
     enrichment = await s31_discover_and_apply_listing(listing_id)
+    synchronization = await s19_sync_product_to_listing(product_id, listing_id, source="workflow_after_enrichment")
     # Falha de correspondência não interrompe o pipeline: a auditoria final mostra
     # exatamente o que ainda precisa de revisão. Falhas técnicas são registradas.
     if not enrichment.get("success"):
@@ -9198,6 +9355,7 @@ async def s29_process_product(product_id):
         "blockers": simulation.get("blockers") or [],
         "warnings": simulation.get("warnings") or [],
         "enrichment": enrichment,
+        "synchronization": synchronization,
         "image_resolution": image_resolution,
     }
 
