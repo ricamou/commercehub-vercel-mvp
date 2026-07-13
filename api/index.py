@@ -1,6 +1,7 @@
 from fastapi import FastAPI, Request, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 import json, uuid, hashlib, hmac, base64, time, csv, io, os, mimetypes, re, unicodedata, traceback, xml.etree.ElementTree as ET
+from datetime import datetime, timezone
 from urllib.parse import quote, urlparse
 from api.core.config import APP_VERSION, DEFAULT_COMPANY_ID
 from api.db import store
@@ -3787,6 +3788,21 @@ async def product_master_update(product_id: str, request: Request):
         "message": f"Produto {payload.get('sku')} atualizado",
         "payload": {"product_id": product_id, "changed": changed}
     })
+    synchronization = await s19_sync_product_to_listing(
+        product_id, source="product_master_update"
+    )
+    if not synchronization.get("success"):
+        await store.update(
+            "products", f"id=eq.{quote(product_id, safe='-')}",
+            {"sync_status": "error"}
+        )
+        await store.insert("logs", {
+            "company_id": DEFAULT_COMPANY_ID,
+            "event_type": "unified_sync_error",
+            "level": "error",
+            "message": "Produto salvo, mas o Listing não foi sincronizado.",
+            "payload": {"product_id": product_id, "result": synchronization}
+        })
     return RedirectResponse(f"/product-master/{product_id}", status_code=303)
 
 
@@ -3897,7 +3913,9 @@ async def product_master_add_image(product_id: str, request: Request):
     created = await store.insert("product_images", payload)
     if is_main and created.get("success"):
         await store.update("products", f"id=eq.{quote(product_id, safe='-')}", {"primary_image_url": url, "sync_status": "pending"})
+    await store.update("products", f"id=eq.{quote(product_id, safe='-')}", {"sync_status": "pending"})
     await s18_history(product_id, "image_added", "Imagem adicionada ao produto", payload={"url": url, "is_main": is_main})
+    await s19_sync_product_to_listing(product_id, source="product_master_image_added")
     return RedirectResponse(f"/product-master/{product_id}/images", status_code=303)
 
 
@@ -3954,6 +3972,7 @@ async def product_master_add_attribute(product_id: str, request: Request):
         return JSONResponse(status_code=400, content={"success": False, "error": saved.get("error") or saved.get("raw")})
     await store.update("products", f"id=eq.{quote(product_id, safe='-')}", {"sync_status": "pending"})
     await s18_history(product_id, "attribute_saved", f"Atributo {name} salvo", payload=payload)
+    await s19_sync_product_to_listing(product_id, source="product_master_attribute_saved")
     return RedirectResponse(f"/product-master/{product_id}/attributes", status_code=303)
 
 
@@ -4154,9 +4173,10 @@ async def s19_sync_product_to_listing(product_id, listing_id=None, source="direc
             })
 
     patch = {
-        "title": s27_compact_title(product.get("seo_name") or product.get("name") or listing.get("title") or product.get("sku") or "Produto"),
-        "description": product.get("description") or product.get("short_description") or listing.get("description"),
-        "category_id": product.get("ml_category_id") or listing.get("category_id"),
+        # Campos de negócio vêm exclusivamente do Product Master.
+        "title": s27_compact_title(product.get("seo_name") or product.get("name") or product.get("sku") or "Produto"),
+        "description": product.get("description") or product.get("short_description"),
+        "category_id": product.get("ml_category_id"),
         "validation_status": "pending",
     }
     sale_price = s19float(product.get("sale_price"), 0)
@@ -4187,6 +4207,11 @@ async def s19_sync_product_to_listing(product_id, listing_id=None, source="direc
     if not saved.get("success"):
         return {"success": False, "error": saved.get("error") or saved.get("raw"), "patch": patch}
 
+    await store.update(
+        "products",
+        "id=eq." + quote(str(product_id), safe="-"),
+        {"sync_status": "synchronized"},
+    )
     await s19_history(
         listing.get("id"), product_id, "product_listing_synchronized",
         "Product Master sincronizado diretamente com o Listing.",
@@ -4285,19 +4310,19 @@ def s19_build_ml_payload(context, listing, mode="user_product"):
                 "value_name": attr_value
             })
 
-    title = str(listing.get("title") or product.get("name") or "").strip()[:60]
+    title = str(product.get("seo_name") or product.get("name") or product.get("sku") or "").strip()[:60]
     family_name = str(
         product.get("seo_name")
         or product.get("name")
-        or listing.get("title")
+        or product.get("sku")
         or ""
     ).strip()[:60]
 
     payload = {
-        "category_id": listing.get("category_id"),
-        "price": s19float(listing.get("price") or product.get("sale_price"), 0),
+        "category_id": product.get("ml_category_id"),
+        "price": s19float(product.get("sale_price"), 0),
         "currency_id": listing.get("currency_id") or "BRL",
-        "available_quantity": s19int(listing.get("available_quantity") or inventory.get("available"), 0),
+        "available_quantity": s19int(inventory.get("available"), 0),
         "buying_mode": listing.get("buying_mode") or "buy_it_now",
         "condition": listing.get("condition") or "new",
         "listing_type_id": listing.get("listing_type_id") or "gold_special",
@@ -4574,17 +4599,28 @@ async def listing_save_draft(request: Request):
     listing_id = current.get("id") if current else str(uuid.uuid4())
     old_status = current.get("status") if current else None
 
+    product = context.get("product") or {}
+    inventory = context.get("inventory") or {}
+    requested_category = str(form.get("category_id") or "").strip() or None
+    if requested_category and requested_category != product.get("ml_category_id"):
+        await store.update(
+            "products", f"id=eq.{quote(product_id, safe='-')}",
+            {"ml_category_id": requested_category, "sync_status": "pending"}
+        )
+        product["ml_category_id"] = requested_category
+
     payload = {
         "id": listing_id,
         "company_id": DEFAULT_COMPANY_ID,
         "product_id": product_id,
         "marketplace": "mercado_livre",
         "external_id": current.get("external_id") if current else None,
-        "title": str(form.get("title") or "").strip(),
-        "description": str(form.get("description") or "").strip() or None,
-        "category_id": str(form.get("category_id") or "").strip(),
-        "price": s19float(form.get("price"), 0),
-        "available_quantity": s19int(form.get("available_quantity"), 0),
+        # O formulário não cria uma segunda fonte de verdade.
+        "title": s27_compact_title(product.get("seo_name") or product.get("name") or product.get("sku") or "Produto"),
+        "description": product.get("description") or product.get("short_description"),
+        "category_id": product.get("ml_category_id"),
+        "price": s19float(product.get("sale_price"), 0),
+        "available_quantity": max(s19int(inventory.get("available"), 0), 0),
         "listing_type_id": str(form.get("listing_type_id") or "gold_special"),
         "condition": str(form.get("condition") or "new"),
         "currency_id": "BRL",
@@ -4609,6 +4645,7 @@ async def listing_save_draft(request: Request):
         listing_id, product_id, "draft_saved", "Rascunho do anúncio salvo.",
         old_status, payload["status"], {"category_id": payload["category_id"]}
     )
+    await s19_sync_product_to_listing(product_id, listing_id, source="listing_draft_saved")
     return RedirectResponse(f"/listing-engine/{listing_id}", status_code=303)
 
 

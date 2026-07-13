@@ -1,6 +1,6 @@
 import os
 
-APP_VERSION = "enterprise-v5-sprint31-product-discovery-auto-apply"
+APP_VERSION = "enterprise-v5-sprint34-sincronismo-unificado-validado"
 
 def env(name, default=""):
     value = os.getenv(name, default)
