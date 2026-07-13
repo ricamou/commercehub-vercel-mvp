@@ -8350,20 +8350,26 @@ async def images_backfill(limit: int = 10):
 
 
 # ==========================================================
-# SPRINT 32 - DISCOVERY REAL MULTIFONTE
-# Google Programmable Search (opcional) + dados estruturados JSON-LD
-# de páginas públicas, com fallback para o catálogo do Mercado Livre.
-# O conteúdo textual do anúncio é sempre gerado pelo CommerceHub.
+# SPRINT 32 - DISCOVERY REAL MULTIFONTE SEM API PAGA
+# Pesquisa pública por adaptadores sem chave (DuckDuckGo HTML),
+# páginas da Hayamax/fabricantes e catálogo do Mercado Livre.
+# Apenas dados com correspondência segura são aplicados.
 # ==========================================================
 
-S32_GOOGLE_API_KEY = os.getenv("GOOGLE_CSE_API_KEY", "").strip()
-S32_GOOGLE_CX = os.getenv("GOOGLE_CSE_CX", "").strip()
-S32_MAX_WEB_RESULTS = int(os.getenv("DISCOVERY_MAX_WEB_RESULTS", "5") or "5")
+S32_MAX_WEB_RESULTS = int(os.getenv("DISCOVERY_MAX_WEB_RESULTS", "6") or "6")
+S32_ALLOWED_DOMAINS = {
+    "hayamax.com.br", "origin.hayamax.com.br", "blog.hayamax.com.br",
+    "logitech.com", "fortrek.com.br", "multilaser.com.br", "multi.com.br",
+    "hikvision.com", "hp.com", "c3technology.com.br", "elg.com.br",
+    "karsect.com", "exbom.com.br", "flexgold.com.br",
+}
 S32_OFFICIAL_HINTS = {
     "logitech": ["logitech.com"], "fortrek": ["fortrek.com.br"],
-    "multilaser": ["multilaser.com.br"], "hikvision": ["hikvision.com"],
-    "hp": ["hp.com"], "c3tech": ["c3technology.com.br"],
-    "elg": ["elg.com.br"], "karsect": ["karsect.com"],
+    "multilaser": ["multilaser.com.br", "multi.com.br"], "multi": ["multi.com.br"],
+    "hikvision": ["hikvision.com"], "hp": ["hp.com"],
+    "c3tech": ["c3technology.com.br"], "elg": ["elg.com.br"],
+    "karsect": ["karsect.com"], "exbom": ["exbom.com.br"],
+    "flex": ["flexgold.com.br"],
 }
 
 
@@ -8431,38 +8437,125 @@ def s32_structured_product(node, source_url):
     }
 
 
-async def s32_google_search(query, search_type=None, limit=8):
-    if not (S32_GOOGLE_API_KEY and S32_GOOGLE_CX):
-        return {"success": False, "configured": False, "results": [], "error": "GOOGLE_CSE_API_KEY/GOOGLE_CSE_CX não configurados"}
-    import httpx
-    params = {"key": S32_GOOGLE_API_KEY, "cx": S32_GOOGLE_CX, "q": query, "num": min(max(int(limit), 1), 10), "safe": "active"}
-    if search_type:
-        params["searchType"] = search_type
+def s32_domain_allowed(url):
+    host = (urlparse(url).netloc or "").lower().split(":")[0]
+    return any(host == d or host.endswith("." + d) for d in S32_ALLOWED_DOMAINS)
+
+
+def s32_unwrap_search_url(url):
+    """Converte links de redirecionamento do DuckDuckGo no destino real."""
     try:
-        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
-            response = await client.get("https://customsearch.googleapis.com/customsearch/v1", params=params)
-        data = response.json() if response.content else {}
+        from urllib.parse import parse_qs, unquote
+        parsed = urlparse(url)
+        if "duckduckgo.com" in parsed.netloc and parsed.path.startswith("/l/"):
+            target = parse_qs(parsed.query).get("uddg", [""])[0]
+            return unquote(target) if target else url
+    except Exception:
+        pass
+    return url
+
+
+async def s32_public_search(query, limit=8):
+    """Pesquisa sem chave usando a interface HTML pública do DuckDuckGo.
+    Retorna apenas URLs de domínios explicitamente permitidos.
+    """
+    import httpx
+    try:
+        async with httpx.AsyncClient(
+            timeout=18.0,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; CommerceHubDiscovery/1.0)"},
+        ) as client:
+            response = await client.get("https://html.duckduckgo.com/html/", params={"q": query})
         if response.status_code >= 400:
-            return {"success": False, "configured": True, "status_code": response.status_code, "results": [], "error": data}
-        return {"success": True, "configured": True, "results": data.get("items") or []}
+            return {"success": False, "results": [], "status_code": response.status_code, "error": "search_http_error"}
+        html = response.text[:1_500_000]
+        links = re.findall(r'<a[^>]+class=["\'][^"\']*result__a[^"\']*["\'][^>]+href=["\']([^"\']+)["\']', html, flags=re.I)
+        titles = re.findall(r'<a[^>]+class=["\'][^"\']*result__a[^"\']*["\'][^>]*>(.*?)</a>', html, flags=re.I | re.S)
+        results, seen = [], set()
+        for idx, raw in enumerate(links):
+            url = s32_unwrap_search_url(raw.replace("&amp;", "&"))
+            if not url.startswith("http") or not s32_domain_allowed(url) or url in seen:
+                continue
+            seen.add(url)
+            title = re.sub(r"<[^>]+>", " ", titles[idx] if idx < len(titles) else "")
+            title = re.sub(r"\s+", " ", title).strip()
+            results.append({"link": url, "title": title, "source": "duckduckgo_html"})
+            if len(results) >= min(max(int(limit), 1), 15):
+                break
+        return {"success": True, "results": results, "provider": "duckduckgo_html"}
     except Exception as exc:
-        return {"success": False, "configured": True, "results": [], "error": str(exc)}
+        return {"success": False, "results": [], "error": str(exc), "provider": "duckduckgo_html"}
+
+
+def s32_meta_content(html, prop):
+    patterns = [
+        rf'<meta[^>]+(?:property|name)=["\']{re.escape(prop)}["\'][^>]+content=["\']([^"\']+)',
+        rf'<meta[^>]+content=["\']([^"\']+)["\'][^>]+(?:property|name)=["\']{re.escape(prop)}["\']',
+    ]
+    for pattern in patterns:
+        m = re.search(pattern, html, flags=re.I)
+        if m:
+            return m.group(1).strip().replace("&amp;", "&")
+    return ""
+
+
+def s32_html_fallback_product(html, source_url):
+    """Extrai metadados básicos quando a página não oferece Product JSON-LD."""
+    title = s32_meta_content(html, "og:title")
+    image = s32_meta_content(html, "og:image") or s32_meta_content(html, "twitter:image")
+    description = s32_meta_content(html, "og:description") or s32_meta_content(html, "description")
+    if not title:
+        m = re.search(r"<title[^>]*>(.*?)</title>", html, flags=re.I | re.S)
+        title = re.sub(r"<[^>]+>", " ", m.group(1)).strip() if m else ""
+    text = re.sub(r"<script.*?</script>|<style.*?</style>", " ", html, flags=re.I | re.S)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text)
+    gtin = ""
+    for pattern in [r"(?:EAN|GTIN|c[oó]digo de barras)\s*[:\-]?\s*(\d{8,14})", r'"gtin(?:8|12|13|14)?"\s*:\s*"?(\d{8,14})']:
+        m = re.search(pattern, html + " " + text, flags=re.I)
+        if m and s212_valid_gtin(m.group(1)):
+            gtin = m.group(1)
+            break
+    specs = {}
+    for label in ["Modelo", "Marca", "Cor", "Capacidade", "Peso", "Dimensões", "Garantia", "Voltagem"]:
+        m = re.search(rf"{label}\s*[:\-]\s*([^|•;]{{1,100}})", text, flags=re.I)
+        if m:
+            specs[label] = m.group(1).strip()
+    if description:
+        specs.setdefault("Descrição resumida", description[:500])
+    return {
+        "source_url": source_url,
+        "name": title,
+        "brand": specs.get("Marca", ""),
+        "model": specs.get("Modelo", ""),
+        "mpn": "",
+        "sku": "",
+        "gtin": gtin,
+        "images": [image] if image.startswith("http") else [],
+        "specs": specs,
+    }
 
 
 async def s32_fetch_structured_product(url):
     import httpx
     try:
         parsed = urlparse(url)
-        if parsed.scheme not in {"http", "https"}:
-            return {"success": False, "error": "URL inválida"}
-        async with httpx.AsyncClient(timeout=18.0, follow_redirects=True, headers={"User-Agent": "CommerceHubProductDiscovery/1.0"}) as client:
+        if parsed.scheme not in {"http", "https"} or not s32_domain_allowed(url):
+            return {"success": False, "error": "URL fora das fontes permitidas"}
+        async with httpx.AsyncClient(
+            timeout=18.0,
+            follow_redirects=True,
+            headers={"User-Agent": "Mozilla/5.0 (compatible; CommerceHubProductDiscovery/1.0)"},
+        ) as client:
             response = await client.get(url)
-        if response.status_code >= 400 or "html" not in str(response.headers.get("content-type") or "").lower():
+        ctype = str(response.headers.get("content-type") or "").lower()
+        if response.status_code >= 400 or "html" not in ctype:
             return {"success": False, "status_code": response.status_code, "error": "Página indisponível ou não HTML"}
         html = response.text[:2_000_000]
         scripts = re.findall(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html, flags=re.I | re.S)
         products = []
-        for raw in scripts[:20]:
+        for raw in scripts[:30]:
             try:
                 obj = json.loads(raw.strip())
             except Exception:
@@ -8470,6 +8563,10 @@ async def s32_fetch_structured_product(url):
             for node in s32_walk_jsonld(obj):
                 if s32_is_product_jsonld(node):
                     products.append(s32_structured_product(node, str(response.url)))
+        if not products:
+            fallback = s32_html_fallback_product(html, str(response.url))
+            if fallback.get("name") or fallback.get("images") or fallback.get("gtin"):
+                products.append(fallback)
         return {"success": True, "url": str(response.url), "products": products}
     except Exception as exc:
         return {"success": False, "error": str(exc)}
@@ -8492,30 +8589,48 @@ def s32_candidate_score(product, context, candidate):
     hints = S32_OFFICIAL_HINTS.get((brand or cbrand).lower(), [])
     if hints and any(h in host for h in hints):
         score += 10
+    if "hayamax.com.br" in host:
+        score += 6
+    if candidate.get("gtin") and s212_valid_gtin(candidate.get("gtin")):
+        score += 4
+    if candidate.get("images"):
+        score += 2
     return max(0, min(100, round(score, 2)))
 
 
 async def s32_external_discovery(product, context):
     queries = s31_query_variants(product, context)
-    brand = str(product.get("brand") or "").strip()
-    web_results, candidates = [], []
+    brand = str(product.get("brand") or "").strip().lower()
+    preferred_domains = S32_OFFICIAL_HINTS.get(brand, [])
+    searches, candidates, seen_urls = [], [], set()
+    search_queries = []
     for query in queries[:3]:
-        q = f'"{query}" produto fabricante GTIN EAN ficha técnica'
-        result = await s32_google_search(q, limit=S32_MAX_WEB_RESULTS)
-        web_results.append({"query": q, "success": result.get("success"), "configured": result.get("configured"), "count": len(result.get("results") or []), "error": result.get("error")})
+        search_queries.append(f'"{query}" produto EAN GTIN ficha técnica')
+        for domain in preferred_domains[:2] + ["hayamax.com.br"]:
+            search_queries.append(f'site:{domain} "{query}"')
+    for q in search_queries[:7]:
+        result = await s32_public_search(q, limit=S32_MAX_WEB_RESULTS)
+        searches.append({"query": q, "provider": result.get("provider"), "success": result.get("success"), "count": len(result.get("results") or []), "error": result.get("error")})
         for item in result.get("results") or []:
             link = item.get("link")
-            if not link:
+            if not link or link in seen_urls:
                 continue
+            seen_urls.add(link)
             fetched = await s32_fetch_structured_product(link)
             for candidate in fetched.get("products") or []:
                 candidate["search_title"] = item.get("title")
                 candidate["score"] = s32_candidate_score(product, context, candidate)
                 candidates.append(candidate)
-        if candidates:
+        if any(float(x.get("score") or 0) >= S31_MIN_AUTO_APPLY_CONFIDENCE for x in candidates):
             break
     candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
-    return {"configured": bool(S32_GOOGLE_API_KEY and S32_GOOGLE_CX), "searches": web_results, "candidates": candidates[:10], "best": candidates[0] if candidates else None}
+    return {
+        "configured": True,
+        "provider": "public_web_no_key",
+        "searches": searches,
+        "candidates": candidates[:10],
+        "best": candidates[0] if candidates else None,
+    }
 
 
 async def s32_apply_external_candidate(listing_id, discovery):
@@ -8547,7 +8662,7 @@ async def s32_apply_external_candidate(listing_id, discovery):
         applied.append({"field": "product_attributes", "count": len(best.get("specs") or {}), "source": best.get("source_url")})
     stored = []
     for pos, url in enumerate((best.get("images") or [])[:8]):
-        image_result = await s20_ensure_product_image(product_id, source_url=url, mirror_to_storage=True, source="discovery_external_structured")
+        image_result = await s20_ensure_product_image(product_id, source_url=url, mirror_to_storage=True, source="discovery_public_structured")
         if image_result.get("success"):
             final_url = image_result.get("url") or image_result.get("public_url") or url
             stored.append(final_url)
@@ -8586,8 +8701,8 @@ async def s32_discover_product(product_id):
     report = {
         "product_id": product_id,
         "sku": product.get("sku"),
-        "listing_id": listing_id,
-        "external_search_configured": external.get("configured"),
+        "external_search_configured": True,
+        "external_search_provider": external.get("provider"),
         "external_searches": external.get("searches"),
         "external_candidate": external.get("best"),
         "external_apply": external_apply,
@@ -8604,7 +8719,7 @@ async def s32_discover_product(product_id):
         },
     }
     try:
-        await s19_history(listing_id, product_id, "discovery_run_report", "Relatório completo da descoberta multifonte.", payload=s32_json_safe(report))
+        await s19_history(listing_id, product_id, "discovery_run_report", "Relatório completo da descoberta multifonte sem API paga.", payload=s32_json_safe(report))
     except Exception:
         pass
     return {"success": True, "stage": "ready_to_publish" if bool(lab.get("success")) else "blocked", "report": report}
@@ -8904,7 +9019,7 @@ async def discovery_center_page(request: Request):
 {banner}
 {report_html}
 <div class='grid'><div class='metric'><span>Produtos</span><strong>{len(products_result.get('data') or [])}</strong></div><div class='metric'><span>Auto Apply</span><strong>ATIVO</strong></div><div class='metric'><span>Fontes</span><strong>Web estruturada + Catálogo ML</strong></div></div>
-<div class='card'><h2>Discovery Center</h2><p>Pesquisa dados estruturados, aplica nos campos corretos e executa a auditoria.</p><form method='post' action='/discovery-center/run'><button type='submit'>Descobrir e aplicar próximo produto</button></form><p><small>Para pesquisa web, configure GOOGLE_CSE_API_KEY e GOOGLE_CSE_CX na Vercel. Sem elas, o fallback do catálogo do Mercado Livre continua ativo.</small></p></div>
+<div class='card'><h2>Discovery Center</h2><p>Pesquisa dados estruturados, aplica nos campos corretos e executa a auditoria.</p><form method='post' action='/discovery-center/run'><button type='submit'>Descobrir e aplicar próximo produto</button></form><p><small>Pesquisa pública sem API paga: Hayamax, fabricantes permitidos e catálogo do Mercado Livre. Nenhuma chave Google é necessária.</small></p></div>
 <div class='card'><table><thead><tr><th>SKU</th><th>Produto</th><th>Marca</th><th>GTIN</th><th>Listing</th><th>Ação</th></tr></thead><tbody>{rows}</tbody></table></div>
 """
     return HTMLResponse(shell("Discovery Center", content))
