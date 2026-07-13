@@ -8348,6 +8348,272 @@ async def images_backfill(limit: int = 10):
 
 
 
+
+# ==========================================================
+# SPRINT 32 - DISCOVERY REAL MULTIFONTE
+# Google Programmable Search (opcional) + dados estruturados JSON-LD
+# de páginas públicas, com fallback para o catálogo do Mercado Livre.
+# O conteúdo textual do anúncio é sempre gerado pelo CommerceHub.
+# ==========================================================
+
+S32_GOOGLE_API_KEY = os.getenv("GOOGLE_CSE_API_KEY", "").strip()
+S32_GOOGLE_CX = os.getenv("GOOGLE_CSE_CX", "").strip()
+S32_MAX_WEB_RESULTS = int(os.getenv("DISCOVERY_MAX_WEB_RESULTS", "5") or "5")
+S32_OFFICIAL_HINTS = {
+    "logitech": ["logitech.com"], "fortrek": ["fortrek.com.br"],
+    "multilaser": ["multilaser.com.br"], "hikvision": ["hikvision.com"],
+    "hp": ["hp.com"], "c3tech": ["c3technology.com.br"],
+    "elg": ["elg.com.br"], "karsect": ["karsect.com"],
+}
+
+
+def s32_json_safe(value):
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=False, default=str))
+    except Exception:
+        return {"value": str(value)}
+
+
+def s32_first(value):
+    if isinstance(value, list):
+        return value[0] if value else None
+    return value
+
+
+def s32_text(value):
+    if isinstance(value, dict):
+        return value.get("name") or value.get("value") or value.get("@id") or ""
+    return str(value or "").strip()
+
+
+def s32_walk_jsonld(node):
+    if isinstance(node, list):
+        for x in node:
+            yield from s32_walk_jsonld(x)
+    elif isinstance(node, dict):
+        graph = node.get("@graph")
+        if graph:
+            yield from s32_walk_jsonld(graph)
+        yield node
+
+
+def s32_is_product_jsonld(node):
+    typ = node.get("@type") if isinstance(node, dict) else None
+    types = typ if isinstance(typ, list) else [typ]
+    return any(str(x or "").lower() == "product" for x in types)
+
+
+def s32_structured_product(node, source_url):
+    brand = s32_text(node.get("brand"))
+    image = node.get("image")
+    if isinstance(image, dict):
+        image = image.get("url") or image.get("contentUrl")
+    images = image if isinstance(image, list) else ([image] if image else [])
+    additional = node.get("additionalProperty") or []
+    specs = {}
+    for row in additional if isinstance(additional, list) else [additional]:
+        if isinstance(row, dict):
+            name = str(row.get("name") or row.get("propertyID") or "").strip()
+            value = s32_text(row.get("value"))
+            if name and value:
+                specs[name] = value
+    gtin = node.get("gtin14") or node.get("gtin13") or node.get("gtin12") or node.get("gtin8") or node.get("gtin")
+    return {
+        "source_url": source_url,
+        "name": s32_text(node.get("name")),
+        "brand": brand,
+        "model": s32_text(node.get("model")) or s32_text(node.get("mpn")),
+        "mpn": s32_text(node.get("mpn")),
+        "sku": s32_text(node.get("sku")),
+        "gtin": s212_digits(gtin) if gtin else "",
+        "images": [str(x).strip() for x in images if str(x or "").strip().startswith("http")],
+        "specs": specs,
+    }
+
+
+async def s32_google_search(query, search_type=None, limit=8):
+    if not (S32_GOOGLE_API_KEY and S32_GOOGLE_CX):
+        return {"success": False, "configured": False, "results": [], "error": "GOOGLE_CSE_API_KEY/GOOGLE_CSE_CX não configurados"}
+    import httpx
+    params = {"key": S32_GOOGLE_API_KEY, "cx": S32_GOOGLE_CX, "q": query, "num": min(max(int(limit), 1), 10), "safe": "active"}
+    if search_type:
+        params["searchType"] = search_type
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+            response = await client.get("https://customsearch.googleapis.com/customsearch/v1", params=params)
+        data = response.json() if response.content else {}
+        if response.status_code >= 400:
+            return {"success": False, "configured": True, "status_code": response.status_code, "results": [], "error": data}
+        return {"success": True, "configured": True, "results": data.get("items") or []}
+    except Exception as exc:
+        return {"success": False, "configured": True, "results": [], "error": str(exc)}
+
+
+async def s32_fetch_structured_product(url):
+    import httpx
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in {"http", "https"}:
+            return {"success": False, "error": "URL inválida"}
+        async with httpx.AsyncClient(timeout=18.0, follow_redirects=True, headers={"User-Agent": "CommerceHubProductDiscovery/1.0"}) as client:
+            response = await client.get(url)
+        if response.status_code >= 400 or "html" not in str(response.headers.get("content-type") or "").lower():
+            return {"success": False, "status_code": response.status_code, "error": "Página indisponível ou não HTML"}
+        html = response.text[:2_000_000]
+        scripts = re.findall(r'<script[^>]+type=["\']application/ld\+json["\'][^>]*>(.*?)</script>', html, flags=re.I | re.S)
+        products = []
+        for raw in scripts[:20]:
+            try:
+                obj = json.loads(raw.strip())
+            except Exception:
+                continue
+            for node in s32_walk_jsonld(obj):
+                if s32_is_product_jsonld(node):
+                    products.append(s32_structured_product(node, str(response.url)))
+        return {"success": True, "url": str(response.url), "products": products}
+    except Exception as exc:
+        return {"success": False, "error": str(exc)}
+
+
+def s32_candidate_score(product, context, candidate):
+    queries = s31_query_variants(product, context)
+    name = candidate.get("name") or ""
+    score = max([s28_similarity(q, name) for q in queries] or [0])
+    brand = str(product.get("brand") or "").strip().lower()
+    cbrand = str(candidate.get("brand") or "").strip().lower()
+    if brand and cbrand:
+        score += 8 if brand == cbrand else (-15 if brand not in cbrand and cbrand not in brand else 2)
+    attrs = {str(x.get("name") or "").lower(): str(x.get("value") or "") for x in context.get("attributes") or []}
+    model = (attrs.get("modelo") or attrs.get("model") or "").lower().strip()
+    cmodel = str(candidate.get("model") or candidate.get("mpn") or "").lower().strip()
+    if model and cmodel:
+        score += 12 if model == cmodel else (5 if model in cmodel or cmodel in model else -10)
+    host = urlparse(candidate.get("source_url") or "").netloc.lower()
+    hints = S32_OFFICIAL_HINTS.get((brand or cbrand).lower(), [])
+    if hints and any(h in host for h in hints):
+        score += 10
+    return max(0, min(100, round(score, 2)))
+
+
+async def s32_external_discovery(product, context):
+    queries = s31_query_variants(product, context)
+    brand = str(product.get("brand") or "").strip()
+    web_results, candidates = [], []
+    for query in queries[:3]:
+        q = f'"{query}" produto fabricante GTIN EAN ficha técnica'
+        result = await s32_google_search(q, limit=S32_MAX_WEB_RESULTS)
+        web_results.append({"query": q, "success": result.get("success"), "configured": result.get("configured"), "count": len(result.get("results") or []), "error": result.get("error")})
+        for item in result.get("results") or []:
+            link = item.get("link")
+            if not link:
+                continue
+            fetched = await s32_fetch_structured_product(link)
+            for candidate in fetched.get("products") or []:
+                candidate["search_title"] = item.get("title")
+                candidate["score"] = s32_candidate_score(product, context, candidate)
+                candidates.append(candidate)
+        if candidates:
+            break
+    candidates.sort(key=lambda x: x.get("score", 0), reverse=True)
+    return {"configured": bool(S32_GOOGLE_API_KEY and S32_GOOGLE_CX), "searches": web_results, "candidates": candidates[:10], "best": candidates[0] if candidates else None}
+
+
+async def s32_apply_external_candidate(listing_id, discovery):
+    best = discovery.get("best") or {}
+    if float(best.get("score") or 0) < S31_MIN_AUTO_APPLY_CONFIDENCE:
+        return {"success": True, "status": "not_applied", "reason": "confidence_below_threshold", "confidence": best.get("score", 0), "applied": [], "unresolved": ["external_match"]}
+    listing = await s19_get_listing(listing_id)
+    context = await s19_product_context(listing.get("product_id"))
+    product = context.get("product") or {}
+    product_id = product.get("id")
+    patch, applied, unresolved = {}, [], []
+    if best.get("brand"):
+        patch["brand"] = best["brand"]
+        applied.append({"field": "products.brand", "value": best["brand"], "source": best.get("source_url")})
+    gtin = s212_digits(best.get("gtin") or "")
+    if gtin and s212_valid_gtin(gtin) and float(best.get("score") or 0) >= S31_MIN_GTIN_CONFIDENCE:
+        patch["ean"] = gtin
+        applied.append({"field": "products.ean", "value": gtin, "source": best.get("source_url")})
+    elif not product.get("ean"):
+        unresolved.append("gtin")
+    if patch:
+        await store.update("products", "id=eq." + quote(str(product_id), safe="-"), patch)
+    if best.get("model"):
+        await s28_upsert_product_attribute(product_id, "Modelo", best["model"])
+        applied.append({"field": "product_attributes.Modelo", "value": best["model"], "source": best.get("source_url")})
+    for name, value in list((best.get("specs") or {}).items())[:30]:
+        await s28_upsert_product_attribute(product_id, str(name)[:120], str(value)[:500])
+    if best.get("specs"):
+        applied.append({"field": "product_attributes", "count": len(best.get("specs") or {}), "source": best.get("source_url")})
+    stored = []
+    for pos, url in enumerate((best.get("images") or [])[:8]):
+        image_result = await s20_ensure_product_image(product_id, source_url=url, mirror_to_storage=True, source="discovery_external_structured")
+        if image_result.get("success"):
+            final_url = image_result.get("url") or image_result.get("public_url") or url
+            stored.append(final_url)
+            if pos > 0:
+                await s28_add_catalog_image(product_id, final_url, pos)
+    if stored:
+        await store.update("products", "id=eq." + quote(str(product_id), safe="-"), {"primary_image_url": stored[0], "sync_status": "pending"})
+        applied.append({"field": "product_images", "count": len(stored), "primary": stored[0], "source": best.get("source_url")})
+    else:
+        unresolved.append("official_public_image")
+    fresh_context = await s19_product_context(product_id)
+    fresh_product = (fresh_context or {}).get("product") or product
+    generated = s31_build_description(fresh_product, best.get("name") or product.get("name"), {
+        re.sub(r"\W+", "_", str(k).upper()).strip("_"): {"value_name": v} for k, v in (best.get("specs") or {}).items()
+    })
+    await store.update("products", "id=eq." + quote(str(product_id), safe="-"), {"description": generated})
+    await store.update("listings", "id=eq." + quote(str(listing_id), safe="-"), {"title": s27_compact_title(best.get("name") or product.get("name")), "description": generated})
+    applied.extend([{"field": "products.description", "value": "generated"}, {"field": "listings.description", "value": "generated"}])
+    return {"success": True, "status": "applied", "confidence": best.get("score"), "source_url": best.get("source_url"), "applied": applied, "unresolved": unresolved}
+
+
+async def s32_discover_product(product_id):
+    created = await s29_create_listing_from_product(product_id)
+    if not created.get("success"):
+        return created
+    listing = created.get("listing") or {}
+    listing_id = listing.get("id")
+    context = await s19_product_context(product_id)
+    product = (context or {}).get("product") or {}
+    external = await s32_external_discovery(product, context or {})
+    external_apply = await s32_apply_external_candidate(listing_id, external)
+    ml_result = await s31_discover_and_apply_listing(listing_id)
+    final_context = await s19_product_context(product_id)
+    final_listing = await s19_get_listing(listing_id)
+    lab = (ml_result.get("correction") or {}).get("publishing_lab") or {}
+    report = {
+        "product_id": product_id,
+        "sku": product.get("sku"),
+        "listing_id": listing_id,
+        "external_search_configured": external.get("configured"),
+        "external_searches": external.get("searches"),
+        "external_candidate": external.get("best"),
+        "external_apply": external_apply,
+        "mercado_livre_discovery": ml_result.get("discovery"),
+        "publishing_lab": lab,
+        "final": {
+            "brand": ((final_context or {}).get("product") or {}).get("brand"),
+            "model": next((x.get("value") for x in ((final_context or {}).get("attributes") or []) if str(x.get("name") or "").lower() in {"modelo", "model"}), None),
+            "gtin": ((final_context or {}).get("product") or {}).get("ean"),
+            "category_id": (final_listing or {}).get("category_id"),
+            "description": bool(str((final_listing or {}).get("description") or "").strip()),
+            "images": len((final_context or {}).get("images") or []),
+            "marketplace_attributes": len((final_context or {}).get("marketplace_attributes") or []),
+        },
+    }
+    try:
+        await s19_history(listing_id, product_id, "discovery_run_report", "Relatório completo da descoberta multifonte.", payload=s32_json_safe(report))
+    except Exception:
+        pass
+    return {"success": True, "stage": "ready_to_publish" if bool(lab.get("success")) else "blocked", "report": report}
+
+
+@app.post("/api/discovery/product/{product_id}/run")
+async def s32_discovery_product_api(product_id: str):
+    return await safe_route(lambda: s32_discover_product(product_id), f"/api/discovery/product/{product_id}/run")
+
 # ==========================================================
 # SPRINT 31 - PRODUCT DISCOVERY AUTO APPLY
 # Descobre dados no catálogo oficial do Mercado Livre e grava nos módulos
@@ -8620,11 +8886,25 @@ async def discovery_center_page(request: Request):
         css = "success" if status == "success" else "error" if status == "error" else "warning"
         extra = f" — etapa: {s18_escape(stage)}" if stage else ""
         banner = f"<div class='card {css}'><strong>{s18_escape(message)}</strong>{extra}</div>"
+    report_html = ""
+    report_raw = request.query_params.get("report") or ""
+    if report_raw:
+        try:
+            report = json.loads(base64.urlsafe_b64decode(report_raw.encode()).decode())
+            final = report.get("final") or {}
+            source = (report.get("external_candidate") or {}).get("source_url") or ((report.get("mercado_livre_discovery") or {}).get("evidence") or {}).get("source") or "-"
+            fields = [("Marca", final.get("brand")), ("Modelo", final.get("model")), ("GTIN", final.get("gtin")), ("Categoria ML", final.get("category_id")), ("Descrição", "Sim" if final.get("description") else "Não"), ("Imagens", final.get("images", 0)), ("Atributos ML", final.get("marketplace_attributes", 0)), ("Fonte escolhida", source)]
+            report_rows = "".join(f"<tr><th>{s18_escape(k)}</th><td>{s18_escape(v if v not in (None, '') else 'Não encontrado')}</td></tr>" for k,v in fields)
+            blockers = ((report.get("publishing_lab") or {}).get("blockers") or [])
+            report_html = f"<div class='card'><h2>Relatório da última descoberta</h2><table><tbody>{report_rows}</tbody></table><h3>Bloqueios finais</h3><pre>{s18_escape(json.dumps(blockers, ensure_ascii=False, indent=2))}</pre></div>"
+        except Exception:
+            report_html = ""
 
     content = f"""
 {banner}
-<div class='grid'><div class='metric'><span>Produtos</span><strong>{len(products_result.get('data') or [])}</strong></div><div class='metric'><span>Auto Apply</span><strong>ATIVO</strong></div><div class='metric'><span>Fonte</span><strong>Catálogo ML</strong></div></div>
-<div class='card'><h2>Discovery Center</h2><p>Descobre dados confirmados e preenche automaticamente Product Master, imagens, atributos e Listing.</p><form method='post' action='/discovery-center/run'><label>Produtos nesta execução</label><input name='limit' value='1' readonly style='max-width:120px'><button type='submit'>Descobrir e aplicar 1 produto</button></form></div>
+{report_html}
+<div class='grid'><div class='metric'><span>Produtos</span><strong>{len(products_result.get('data') or [])}</strong></div><div class='metric'><span>Auto Apply</span><strong>ATIVO</strong></div><div class='metric'><span>Fontes</span><strong>Web estruturada + Catálogo ML</strong></div></div>
+<div class='card'><h2>Discovery Center</h2><p>Pesquisa dados estruturados, aplica nos campos corretos e executa a auditoria.</p><form method='post' action='/discovery-center/run'><button type='submit'>Descobrir e aplicar próximo produto</button></form><p><small>Para pesquisa web, configure GOOGLE_CSE_API_KEY e GOOGLE_CSE_CX na Vercel. Sem elas, o fallback do catálogo do Mercado Livre continua ativo.</small></p></div>
 <div class='card'><table><thead><tr><th>SKU</th><th>Produto</th><th>Marca</th><th>GTIN</th><th>Listing</th><th>Ação</th></tr></thead><tbody>{rows}</tbody></table></div>
 """
     return HTMLResponse(shell("Discovery Center", content))
@@ -8632,61 +8912,35 @@ async def discovery_center_page(request: Request):
 
 @app.post("/discovery-center/run")
 async def discovery_center_run(request: Request):
-    """Executa um produto por requisição para evitar timeout na Vercel."""
+    """Processa um produto por requisição; a tela pode encadear chamadas sem timeout."""
     try:
-        await request.form()
-        products_result = await store.select(
-            "products",
-            "select=id,sku,name,sync_status,internal_status&company_id=eq."
-            + quote(DEFAULT_COMPANY_ID, safe="-")
-            + "&order=updated_at.asc&limit=100",
-        )
-        all_rows = products_result.get("data") or []
-        # Evita processar eternamente o mesmo item já publicado/pronto.
-        rows = [
-            row for row in all_rows
-            if str(row.get("sync_status") or "").lower() not in {"published", "ready_to_publish"}
-        ]
-        if not rows:
-            return RedirectResponse(
-                "/discovery-center?status=empty&message=Nenhum+produto+encontrado",
-                status_code=303,
+        form = await request.form()
+        requested_id = str(form.get("product_id") or "").strip()
+        if requested_id:
+            row = {"id": requested_id, "sku": requested_id}
+        else:
+            products_result = await store.select(
+                "products",
+                "select=id,sku,name,sync_status,internal_status&company_id=eq."
+                + quote(DEFAULT_COMPANY_ID, safe="-")
+                + "&order=updated_at.asc&limit=100",
             )
-
-        row = rows[0]
-        result = await s29_process_product(row.get("id"))
-        if result.get("success"):
-            stage = quote(str(result.get("stage") or "processed"), safe="")
-            sku = quote(str(row.get("sku") or "produto"), safe="")
-            return RedirectResponse(
-                f"/discovery-center?status=success&message={sku}+processado&stage={stage}",
-                status_code=303,
-            )
-
-        error = quote(str(result.get("error") or "Falha no processamento"), safe="")
-        return RedirectResponse(
-            f"/discovery-center?status=error&message={error}",
-            status_code=303,
-        )
+            all_rows = products_result.get("data") or []
+            rows = [row for row in all_rows if str(row.get("sync_status") or "").lower() not in {"published", "ready_to_publish"}]
+            if not rows:
+                return RedirectResponse("/discovery-center?status=empty&message=Nenhum+produto+encontrado", status_code=303)
+            row = rows[0]
+        result = await s32_discover_product(row.get("id"))
+        report_token = quote(base64.urlsafe_b64encode(json.dumps(s32_json_safe(result.get("report") or {}), ensure_ascii=False).encode()).decode(), safe="")
+        stage = quote(str(result.get("stage") or "processed"), safe="")
+        sku = quote(str((result.get("report") or {}).get("sku") or row.get("sku") or "produto"), safe="")
+        return RedirectResponse(f"/discovery-center?status=success&message={sku}+processado&stage={stage}&report={report_token}", status_code=303)
     except Exception as exc:
         try:
-            await store.insert("logs", {
-                "company_id": DEFAULT_COMPANY_ID,
-                "event_type": "discovery_center_run_error",
-                "level": "error",
-                "message": str(exc),
-                "payload": {
-                    "route": "/discovery-center/run",
-                    "exception_type": type(exc).__name__,
-                },
-            })
+            await store.insert("logs", {"company_id": DEFAULT_COMPANY_ID, "event_type": "discovery_center_run_error", "level": "error", "message": str(exc), "payload": s32_json_safe({"route": "/discovery-center/run", "exception_type": type(exc).__name__})})
         except Exception:
             pass
-        error = quote(f"{type(exc).__name__}: {exc}", safe="")
-        return RedirectResponse(
-            f"/discovery-center?status=error&message={error}",
-            status_code=303,
-        )
+        return RedirectResponse(f"/discovery-center?status=error&message={quote(f'{type(exc).__name__}: {exc}', safe='')}", status_code=303)
 
 # ==========================================================
 # SPRINT 29 - WORKFLOW ENGINE
